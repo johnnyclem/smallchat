@@ -194,6 +194,34 @@ export interface CompilationResult {
   uniqueSelectorCount: number;
   mergedCount: number;
   collisions: SelectorCollision[];
+  /** Overload tables keyed by selector canonical name */
+  overloadTables: Map<string, OverloadTableData>;
+  /** Diagnostic info about compiler-generated semantic overloads */
+  semanticOverloads: SemanticOverloadGroup[];
+}
+
+/** Serializable representation of an overload table (for compilation output) */
+export interface OverloadTableData {
+  selectorCanonical: string;
+  overloads: OverloadEntryData[];
+}
+
+export interface OverloadEntryData {
+  signatureKey: string;
+  parameterNames: string[];
+  parameterTypes: string[];
+  arity: number;
+  toolName: string;
+  providerId: string;
+  isSemanticOverload: boolean;
+}
+
+/** A group of semantically similar tools that were overloaded together */
+export interface SemanticOverloadGroup {
+  canonicalSelector: string;
+  tools: Array<{ providerId: string; toolName: string; similarity: number }>;
+  /** Why these tools were grouped */
+  reason: string;
 }
 
 export interface SelectorCollision {

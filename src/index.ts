@@ -1,5 +1,5 @@
 // ToolKit — A Message-Passing Tool Compiler
-// v0.0.1
+// v0.0.2
 
 // Core types
 export type {
@@ -8,10 +8,13 @@ export type {
   CompilationResult,
   Embedder,
   JSONSchemaType,
+  OverloadEntryData,
+  OverloadTableData,
   ProviderManifest,
   ResolvedTool,
   SelectorCollision,
   SelectorMatch,
+  SemanticOverloadGroup,
   ToolCandidate,
   ToolCategory,
   ToolDefinition,
@@ -26,6 +29,43 @@ export type {
   ValidationResult,
   VectorIndex,
 } from './core/types.js';
+
+// SCObject hierarchy — NSObject-inspired base class for parameter passing
+export {
+  SCObject,
+  SCSelector,
+  SCData,
+  SCToolReference,
+  SCArray,
+  SCDictionary,
+  wrapValue,
+  unwrapValue,
+  registerClass,
+  getClassHierarchy,
+  isSubclass,
+} from './core/sc-object.js';
+
+// Type system — type descriptors and method signatures
+export {
+  SCType,
+  createSignature,
+  param,
+  matchType,
+  scoreSignatureMatch,
+  inferType,
+  buildSignatureKey,
+} from './core/sc-types.js';
+export type {
+  SCTypeDescriptor,
+  SCPrimitiveType,
+  SCParameterSlot,
+  SCMethodSignature,
+  MatchQuality,
+} from './core/sc-types.js';
+
+// Overload system
+export { OverloadTable, OverloadAmbiguityError } from './core/overload-table.js';
+export type { OverloadEntry, OverloadResolutionResult } from './core/overload-table.js';
 
 // Core classes
 export { SelectorTable, canonicalize } from './core/selector-table.js';
