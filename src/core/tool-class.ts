@@ -1,15 +1,23 @@
 import type { ToolIMP, ToolMethod, ToolProtocol, ToolSchema, ToolSelector, ToolResult, TransportType, ArgumentConstraints, ValidationResult } from './types.js';
+import { OverloadTable } from './overload-table.js';
+import type { OverloadResolutionResult } from './overload-table.js';
+import type { SCMethodSignature } from './sc-types.js';
 
 /**
  * ToolClass — a group of related tools from one provider.
  *
  * Equivalent to an Objective-C class: has a dispatch table, protocol
  * conformances, and an optional superclass for inheritance chains.
+ *
+ * Now supports overloaded methods: the same selector can dispatch to
+ * different IMPs depending on the types and number of arguments.
  */
 export class ToolClass {
   readonly name: string;
   readonly protocols: ToolProtocol[] = [];
   readonly dispatchTable: Map<string, ToolIMP> = new Map();
+  /** Overload tables keyed by selector canonical name */
+  readonly overloadTables: Map<string, OverloadTable> = new Map();
   superclass: ToolClass | null = null;
 
   constructor(name: string) {
@@ -19,6 +27,30 @@ export class ToolClass {
   /** Register a method (selector → IMP mapping) */
   addMethod(selector: ToolSelector, imp: ToolIMP): void {
     this.dispatchTable.set(selector.canonical, imp);
+  }
+
+  /**
+   * Register an overloaded method — same selector, different signature.
+   * The first overload registered also becomes the default IMP in the dispatch table.
+   */
+  addOverload(
+    selector: ToolSelector,
+    signature: SCMethodSignature,
+    imp: ToolIMP,
+    options?: { originalToolName?: string; isSemanticOverload?: boolean },
+  ): void {
+    let table = this.overloadTables.get(selector.canonical);
+    if (!table) {
+      table = new OverloadTable(selector.canonical);
+      this.overloadTables.set(selector.canonical, table);
+    }
+
+    table.register(signature, imp, options);
+
+    // First overload becomes the default IMP
+    if (!this.dispatchTable.has(selector.canonical)) {
+      this.dispatchTable.set(selector.canonical, imp);
+    }
   }
 
   /** Declare conformance to a protocol */
@@ -46,6 +78,53 @@ export class ToolClass {
     }
 
     return null; // will trigger forwarding
+  }
+
+  /**
+   * Resolve a selector with argument types — uses overload tables when available.
+   * Falls back to standard resolveSelector if no overloads are registered.
+   */
+  resolveSelectorWithArgs(
+    selector: ToolSelector,
+    args: unknown[],
+  ): OverloadResolutionResult | null {
+    const table = this.overloadTables.get(selector.canonical);
+    if (table && table.size > 0) {
+      return table.resolve(args);
+    }
+
+    // Fall back to checking superclass overload tables
+    if (this.superclass) {
+      return this.superclass.resolveSelectorWithArgs(selector, args);
+    }
+
+    return null;
+  }
+
+  /**
+   * Resolve a selector with named arguments — maps names to positions
+   * using the overload signatures.
+   */
+  resolveSelectorWithNamedArgs(
+    selector: ToolSelector,
+    namedArgs: Record<string, unknown>,
+  ): OverloadResolutionResult | null {
+    const table = this.overloadTables.get(selector.canonical);
+    if (table && table.size > 0) {
+      return table.resolveNamed(namedArgs);
+    }
+
+    if (this.superclass) {
+      return this.superclass.resolveSelectorWithNamedArgs(selector, namedArgs);
+    }
+
+    return null;
+  }
+
+  /** Check if a selector has overloads */
+  hasOverloads(selector: ToolSelector): boolean {
+    const table = this.overloadTables.get(selector.canonical);
+    return table !== undefined && table.size > 1;
   }
 
   /** respondsToSelector: equivalent */

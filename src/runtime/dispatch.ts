@@ -2,6 +2,8 @@ import type { Embedder, ToolCandidate, ToolIMP, ToolProtocol, ToolResult, ToolSe
 import { ResolutionCache } from '../core/resolution-cache.js';
 import { SelectorTable } from '../core/selector-table.js';
 import { ToolClass } from '../core/tool-class.js';
+import { SCObject, wrapValue, unwrapValue } from '../core/sc-object.js';
+import type { OverloadResolutionResult } from '../core/overload-table.js';
 
 /**
  * UnrecognizedIntent — doesNotRecognizeSelector: equivalent.
@@ -131,10 +133,11 @@ export class DispatchContext {
  *
  * Resolution order:
  * 1. Cache lookup (sub-millisecond)
- * 2. Dispatch table via vector similarity (milliseconds)
- * 3. ISA chain / protocol conformance
- * 4. Forwarding chain (expensive, self-healing)
- * 5. doesNotRecognizeSelector: (UnrecognizedIntent error)
+ * 2. Overload resolution (if args provided and overloads exist)
+ * 3. Dispatch table via vector similarity (milliseconds)
+ * 4. ISA chain / protocol conformance
+ * 5. Forwarding chain (expensive, self-healing)
+ * 6. doesNotRecognizeSelector: (UnrecognizedIntent error)
  */
 export async function toolkit_dispatch(
   context: DispatchContext,
@@ -145,9 +148,13 @@ export async function toolkit_dispatch(
   const selector = await context.selectorTable.resolve(intent);
 
   // 2. CHECK CACHE (the inline cache / method cache)
-  const cached = context.cache.lookup(selector);
-  if (cached) {
-    return cached.imp.execute(args ?? {});
+  // Skip cache when args are provided and overloads may exist — type matters
+  const hasArgs = args && Object.keys(args).length > 0;
+  if (!hasArgs) {
+    const cached = context.cache.lookup(selector);
+    if (cached) {
+      return cached.imp.execute(args ?? {});
+    }
   }
 
   // 3. SEARCH DISPATCH TABLE (vector similarity)
@@ -159,14 +166,34 @@ export async function toolkit_dispatch(
     if (!matchSelector) continue;
 
     for (const toolClass of context.getClasses()) {
+      // 3a. OVERLOAD RESOLUTION — if args exist and overloads are registered
+      if (hasArgs && toolClass.hasOverloads(matchSelector)) {
+        const overloadResult = toolClass.resolveSelectorWithNamedArgs(
+          matchSelector,
+          args,
+        );
+        if (overloadResult) {
+          context.cache.store(selector, overloadResult.imp, 1 - match.distance);
+          return executeWithArgs(overloadResult.imp, args);
+        }
+      }
+
       const imp = toolClass.resolveSelector(matchSelector);
       if (imp) {
         candidates.push({
           imp,
-          confidence: 1 - match.distance, // Convert distance to confidence
+          confidence: 1 - match.distance,
           selector: matchSelector,
         });
       }
+    }
+  }
+
+  // Also check cache for non-overloaded case when args were provided
+  if (hasArgs) {
+    const cached = context.cache.lookup(selector);
+    if (cached) {
+      return executeWithArgs(cached.imp, args);
     }
   }
 
@@ -175,7 +202,7 @@ export async function toolkit_dispatch(
     const protocolMatch = context.resolveViaProtocol(selector);
     if (protocolMatch) {
       context.cache.store(selector, protocolMatch.imp, protocolMatch.confidence);
-      return protocolMatch.imp.execute(args ?? {});
+      return executeWithArgs(protocolMatch.imp, args ?? {});
     }
 
     // 4b. FORWARDING — slow path
@@ -189,12 +216,27 @@ export async function toolkit_dispatch(
     // Unambiguous match. Cache and execute.
     const tool = candidates[0];
     context.cache.store(selector, tool.imp, tool.confidence);
-    return tool.imp.execute(args ?? {});
+    return executeWithArgs(tool.imp, args ?? {});
   }
 
   // Multiple candidates — for v0.0.1, take the best match.
   // Full implementation will involve LLM-assisted disambiguation.
   const best = candidates[0];
   context.cache.store(selector, best.imp, best.confidence);
-  return best.imp.execute(args ?? {});
+  return executeWithArgs(best.imp, args ?? {});
+}
+
+/**
+ * Execute an IMP with arguments, unwrapping any SCObject values
+ * back to their underlying representations.
+ */
+function executeWithArgs(
+  imp: ToolIMP,
+  args: Record<string, unknown>,
+): Promise<ToolResult> {
+  const unwrapped: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(args)) {
+    unwrapped[key] = unwrapValue(value);
+  }
+  return imp.execute(unwrapped);
 }

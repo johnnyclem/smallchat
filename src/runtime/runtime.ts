@@ -1,8 +1,10 @@
-import type { Embedder, ToolCategory, ToolIMP, ToolProtocol, ToolResult, ToolSelector, VectorIndex } from '../core/types.js';
+import type { Embedder, ToolCategory, ToolIMP, ToolProtocol, ToolResult, ToolSelector, VectorIndex, OverloadTableData } from '../core/types.js';
 import { ResolutionCache } from '../core/resolution-cache.js';
 import { SelectorTable } from '../core/selector-table.js';
 import { ToolClass } from '../core/tool-class.js';
+import { OverloadTable } from '../core/overload-table.js';
 import { DispatchContext, toolkit_dispatch } from './dispatch.js';
+import type { SCMethodSignature } from '../core/sc-types.js';
 
 /**
  * ToolRuntime — the top-level runtime that manages everything.
@@ -76,6 +78,21 @@ export class ToolRuntime {
   }
 
   /**
+   * Register an overloaded method on a tool class.
+   */
+  addOverload(
+    toolClass: ToolClass,
+    selector: ToolSelector,
+    signature: SCMethodSignature,
+    imp: ToolIMP,
+    options?: { originalToolName?: string; isSemanticOverload?: boolean },
+  ): void {
+    toolClass.addOverload(selector, signature, imp, options);
+    // Flush cache — overloads change resolution behavior
+    this.cache.flush();
+  }
+
+  /**
    * Swizzle: replace the IMP for a selector in a specific provider.
    * Returns the original IMP.
    *
@@ -128,13 +145,35 @@ export class ToolRuntime {
     for (const cls of classes) {
       if (cls.protocols.length === 0) {
         const selectors = cls.allSelectors();
-        lines.push(`- ${cls.name}: ${selectors.length} tools`);
+        const overloadCount = cls.overloadTables.size;
+        const overloadSuffix = overloadCount > 0
+          ? ` (${overloadCount} overloaded)`
+          : '';
+        lines.push(`- ${cls.name}: ${selectors.length} tools${overloadSuffix}`);
+      }
+    }
+
+    // List overloaded selectors
+    let hasOverloads = false;
+    for (const cls of classes) {
+      for (const [canonical, table] of cls.overloadTables) {
+        if (!hasOverloads) {
+          lines.push('');
+          lines.push('Overloaded methods:');
+          hasOverloads = true;
+        }
+        const overloads = table.allOverloads();
+        const signatures = overloads
+          .map(o => o.signature.signatureKey)
+          .join(', ');
+        lines.push(`  ${canonical}: ${overloads.length} overloads [${signatures}]`);
       }
     }
 
     lines.push('');
     lines.push('To use a tool, describe what you want to do. The runtime will resolve');
     lines.push('the best tool and provide the required arguments.');
+    lines.push('Overloaded tools accept different argument types and counts.');
 
     return lines.join('\n');
   }
