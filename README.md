@@ -1,8 +1,8 @@
-# ToolKit
+# smallchat - object oriented inference
 
 > "The big idea is messaging." — Alan Kay
 
-A message-passing tool compiler inspired by the Smalltalk/Objective-C runtime. ToolKit models LLM tool use as message dispatch: the LLM expresses intent, and the runtime resolves it to concrete implementations.
+A message-passing tool compiler inspired by the Smalltalk/Objective-C runtime. smallchat models LLM tool use as message dispatch: the LLM expresses intent, and the runtime resolves it to concrete implementations.
 
 ## v0.0.1 — Draft Implementation
 
@@ -12,21 +12,21 @@ This is the initial draft implementing the core architecture:
 - **Resolution Cache** — LRU cache for resolved dispatches (like `objc_msgSend`'s inline cache)
 - **ToolClass** — provider grouping with dispatch tables and superclass chains
 - **ToolProxy** — lazy schema loading (like `NSProxy`)
-- **toolkit_dispatch** — the hot path for intent → tool resolution
+- **smallchat_dispatch** — the hot path for intent → tool resolution
 - **ToolRuntime** — top-level runtime with swizzling support
 - **Compiler** — parse → embed → link pipeline
-- **CLI** — `toolkit compile`, `toolkit inspect`, `toolkit resolve`
+- **CLI** — `smallchat compile`, `toolkit inspect`, `smallchat resolve`
 
 ### Concept Mapping
 
-| Smalltalk / Obj-C | ToolKit |
+| Smalltalk / Obj-C | smallchat |
 |---|---|
 | Object | ToolProvider (MCP server, API, local function) |
 | Class | ToolClass (group of related tools) |
 | SEL | ToolSelector (semantic fingerprint of intent) |
 | IMP | ToolIMP (concrete implementation) |
 | Method = SEL + IMP | ToolMethod |
-| Message send | `toolkit_dispatch(context, intent, args)` |
+| Message send | `smallchat_dispatch(context, intent, args)` |
 | Method cache | Resolution cache (intent → resolved tool) |
 | Protocol | ToolProtocol (capability interface) |
 | Category | ToolCategory (capability extension) |
@@ -41,13 +41,13 @@ npm install
 npm run build
 
 # Compile tool definitions
-npx toolkit compile --source ./examples --output tools.toolkit.json
+npx smallchat compile --source ./examples --output tools.smallchat.json
 
 # Inspect the compiled artifact
-npx toolkit inspect tools.toolkit.json --providers --selectors
+npx smallchat inspect tools.smallchat.json --providers --selectors
 
 # Test dispatch resolution
-npx toolkit resolve tools.toolkit.json "search for code"
+npx smallchat resolve tools.smallchat.json "search for code"
 ```
 
 ## Development
