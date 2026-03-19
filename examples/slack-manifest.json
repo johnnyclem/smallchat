@@ -1,0 +1,36 @@
+{
+  "id": "slack",
+  "name": "Slack",
+  "transportType": "mcp",
+  "tools": [
+    {
+      "name": "search_messages",
+      "description": "Search for messages in Slack channels",
+      "providerId": "slack",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string", "description": "Search query" },
+          "channel": { "type": "string", "description": "Channel to search in" },
+          "from": { "type": "string", "description": "Filter by sender" }
+        },
+        "required": ["query"]
+      }
+    },
+    {
+      "name": "send_message",
+      "description": "Send a message to a Slack channel",
+      "providerId": "slack",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "channel": { "type": "string", "description": "Channel to send to" },
+          "text": { "type": "string", "description": "Message text" }
+        },
+        "required": ["channel", "text"]
+      }
+    }
+  ]
+}

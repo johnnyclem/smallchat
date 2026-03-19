@@ -1,0 +1,41 @@
+{
+  "name": "toolkit",
+  "version": "0.0.1",
+  "description": "A message-passing tool compiler inspired by the Smalltalk/Objective-C runtime",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "toolkit": "dist/cli/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "tsc --noEmit",
+    "dev": "tsc --watch"
+  },
+  "keywords": [
+    "mcp",
+    "tools",
+    "llm",
+    "message-passing",
+    "runtime"
+  ],
+  "author": "Johnny Clem",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.0.0",
+    "commander": "^13.0.0",
+    "onnxruntime-node": "^1.20.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
