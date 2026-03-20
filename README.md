@@ -2,6 +2,8 @@
 
 > "The big idea is messaging." — Alan Kay
 
+[smallchat.dev](https://smallchat.dev)
+
 A message-passing tool compiler inspired by the Smalltalk/Objective-C runtime. smallchat models LLM tool use as message dispatch: the LLM expresses intent, and the runtime resolves it to concrete implementations.
 
 ## Install
