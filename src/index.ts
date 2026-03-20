@@ -101,3 +101,17 @@ export { MemoryVectorIndex } from './embedding/memory-vector-index.js';
 export { ONNXEmbedder } from './embedding/onnx-embedder.js';
 export type { ONNXEmbedderOptions } from './embedding/onnx-embedder.js';
 export { SqliteVectorIndex } from './embedding/sqlite-vector-index.js';
+
+// MCP Server & Transport Engine
+export { MCPServer } from './mcp/server.js';
+export type { MCPServerConfig } from './mcp/server.js';
+export { MCPTransport, getTransport, clearTransports, registerLocalHandler, unregisterLocalHandler } from './mcp/transport.js';
+export type { TransportOptions } from './mcp/transport.js';
+export { SessionStore } from './mcp/session-store.js';
+export type { MCPSession } from './mcp/session-store.js';
+export { OAuthManager, MCP_SCOPES } from './mcp/oauth.js';
+export type { OAuthToken, OAuthClient, TokenIntrospection, PermissionsConfig, OAuthManagerOptions, MCPScope } from './mcp/oauth.js';
+export { ResourceRegistry, ResourceNotFoundError } from './mcp/resources.js';
+export type { MCPResource, MCPResourceContent, MCPResourceTemplate, ResourceChangeEvent, ResourceHandler } from './mcp/resources.js';
+export { PromptRegistry, PromptNotFoundError } from './mcp/prompts.js';
+export type { MCPPrompt, MCPPromptArgument, MCPPromptMessage, MCPPromptContent, PromptHandler, StaticPrompt } from './mcp/prompts.js';
