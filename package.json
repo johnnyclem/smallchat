@@ -1,28 +1,40 @@
 {
-  "name": "toolkit",
-  "version": "0.0.1",
+  "name": "smallchat",
+  "version": "0.1.0",
   "description": "A message-passing tool compiler inspired by the Smalltalk/Objective-C runtime",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "smallchat": "dist/cli/index.js",
-    "toolkit": "dist/cli/index.js"
+    "smallchat": "dist/cli/index.js"
   },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsc",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "tsc --noEmit",
-    "dev": "tsc --watch"
+    "dev": "tsc --watch",
+    "prepublishOnly": "npm run build"
   },
   "keywords": [
     "mcp",
     "tools",
     "llm",
     "message-passing",
-    "runtime"
+    "runtime",
+    "smalltalk",
+    "tool-compiler"
   ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/johnnyclem/smallchat.git"
+  },
+  "homepage": "https://github.com/johnnyclem/smallchat#readme",
   "author": "Johnny Clem",
   "license": "MIT",
   "devDependencies": {
