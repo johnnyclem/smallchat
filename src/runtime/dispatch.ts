@@ -1,4 +1,4 @@
-import type { Embedder, ToolCandidate, ToolIMP, ToolProtocol, ToolResult, ToolSelector, VectorIndex, DispatchEvent } from '../core/types.js';
+import type { Embedder, ToolCandidate, ToolIMP, ToolProtocol, ToolResult, ToolSelector, VectorIndex, DispatchEvent, InferenceDelta } from '../core/types.js';
 import { ResolutionCache } from '../core/resolution-cache.js';
 import { SelectorTable } from '../core/selector-table.js';
 import { ToolClass } from '../core/tool-class.js';
@@ -516,10 +516,34 @@ export async function* smallchat_dispatchStream(
 }
 
 /**
- * Execute a tool and stream its result. If the IMP exposes an
- * `executeStream` method (AsyncIterable<ToolResult>), we yield
- * individual chunks. Otherwise we fall back to the single-shot
- * `execute()` and wrap the result as one chunk + done.
+ * StreamableIMP — IMP with optional chunk-level streaming.
+ */
+interface StreamableIMP extends ToolIMP {
+  executeStream?: (args: Record<string, unknown>) => AsyncIterable<ToolResult>;
+}
+
+/**
+ * InferenceIMP — IMP with optional token-level progressive inference.
+ *
+ * This is the bridge for provider-native streaming: the IMP opens an
+ * OpenAI or Anthropic SSE connection and yields individual deltas.
+ * The generator signature we already have is perfect for it — each
+ * InferenceDelta becomes a DispatchEventInferenceDelta event.
+ */
+interface InferenceIMP extends StreamableIMP {
+  executeInference?: (args: Record<string, unknown>) => AsyncIterable<InferenceDelta>;
+}
+
+/**
+ * Execute a tool and stream its result at the finest granularity the
+ * IMP supports. Resolution order:
+ *
+ *   1. executeInference  — token-level deltas (OpenAI / Anthropic SSE)
+ *   2. executeStream     — chunk-level results
+ *   3. execute           — single-shot fallback
+ *
+ * Each tier falls through to the next, so every IMP works — providers
+ * that expose a raw inference stream just get true progressive output.
  */
 async function* executeAndStream(
   imp: ToolIMP,
@@ -531,10 +555,29 @@ async function* executeAndStream(
   }
 
   try {
-    // Check if the IMP supports streaming via executeStream
-    const streamable = imp as ToolIMP & {
-      executeStream?: (args: Record<string, unknown>) => AsyncIterable<ToolResult>;
-    };
+    const inferenceImp = imp as InferenceIMP;
+
+    // ---- Tier 1: Progressive inference (token-level) ----
+    if (typeof inferenceImp.executeInference === 'function') {
+      let tokenIndex = 0;
+      const parts: string[] = [];
+
+      for await (const delta of inferenceImp.executeInference(unwrapped)) {
+        yield { type: 'inference-delta', delta, tokenIndex };
+        parts.push(delta.text);
+        tokenIndex++;
+      }
+
+      // Synthesise a final ToolResult from the accumulated tokens
+      const assembled = parts.join('');
+      const result: ToolResult = { content: assembled };
+      yield { type: 'chunk', content: assembled, index: 0 };
+      yield { type: 'done', result };
+      return;
+    }
+
+    // ---- Tier 2: Chunk-level streaming ----
+    const streamable = imp as StreamableIMP;
 
     if (typeof streamable.executeStream === 'function') {
       let index = 0;
@@ -550,12 +593,13 @@ async function* executeAndStream(
         type: 'done',
         result: lastResult ?? { content: null },
       };
-    } else {
-      // Single-shot fallback — execute and emit as one chunk + done
-      const result = await imp.execute(unwrapped);
-      yield { type: 'chunk', content: result.content, index: 0 };
-      yield { type: 'done', result };
+      return;
     }
+
+    // ---- Tier 3: Single-shot fallback ----
+    const result = await imp.execute(unwrapped);
+    yield { type: 'chunk', content: result.content, index: 0 };
+    yield { type: 'done', result };
   } catch (err) {
     yield {
       type: 'error',

@@ -6,7 +6,7 @@ import { SelectorTable } from '../core/selector-table.js';
 import { ToolClass } from '../core/tool-class.js';
 import { LocalEmbedder } from '../embedding/local-embedder.js';
 import { MemoryVectorIndex } from '../embedding/memory-vector-index.js';
-import type { ToolIMP, ToolProtocol, ToolSelector, ToolResult, DispatchEvent } from '../core/types.js';
+import type { ToolIMP, ToolProtocol, ToolSelector, ToolResult, DispatchEvent, InferenceDelta, DispatchEventInferenceDelta } from '../core/types.js';
 
 function createContext() {
   const embedder = new LocalEmbedder(64);
@@ -401,5 +401,146 @@ describe('smallchat_dispatchStream', () => {
     expect(events[0].type).toBe('resolving');
     expect(events[1].type).toBe('tool-start');
     expect(events[events.length - 1].type).toBe('done');
+  });
+
+  it('yields inference-delta events from an IMP with executeInference', async () => {
+    const context = createContext();
+    const cls = new ToolClass('anthropic');
+
+    const inferenceImp: ToolIMP & { executeInference: (args: Record<string, unknown>) => AsyncIterable<InferenceDelta> } = {
+      ...makeIMP('anthropic', 'messages_create'),
+      executeInference: async function* (_args: Record<string, unknown>) {
+        yield { text: 'The' };
+        yield { text: ' answer' };
+        yield { text: ' is' };
+        yield { text: ' 42', finishReason: 'stop' };
+      },
+    };
+
+    const embedding = await context.embedder.embed('create message completion');
+    const selector = context.selectorTable.intern(embedding, 'anthropic.messages_create');
+    cls.addMethod(selector, inferenceImp);
+    context.registerClass(cls);
+
+    const events = await collectEvents(
+      smallchat_dispatchStream(context, 'create message completion', { prompt: 'meaning of life' }),
+    );
+
+    expect(events[0].type).toBe('resolving');
+    expect(events[1].type).toBe('tool-start');
+
+    // Should have inference-delta events for each token
+    const deltas = events.filter(e => e.type === 'inference-delta') as DispatchEventInferenceDelta[];
+    expect(deltas).toHaveLength(4);
+    expect(deltas[0].delta.text).toBe('The');
+    expect(deltas[0].tokenIndex).toBe(0);
+    expect(deltas[1].delta.text).toBe(' answer');
+    expect(deltas[1].tokenIndex).toBe(1);
+    expect(deltas[2].delta.text).toBe(' is');
+    expect(deltas[2].tokenIndex).toBe(2);
+    expect(deltas[3].delta.text).toBe(' 42');
+    expect(deltas[3].delta.finishReason).toBe('stop');
+    expect(deltas[3].tokenIndex).toBe(3);
+
+    // Should still get a synthesised chunk + done with the assembled text
+    const chunks = events.filter(e => e.type === 'chunk') as Array<{ type: 'chunk'; content: unknown }>;
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0].content).toBe('The answer is 42');
+
+    expect(events[events.length - 1].type).toBe('done');
+    const done = events[events.length - 1] as { type: 'done'; result: ToolResult };
+    expect(done.result.content).toBe('The answer is 42');
+  });
+
+  it('prefers executeInference over executeStream when both are present', async () => {
+    const context = createContext();
+    const cls = new ToolClass('openai');
+
+    const dualImp: ToolIMP & {
+      executeInference: (args: Record<string, unknown>) => AsyncIterable<InferenceDelta>;
+      executeStream: (args: Record<string, unknown>) => AsyncIterable<ToolResult>;
+    } = {
+      ...makeIMP('openai', 'chat_completion'),
+      executeInference: async function* () {
+        yield { text: 'fast' };
+        yield { text: ' path', finishReason: 'stop' };
+      },
+      executeStream: async function* () {
+        yield { content: 'slow path' };
+      },
+    };
+
+    const embedding = await context.embedder.embed('openai chat');
+    const selector = context.selectorTable.intern(embedding, 'openai.chat_completion');
+    cls.addMethod(selector, dualImp);
+    context.registerClass(cls);
+
+    const events = await collectEvents(
+      smallchat_dispatchStream(context, 'openai chat', { prompt: 'test' }),
+    );
+
+    // Should use inference path, not chunk path
+    const deltas = events.filter(e => e.type === 'inference-delta');
+    expect(deltas).toHaveLength(2);
+
+    const chunks = events.filter(e => e.type === 'chunk') as Array<{ type: 'chunk'; content: unknown }>;
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0].content).toBe('fast path'); // assembled from deltas, not from executeStream
+  });
+
+  it('carries provider metadata through inference deltas', async () => {
+    const context = createContext();
+    const cls = new ToolClass('openai');
+
+    const imp: ToolIMP & { executeInference: (args: Record<string, unknown>) => AsyncIterable<InferenceDelta> } = {
+      ...makeIMP('openai', 'completion'),
+      executeInference: async function* () {
+        yield { text: 'Hello', index: 0, providerMeta: { logprob: -0.5 } };
+        yield { text: '!', index: 0, finishReason: 'stop', providerMeta: { logprob: -0.1 } };
+      },
+    };
+
+    const embedding = await context.embedder.embed('openai completion');
+    const selector = context.selectorTable.intern(embedding, 'openai.completion');
+    cls.addMethod(selector, imp);
+    context.registerClass(cls);
+
+    const events = await collectEvents(
+      smallchat_dispatchStream(context, 'openai completion'),
+    );
+
+    const deltas = events.filter(e => e.type === 'inference-delta') as DispatchEventInferenceDelta[];
+    expect(deltas[0].delta.providerMeta).toEqual({ logprob: -0.5 });
+    expect(deltas[1].delta.finishReason).toBe('stop');
+  });
+
+  it('handles errors in executeInference gracefully', async () => {
+    const context = createContext();
+    const cls = new ToolClass('anthropic');
+
+    const failImp: ToolIMP & { executeInference: (args: Record<string, unknown>) => AsyncIterable<InferenceDelta> } = {
+      ...makeIMP('anthropic', 'messages'),
+      executeInference: async function* () {
+        yield { text: 'partial' };
+        throw new Error('stream interrupted');
+      },
+    };
+
+    const embedding = await context.embedder.embed('anthropic messages');
+    const selector = context.selectorTable.intern(embedding, 'anthropic.messages');
+    cls.addMethod(selector, failImp);
+    context.registerClass(cls);
+
+    const events = await collectEvents(
+      smallchat_dispatchStream(context, 'anthropic messages'),
+    );
+
+    // Should get partial delta then error
+    const deltas = events.filter(e => e.type === 'inference-delta');
+    expect(deltas.length).toBeGreaterThanOrEqual(1);
+
+    const errorEvent = events.find(e => e.type === 'error');
+    expect(errorEvent).toBeDefined();
+    expect((errorEvent as { type: 'error'; error: string }).error).toBe('stream interrupted');
   });
 });
