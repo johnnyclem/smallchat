@@ -77,6 +77,7 @@ export { ToolClass, ToolProxy } from './core/tool-class.js';
 
 // Runtime
 export { DispatchContext, UnrecognizedIntent, toolkit_dispatch } from './runtime/dispatch.js';
+export type { FallbackStep, FallbackChainResult } from './runtime/dispatch.js';
 export { ToolRuntime } from './runtime/runtime.js';
 export type { RuntimeOptions } from './runtime/runtime.js';
 

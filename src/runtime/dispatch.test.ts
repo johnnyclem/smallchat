@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { DispatchContext, UnrecognizedIntent, toolkit_dispatch } from './dispatch.js';
+import type { FallbackChainResult } from './dispatch.js';
 import { ResolutionCache } from '../core/resolution-cache.js';
 import { SelectorTable } from '../core/selector-table.js';
 import { ToolClass } from '../core/tool-class.js';
@@ -84,12 +85,77 @@ describe('toolkit_dispatch', () => {
     expect(context.cache.size).toBeGreaterThan(0); // But cache should be populated
   });
 
-  it('throws UnrecognizedIntent when no tool matches', async () => {
+  it('returns fallback stub instead of throwing when no tool matches', async () => {
     const context = createContext();
 
-    await expect(
-      toolkit_dispatch(context, 'completely unknown operation xyz123'),
-    ).rejects.toThrow(UnrecognizedIntent);
+    const result = await toolkit_dispatch(context, 'completely unknown operation xyz123');
+
+    // Should return a result, not throw
+    expect(result).toBeDefined();
+    expect(result.metadata).toBeDefined();
+    expect(result.metadata!.fallback).toBe(true);
+
+    const content = result.content as FallbackChainResult;
+    expect(content.tool).toBe('unknown');
+    expect(content.message.toLowerCase()).toContain('want me to search');
+    expect(content.intent).toBe('completely unknown operation xyz123');
+    expect(content.fallbackSteps).toBeDefined();
+    expect(content.fallbackSteps.length).toBeGreaterThan(0);
+  });
+
+  it('tries superclass chain during fallback', async () => {
+    const context = createContext();
+
+    // Create a superclass with a tool
+    const superclass = new ToolClass('base-tools');
+    const embedding = await context.embedder.embed('deploy application');
+    const selector = context.selectorTable.intern(embedding, 'base.deploy');
+    superclass.addMethod(selector, makeIMP('base', 'deploy', 'deployed!'));
+    context.registerClass(superclass);
+
+    // Create a subclass that inherits from superclass but has no direct tools
+    const subclass = new ToolClass('cloud-tools');
+    subclass.superclass = superclass;
+    context.registerClass(subclass);
+
+    // Dispatch something that won't match at threshold 0.75 but will match
+    // via superclass traversal in the fallback chain
+    const result = await toolkit_dispatch(context, 'deploy application');
+    expect(result.content).toBe('deployed!');
+  });
+
+  it('annotates ambiguous multi-candidate results', async () => {
+    const context = createContext();
+    const cls = new ToolClass('multi');
+
+    // Register two tools with the same embedding to force ambiguity
+    const embedding = await context.embedder.embed('search items');
+    const sel1 = context.selectorTable.intern(embedding, 'multi.search_a');
+    const sel2 = context.selectorTable.intern(
+      await context.embedder.embed('search items'),
+      'multi.search_b',
+    );
+    cls.addMethod(sel1, makeIMP('multi', 'search_a'));
+    cls.addMethod(sel2, makeIMP('multi', 'search_b'));
+    context.registerClass(cls);
+
+    const result = await toolkit_dispatch(context, 'search items');
+
+    // Should still return a result (not throw)
+    expect(result).toBeDefined();
+    expect(result.content).toBeDefined();
+  });
+
+  it('includes fallback steps trace in metadata', async () => {
+    const context = createContext();
+
+    const result = await toolkit_dispatch(context, 'nonexistent tool operation');
+    const steps = (result.metadata as any)?.fallbackSteps;
+
+    expect(steps).toBeDefined();
+    expect(Array.isArray(steps)).toBe(true);
+    // Should have at least the LLM disambiguate stub step
+    expect(steps.some((s: any) => s.strategy === 'llm_disambiguate')).toBe(true);
   });
 
   it('passes arguments through to the IMP and returns them in metadata', async () => {
