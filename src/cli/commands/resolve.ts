@@ -1,15 +1,19 @@
 import { Command } from 'commander';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import type { Embedder, VectorIndex } from '../../core/types.js';
 import { LocalEmbedder } from '../../embedding/local-embedder.js';
 import { MemoryVectorIndex } from '../../embedding/memory-vector-index.js';
+import { ONNXEmbedder } from '../../embedding/onnx-embedder.js';
+import { SqliteVectorIndex } from '../../embedding/sqlite-vector-index.js';
 import { SelectorTable } from '../../core/selector-table.js';
 
 export const resolveCommand = new Command('resolve')
   .description('Test dispatch resolution against a compiled artifact')
   .argument('<file>', 'Path to the compiled toolkit file')
   .argument('<intent>', 'Natural language intent to resolve')
-  .action(async (file, intent) => {
+  .option('-e, --embedder <type>', 'Embedder to use: onnx (default) or local', 'onnx')
+  .action(async (file, intent, options) => {
     const filePath = resolve(file);
 
     let data: ToolkitArtifact;
@@ -21,9 +25,27 @@ export const resolveCommand = new Command('resolve')
       process.exit(1);
     }
 
+    // Detect embedder type from artifact or CLI flag
+    const embedderType = data.embedding?.embedderType ?? options.embedder;
+
     // Rebuild the selector table and vector index from the artifact
-    const embedder = new LocalEmbedder();
-    const vectorIndex = new MemoryVectorIndex();
+    let embedder: Embedder;
+    let vectorIndex: VectorIndex;
+
+    if (embedderType === 'onnx') {
+      try {
+        embedder = new ONNXEmbedder();
+        vectorIndex = new SqliteVectorIndex(':memory:');
+      } catch {
+        console.warn('ONNX embedder unavailable, falling back to local embedder.');
+        embedder = new LocalEmbedder();
+        vectorIndex = new MemoryVectorIndex();
+      }
+    } else {
+      embedder = new LocalEmbedder();
+      vectorIndex = new MemoryVectorIndex();
+    }
+
     const selectorTable = new SelectorTable(vectorIndex, embedder);
 
     // Load selectors from the artifact
@@ -76,4 +98,9 @@ export const resolveCommand = new Command('resolve')
 interface ToolkitArtifact {
   selectors: Record<string, unknown>;
   dispatchTables: Record<string, unknown>;
+  embedding?: {
+    model: string;
+    dimensions: number;
+    embedderType: string;
+  };
 }

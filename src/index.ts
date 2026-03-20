@@ -98,3 +98,6 @@ export type { ParsedTool } from './compiler/parser.js';
 // Embedding
 export { LocalEmbedder } from './embedding/local-embedder.js';
 export { MemoryVectorIndex } from './embedding/memory-vector-index.js';
+export { ONNXEmbedder } from './embedding/onnx-embedder.js';
+export type { ONNXEmbedderOptions } from './embedding/onnx-embedder.js';
+export { SqliteVectorIndex } from './embedding/sqlite-vector-index.js';

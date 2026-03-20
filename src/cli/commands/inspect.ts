@@ -9,6 +9,7 @@ export const inspectCommand = new Command('inspect')
   .option('--protocols', 'Show protocol conformances')
   .option('--collisions', 'Show selector collisions')
   .option('--providers', 'Show providers and their tools')
+  .option('--embeddings', 'Show embedding model info')
   .action((file, options) => {
     const filePath = resolve(file);
 
@@ -30,6 +31,19 @@ export const inspectCommand = new Command('inspect')
     console.log(`  Merged: ${data.stats.mergedCount}`);
     console.log(`  Providers: ${data.stats.providerCount}`);
     console.log(`  Collisions: ${data.stats.collisionCount}`);
+
+    if (options.embeddings) {
+      console.log('\nEmbedding model:');
+      const emb = (data as unknown as Record<string, unknown>).embedding as
+        { model?: string; dimensions?: number; embedderType?: string } | undefined;
+      if (emb) {
+        console.log(`  Model: ${emb.model ?? 'unknown'}`);
+        console.log(`  Dimensions: ${emb.dimensions ?? 'unknown'}`);
+        console.log(`  Embedder type: ${emb.embedderType ?? 'unknown'}`);
+      } else {
+        console.log('  No embedding metadata (compiled with v0.0.1)');
+      }
+    }
 
     if (options.selectors) {
       console.log('\nSelectors:');

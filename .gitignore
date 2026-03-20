@@ -1,6 +1,10 @@
 node_modules/
 dist/
 *.toolkit
+*.toolkit.json
 .env
 .DS_Store
 coverage/
+smallchat.db
+smallchat.db-wal
+smallchat.db-shm
