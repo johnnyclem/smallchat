@@ -34,7 +34,7 @@
     "type": "git",
     "url": "https://github.com/johnnyclem/smallchat.git"
   },
-  "homepage": "https://github.com/johnnyclem/smallchat#readme",
+  "homepage": "https://smallchat.dev",
   "author": "Johnny Clem",
   "license": "MIT",
   "devDependencies": {
