@@ -1,82 +1,109 @@
 import { Command } from 'commander';
-import { readFileSync, readdirSync, writeFileSync, statSync } from 'node:fs';
+import { readFileSync, readdirSync, writeFileSync, statSync, watch } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { ProviderManifest } from '../../core/types.js';
 import { ToolCompiler } from '../../compiler/compiler.js';
 import { LocalEmbedder } from '../../embedding/local-embedder.js';
 import { MemoryVectorIndex } from '../../embedding/memory-vector-index.js';
 
+async function runCompile(sourcePath: string, outputPath: string): Promise<boolean> {
+  console.log(`Parsing manifests from ${sourcePath}...`);
+
+  const manifests: ProviderManifest[] = [];
+  const files = findManifestFiles(sourcePath);
+
+  for (const file of files) {
+    try {
+      const content = readFileSync(file, 'utf-8');
+      const manifest = JSON.parse(content) as ProviderManifest;
+      manifests.push(manifest);
+      console.log(`  ${manifest.id ?? manifest.name}: ${manifest.tools.length} tools`);
+    } catch (e) {
+      console.error(`  Warning: Could not parse ${file}: ${(e as Error).message}`);
+    }
+  }
+
+  if (manifests.length === 0) {
+    console.error('No valid manifests found.');
+    return false;
+  }
+
+  const embedder = new LocalEmbedder();
+  const vectorIndex = new MemoryVectorIndex();
+  const compiler = new ToolCompiler(embedder, vectorIndex);
+
+  console.log(`\nEmbedding ${manifests.reduce((sum, m) => sum + m.tools.length, 0)} tools...`);
+  console.log('  Model: hash-based (v0.0.1 placeholder)');
+
+  const result = await compiler.compile(manifests);
+
+  console.log(`  Selectors generated: ${result.toolCount}`);
+  console.log(`  After dedup (threshold 0.95): ${result.uniqueSelectorCount} unique selectors`);
+  if (result.mergedCount > 0) {
+    console.log(`  ${result.mergedCount} tools merged as semantically equivalent`);
+  }
+
+  console.log('\nLinking...');
+  console.log(`  Dispatch tables: ${result.dispatchTables.size}`);
+
+  if (result.collisions.length > 0) {
+    console.log(`  Selector collisions: ${result.collisions.length} (warnings emitted)`);
+    for (const collision of result.collisions) {
+      console.log(`    ⚠ ${collision.selectorA} and ${collision.selectorB} (cosine: ${collision.similarity.toFixed(2)})`);
+      console.log(`      ${collision.hint}`);
+    }
+  }
+
+  const output = serializeResult(result);
+  writeFileSync(outputPath, JSON.stringify(output, null, 2));
+
+  console.log(`\nOutput: ${outputPath}`);
+  console.log(`  - ${result.uniqueSelectorCount} selectors`);
+  console.log(`  - ${result.toolCount} tools`);
+  console.log(`  - ${result.dispatchTables.size} providers`);
+
+  const headerPath = outputPath.replace(/\.json$/, '.header.txt');
+  const header = generateHeader(result);
+  writeFileSync(headerPath, header);
+  console.log(`\nHeader file: ${headerPath} (${header.split(/\s+/).length} tokens approx)`);
+
+  return true;
+}
+
 export const compileCommand = new Command('compile')
   .description('Compile tool definitions from MCP server manifests')
   .requiredOption('-s, --source <path>', 'Source directory containing manifest JSON files')
   .option('-o, --output <path>', 'Output file path', 'tools.toolkit.json')
+  .option('-w, --watch', 'Watch source directory and recompile on changes')
   .action(async (options) => {
     const sourcePath = resolve(options.source);
     const outputPath = resolve(options.output);
 
-    console.log(`Parsing manifests from ${sourcePath}...`);
+    const ok = await runCompile(sourcePath, outputPath);
 
-    // Load all JSON manifests from the source directory
-    const manifests: ProviderManifest[] = [];
-    const files = findManifestFiles(sourcePath);
-
-    for (const file of files) {
-      try {
-        const content = readFileSync(file, 'utf-8');
-        const manifest = JSON.parse(content) as ProviderManifest;
-        manifests.push(manifest);
-        console.log(`  ${manifest.id ?? manifest.name}: ${manifest.tools.length} tools`);
-      } catch (e) {
-        console.error(`  Warning: Could not parse ${file}: ${(e as Error).message}`);
-      }
+    if (!options.watch) {
+      if (!ok) process.exit(1);
+      return;
     }
 
-    if (manifests.length === 0) {
-      console.error('No valid manifests found.');
-      process.exit(1);
+    if (!ok) {
+      console.log('\nInitial compile failed, watching for changes...');
     }
 
-    // Compile
-    const embedder = new LocalEmbedder();
-    const vectorIndex = new MemoryVectorIndex();
-    const compiler = new ToolCompiler(embedder, vectorIndex);
+    console.log(`\nWatching ${sourcePath} for changes...`);
 
-    console.log(`\nEmbedding ${manifests.reduce((sum, m) => sum + m.tools.length, 0)} tools...`);
-    console.log('  Model: hash-based (v0.0.1 placeholder)');
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
-    const result = await compiler.compile(manifests);
+    watch(sourcePath, { recursive: true }, (_event, filename) => {
+      if (!filename?.endsWith('.json')) return;
 
-    console.log(`  Selectors generated: ${result.toolCount}`);
-    console.log(`  After dedup (threshold 0.95): ${result.uniqueSelectorCount} unique selectors`);
-    if (result.mergedCount > 0) {
-      console.log(`  ${result.mergedCount} tools merged as semantically equivalent`);
-    }
-
-    console.log('\nLinking...');
-    console.log(`  Dispatch tables: ${result.dispatchTables.size}`);
-
-    if (result.collisions.length > 0) {
-      console.log(`  Selector collisions: ${result.collisions.length} (warnings emitted)`);
-      for (const collision of result.collisions) {
-        console.log(`    ⚠ ${collision.selectorA} and ${collision.selectorB} (cosine: ${collision.similarity.toFixed(2)})`);
-        console.log(`      ${collision.hint}`);
-      }
-    }
-
-    // Serialize the compilation result
-    const output = serializeResult(result);
-    writeFileSync(outputPath, JSON.stringify(output, null, 2));
-
-    console.log(`\nOutput: ${outputPath}`);
-    console.log(`  - ${result.uniqueSelectorCount} selectors`);
-    console.log(`  - ${result.toolCount} tools`);
-    console.log(`  - ${result.dispatchTables.size} providers`);
-
-    // Generate header file
-    const headerPath = outputPath.replace(/\.json$/, '.header.txt');
-    const header = generateHeader(result);
-    writeFileSync(headerPath, header);
-    console.log(`\nHeader file: ${headerPath} (${header.split(/\s+/).length} tokens approx)`);
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(async () => {
+        console.log(`\n--- Recompiling (${filename} changed) ---\n`);
+        await runCompile(sourcePath, outputPath);
+        console.log(`\nWatching ${sourcePath} for changes...`);
+      }, 200);
+    });
   });
 
 function findManifestFiles(dir: string): string[] {
