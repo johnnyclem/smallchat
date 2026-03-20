@@ -1,0 +1,180 @@
+{
+  "id": "memory",
+  "name": "Memory",
+  "transportType": "mcp",
+  "description": "Knowledge graph-based persistent memory system",
+  "tools": [
+    {
+      "name": "create_entities",
+      "description": "Create multiple new entities in the knowledge graph",
+      "providerId": "memory",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "entities": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": { "type": "string", "description": "The name of the entity" },
+                "entityType": { "type": "string", "description": "The type of the entity" },
+                "observations": { "type": "array", "items": { "type": "string" }, "description": "Observations about the entity" }
+              },
+              "required": ["name", "entityType", "observations"]
+            },
+            "description": "Array of entities to create"
+          }
+        },
+        "required": ["entities"]
+      }
+    },
+    {
+      "name": "create_relations",
+      "description": "Create multiple new relations between entities",
+      "providerId": "memory",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "relations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "from": { "type": "string", "description": "Source entity name" },
+                "to": { "type": "string", "description": "Target entity name" },
+                "relationType": { "type": "string", "description": "Type of relation" }
+              },
+              "required": ["from", "to", "relationType"]
+            },
+            "description": "Array of relations to create"
+          }
+        },
+        "required": ["relations"]
+      }
+    },
+    {
+      "name": "add_observations",
+      "description": "Add new observations to existing entities",
+      "providerId": "memory",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "observations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "entityName": { "type": "string", "description": "Name of the entity to add observations to" },
+                "contents": { "type": "array", "items": { "type": "string" }, "description": "Observations to add" }
+              },
+              "required": ["entityName", "contents"]
+            },
+            "description": "Array of observation additions"
+          }
+        },
+        "required": ["observations"]
+      }
+    },
+    {
+      "name": "delete_entities",
+      "description": "Delete multiple entities and their associated relations",
+      "providerId": "memory",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "entityNames": { "type": "array", "items": { "type": "string" }, "description": "Names of entities to delete" }
+        },
+        "required": ["entityNames"]
+      }
+    },
+    {
+      "name": "delete_observations",
+      "description": "Delete specific observations from entities",
+      "providerId": "memory",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deletions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "entityName": { "type": "string", "description": "Name of the entity" },
+                "observations": { "type": "array", "items": { "type": "string" }, "description": "Observations to delete" }
+              },
+              "required": ["entityName", "observations"]
+            },
+            "description": "Array of observation deletions"
+          }
+        },
+        "required": ["deletions"]
+      }
+    },
+    {
+      "name": "delete_relations",
+      "description": "Delete multiple relations from the knowledge graph",
+      "providerId": "memory",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "relations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "from": { "type": "string", "description": "Source entity name" },
+                "to": { "type": "string", "description": "Target entity name" },
+                "relationType": { "type": "string", "description": "Type of relation" }
+              },
+              "required": ["from", "to", "relationType"]
+            },
+            "description": "Array of relations to delete"
+          }
+        },
+        "required": ["relations"]
+      }
+    },
+    {
+      "name": "read_graph",
+      "description": "Read the entire knowledge graph",
+      "providerId": "memory",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "search_nodes",
+      "description": "Search for nodes in the knowledge graph by query",
+      "providerId": "memory",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string", "description": "Search query to match against entity names, types, and observations" }
+        },
+        "required": ["query"]
+      }
+    },
+    {
+      "name": "open_nodes",
+      "description": "Open specific nodes by their names",
+      "providerId": "memory",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "names": { "type": "array", "items": { "type": "string" }, "description": "Names of nodes to retrieve" }
+        },
+        "required": ["names"]
+      }
+    }
+  ]
+}

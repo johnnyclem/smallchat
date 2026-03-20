@@ -1,0 +1,46 @@
+{
+  "id": "postgres",
+  "name": "PostgreSQL",
+  "transportType": "mcp",
+  "description": "Read-only database access with schema inspection capabilities",
+  "tools": [
+    {
+      "name": "query",
+      "description": "Run a read-only SQL query against the PostgreSQL database",
+      "providerId": "postgres",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sql": { "type": "string", "description": "SQL query to execute (SELECT only)" }
+        },
+        "required": ["sql"]
+      }
+    },
+    {
+      "name": "list_tables",
+      "description": "List all tables in the database with their schemas",
+      "providerId": "postgres",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "schema": { "type": "string", "description": "Schema name to filter by (default: public)" }
+        }
+      }
+    },
+    {
+      "name": "describe_table",
+      "description": "Get the schema information for a specific table",
+      "providerId": "postgres",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tableName": { "type": "string", "description": "Name of the table to describe" }
+        },
+        "required": ["tableName"]
+      }
+    }
+  ]
+}

@@ -1,0 +1,118 @@
+{
+  "id": "notion",
+  "name": "Notion",
+  "transportType": "mcp",
+  "description": "Interact with Notion workspaces, pages, and databases",
+  "tools": [
+    {
+      "name": "search",
+      "description": "Search for pages and databases in Notion",
+      "providerId": "notion",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string", "description": "Search query" },
+          "filter": {
+            "type": "object",
+            "properties": {
+              "property": { "type": "string", "enum": ["object"] },
+              "value": { "type": "string", "enum": ["page", "database"] }
+            },
+            "description": "Filter by object type"
+          },
+          "pageSize": { "type": "number", "description": "Number of results per page" }
+        },
+        "required": ["query"]
+      }
+    },
+    {
+      "name": "get_page",
+      "description": "Retrieve a Notion page and its properties",
+      "providerId": "notion",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "pageId": { "type": "string", "description": "Notion page ID" }
+        },
+        "required": ["pageId"]
+      }
+    },
+    {
+      "name": "get_page_content",
+      "description": "Get the block content of a Notion page",
+      "providerId": "notion",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "pageId": { "type": "string", "description": "Notion page ID" },
+          "pageSize": { "type": "number", "description": "Number of blocks per page" }
+        },
+        "required": ["pageId"]
+      }
+    },
+    {
+      "name": "create_page",
+      "description": "Create a new page in Notion",
+      "providerId": "notion",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "parentId": { "type": "string", "description": "Parent page or database ID" },
+          "parentType": { "type": "string", "description": "Type of parent", "enum": ["page", "database"] },
+          "title": { "type": "string", "description": "Page title" },
+          "properties": { "type": "object", "description": "Page properties (for database items)" },
+          "content": { "type": "array", "items": { "type": "object" }, "description": "Block content to add to the page" }
+        },
+        "required": ["parentId", "parentType", "title"]
+      }
+    },
+    {
+      "name": "update_page",
+      "description": "Update properties of a Notion page",
+      "providerId": "notion",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "pageId": { "type": "string", "description": "Page ID to update" },
+          "properties": { "type": "object", "description": "Properties to update" }
+        },
+        "required": ["pageId", "properties"]
+      }
+    },
+    {
+      "name": "query_database",
+      "description": "Query a Notion database with filters and sorts",
+      "providerId": "notion",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "databaseId": { "type": "string", "description": "Database ID to query" },
+          "filter": { "type": "object", "description": "Notion filter object" },
+          "sorts": { "type": "array", "items": { "type": "object" }, "description": "Sort criteria" },
+          "pageSize": { "type": "number", "description": "Number of results per page" }
+        },
+        "required": ["databaseId"]
+      }
+    },
+    {
+      "name": "append_block_children",
+      "description": "Append blocks as children of a page or block",
+      "providerId": "notion",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blockId": { "type": "string", "description": "Parent block or page ID" },
+          "children": { "type": "array", "items": { "type": "object" }, "description": "Block objects to append" }
+        },
+        "required": ["blockId", "children"]
+      }
+    }
+  ]
+}

@@ -1,0 +1,77 @@
+{
+  "id": "elasticsearch",
+  "name": "Elasticsearch",
+  "transportType": "mcp",
+  "description": "Query and manage Elasticsearch indices and data",
+  "tools": [
+    {
+      "name": "search",
+      "description": "Search documents in an Elasticsearch index",
+      "providerId": "elasticsearch",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "index": { "type": "string", "description": "Index name or pattern" },
+          "query": { "type": "object", "description": "Elasticsearch query DSL" },
+          "size": { "type": "number", "description": "Maximum number of hits to return" },
+          "from": { "type": "number", "description": "Offset for pagination" },
+          "sort": { "type": "array", "items": { "type": "object" }, "description": "Sort criteria" }
+        },
+        "required": ["index"]
+      }
+    },
+    {
+      "name": "index_document",
+      "description": "Index a document into Elasticsearch",
+      "providerId": "elasticsearch",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "index": { "type": "string", "description": "Index name" },
+          "document": { "type": "object", "description": "Document to index" },
+          "id": { "type": "string", "description": "Optional document ID" }
+        },
+        "required": ["index", "document"]
+      }
+    },
+    {
+      "name": "get_document",
+      "description": "Get a document by ID from an index",
+      "providerId": "elasticsearch",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "index": { "type": "string", "description": "Index name" },
+          "id": { "type": "string", "description": "Document ID" }
+        },
+        "required": ["index", "id"]
+      }
+    },
+    {
+      "name": "list_indices",
+      "description": "List all Elasticsearch indices",
+      "providerId": "elasticsearch",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "get_mapping",
+      "description": "Get the mapping for an index",
+      "providerId": "elasticsearch",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "index": { "type": "string", "description": "Index name" }
+        },
+        "required": ["index"]
+      }
+    }
+  ]
+}

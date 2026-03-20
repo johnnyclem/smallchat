@@ -1,0 +1,127 @@
+{
+  "id": "stripe",
+  "name": "Stripe",
+  "transportType": "mcp",
+  "description": "Payment processing and financial operations with Stripe",
+  "tools": [
+    {
+      "name": "list_customers",
+      "description": "List customers in Stripe",
+      "providerId": "stripe",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "email": { "type": "string", "description": "Filter by customer email" },
+          "limit": { "type": "number", "description": "Maximum number of results (1-100)" },
+          "startingAfter": { "type": "string", "description": "Cursor for pagination" }
+        }
+      }
+    },
+    {
+      "name": "create_customer",
+      "description": "Create a new customer in Stripe",
+      "providerId": "stripe",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "email": { "type": "string", "description": "Customer email" },
+          "name": { "type": "string", "description": "Customer name" },
+          "description": { "type": "string", "description": "Customer description" },
+          "metadata": { "type": "object", "description": "Custom metadata key-value pairs" }
+        },
+        "required": ["email"]
+      }
+    },
+    {
+      "name": "create_payment_intent",
+      "description": "Create a payment intent for collecting payments",
+      "providerId": "stripe",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "amount": { "type": "number", "description": "Amount in smallest currency unit (e.g., cents)" },
+          "currency": { "type": "string", "description": "Three-letter ISO currency code" },
+          "customerId": { "type": "string", "description": "Customer ID to charge" },
+          "description": { "type": "string", "description": "Payment description" },
+          "metadata": { "type": "object", "description": "Custom metadata" }
+        },
+        "required": ["amount", "currency"]
+      }
+    },
+    {
+      "name": "list_payments",
+      "description": "List payment intents",
+      "providerId": "stripe",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "customerId": { "type": "string", "description": "Filter by customer ID" },
+          "limit": { "type": "number", "description": "Maximum number of results" },
+          "status": { "type": "string", "description": "Filter by status", "enum": ["requires_payment_method", "requires_confirmation", "requires_action", "processing", "succeeded", "canceled"] }
+        }
+      }
+    },
+    {
+      "name": "create_refund",
+      "description": "Refund a payment",
+      "providerId": "stripe",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "paymentIntentId": { "type": "string", "description": "Payment intent ID to refund" },
+          "amount": { "type": "number", "description": "Amount to refund (partial refund if less than payment amount)" },
+          "reason": { "type": "string", "description": "Reason for refund", "enum": ["duplicate", "fraudulent", "requested_by_customer"] }
+        },
+        "required": ["paymentIntentId"]
+      }
+    },
+    {
+      "name": "list_subscriptions",
+      "description": "List subscriptions",
+      "providerId": "stripe",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "customerId": { "type": "string", "description": "Filter by customer ID" },
+          "status": { "type": "string", "description": "Filter by status", "enum": ["active", "past_due", "unpaid", "canceled", "incomplete", "trialing", "all"] },
+          "limit": { "type": "number", "description": "Maximum number of results" }
+        }
+      }
+    },
+    {
+      "name": "list_products",
+      "description": "List products in the catalog",
+      "providerId": "stripe",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "active": { "type": "boolean", "description": "Filter by active status" },
+          "limit": { "type": "number", "description": "Maximum number of results" }
+        }
+      }
+    },
+    {
+      "name": "create_invoice",
+      "description": "Create an invoice for a customer",
+      "providerId": "stripe",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "customerId": { "type": "string", "description": "Customer ID" },
+          "description": { "type": "string", "description": "Invoice description" },
+          "autoAdvance": { "type": "boolean", "description": "Auto-finalize the invoice" },
+          "metadata": { "type": "object", "description": "Custom metadata" }
+        },
+        "required": ["customerId"]
+      }
+    }
+  ]
+}

@@ -1,0 +1,62 @@
+{
+  "id": "redis",
+  "name": "Redis",
+  "transportType": "mcp",
+  "description": "Interact with Redis key-value stores",
+  "tools": [
+    {
+      "name": "get",
+      "description": "Get the value of a key from Redis",
+      "providerId": "redis",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "key": { "type": "string", "description": "The key to retrieve" }
+        },
+        "required": ["key"]
+      }
+    },
+    {
+      "name": "set",
+      "description": "Set a key-value pair in Redis",
+      "providerId": "redis",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "key": { "type": "string", "description": "The key to set" },
+          "value": { "type": "string", "description": "The value to set" },
+          "expiration": { "type": "number", "description": "Expiration time in seconds" }
+        },
+        "required": ["key", "value"]
+      }
+    },
+    {
+      "name": "delete",
+      "description": "Delete one or more keys from Redis",
+      "providerId": "redis",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "keys": { "type": "array", "items": { "type": "string" }, "description": "Keys to delete" }
+        },
+        "required": ["keys"]
+      }
+    },
+    {
+      "name": "list",
+      "description": "List keys matching a pattern",
+      "providerId": "redis",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "pattern": { "type": "string", "description": "Key pattern to match (e.g., user:*)" }
+        },
+        "required": ["pattern"]
+      }
+    }
+  ]
+}

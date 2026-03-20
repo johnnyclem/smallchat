@@ -1,0 +1,50 @@
+{
+  "id": "sentry",
+  "name": "Sentry",
+  "transportType": "mcp",
+  "description": "Retrieving and analyzing issues from Sentry.io",
+  "tools": [
+    {
+      "name": "list_issues",
+      "description": "List issues from a Sentry project with optional filters",
+      "providerId": "sentry",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "organizationSlug": { "type": "string", "description": "Sentry organization slug" },
+          "projectSlug": { "type": "string", "description": "Sentry project slug" },
+          "query": { "type": "string", "description": "Search query for filtering issues" },
+          "sortBy": { "type": "string", "description": "Sort field", "enum": ["date", "new", "priority", "freq", "user"] }
+        },
+        "required": ["organizationSlug", "projectSlug"]
+      }
+    },
+    {
+      "name": "get_issue_details",
+      "description": "Get detailed information about a specific Sentry issue",
+      "providerId": "sentry",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "issueId": { "type": "string", "description": "Sentry issue ID" }
+        },
+        "required": ["issueId"]
+      }
+    },
+    {
+      "name": "list_events",
+      "description": "List events for a specific Sentry issue",
+      "providerId": "sentry",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "issueId": { "type": "string", "description": "Sentry issue ID" }
+        },
+        "required": ["issueId"]
+      }
+    }
+  ]
+}
