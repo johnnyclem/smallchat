@@ -1,12 +1,40 @@
 import { Command } from 'commander';
 import { readFileSync, readdirSync, writeFileSync, statSync, watch } from 'node:fs';
 import { join, resolve } from 'node:path';
-import type { ProviderManifest } from '../../core/types.js';
+import type { Embedder, VectorIndex, ProviderManifest } from '../../core/types.js';
 import { ToolCompiler } from '../../compiler/compiler.js';
 import { LocalEmbedder } from '../../embedding/local-embedder.js';
 import { MemoryVectorIndex } from '../../embedding/memory-vector-index.js';
+import { ONNXEmbedder } from '../../embedding/onnx-embedder.js';
+import { SqliteVectorIndex } from '../../embedding/sqlite-vector-index.js';
 
-async function runCompile(sourcePath: string, outputPath: string): Promise<boolean> {
+async function createEmbedder(type: string): Promise<Embedder> {
+  if (type === 'onnx') {
+    try {
+      return new ONNXEmbedder();
+    } catch (e) {
+      console.warn(`  Warning: ONNX embedder failed to load: ${(e as Error).message}`);
+      console.warn('  Falling back to local (hash-based) embedder.');
+      console.warn('  Run "smallchat doctor" to diagnose. Ensure models/ directory exists.');
+      return new LocalEmbedder();
+    }
+  }
+  return new LocalEmbedder();
+}
+
+function createVectorIndex(type: string, dbPath: string): VectorIndex {
+  if (type === 'sqlite') {
+    return new SqliteVectorIndex(dbPath);
+  }
+  return new MemoryVectorIndex();
+}
+
+async function runCompile(
+  sourcePath: string,
+  outputPath: string,
+  embedderType: string,
+  dbPath: string,
+): Promise<boolean> {
   console.log(`Parsing manifests from ${sourcePath}...`);
 
   const manifests: ProviderManifest[] = [];
@@ -28,12 +56,19 @@ async function runCompile(sourcePath: string, outputPath: string): Promise<boole
     return false;
   }
 
-  const embedder = new LocalEmbedder();
-  const vectorIndex = new MemoryVectorIndex();
+  const embedder = await createEmbedder(embedderType);
+  const vectorIndex = createVectorIndex(
+    embedderType === 'onnx' ? 'sqlite' : 'memory',
+    dbPath,
+  );
   const compiler = new ToolCompiler(embedder, vectorIndex);
 
+  const modelLabel = embedderType === 'onnx'
+    ? 'all-MiniLM-L6-v2 (ONNX, 384-dim)'
+    : 'hash-based (v0.0.1 placeholder)';
+
   console.log(`\nEmbedding ${manifests.reduce((sum, m) => sum + m.tools.length, 0)} tools...`);
-  console.log('  Model: hash-based (v0.0.1 placeholder)');
+  console.log(`  Model: ${modelLabel}`);
 
   const result = await compiler.compile(manifests);
 
@@ -54,7 +89,7 @@ async function runCompile(sourcePath: string, outputPath: string): Promise<boole
     }
   }
 
-  const output = serializeResult(result);
+  const output = serializeResult(result, embedderType);
   writeFileSync(outputPath, JSON.stringify(output, null, 2));
 
   console.log(`\nOutput: ${outputPath}`);
@@ -75,11 +110,15 @@ export const compileCommand = new Command('compile')
   .requiredOption('-s, --source <path>', 'Source directory containing manifest JSON files')
   .option('-o, --output <path>', 'Output file path', 'tools.toolkit.json')
   .option('-w, --watch', 'Watch source directory and recompile on changes')
+  .option('-e, --embedder <type>', 'Embedder to use: onnx (default) or local', 'onnx')
+  .option('--db-path <path>', 'Path to sqlite-vec database', 'smallchat.db')
   .action(async (options) => {
     const sourcePath = resolve(options.source);
     const outputPath = resolve(options.output);
+    const embedderType = options.embedder;
+    const dbPath = resolve(options.dbPath);
 
-    const ok = await runCompile(sourcePath, outputPath);
+    const ok = await runCompile(sourcePath, outputPath, embedderType, dbPath);
 
     if (!options.watch) {
       if (!ok) process.exit(1);
@@ -100,7 +139,7 @@ export const compileCommand = new Command('compile')
       if (debounceTimer) clearTimeout(debounceTimer);
       debounceTimer = setTimeout(async () => {
         console.log(`\n--- Recompiling (${filename} changed) ---\n`);
-        await runCompile(sourcePath, outputPath);
+        await runCompile(sourcePath, outputPath, embedderType, dbPath);
         console.log(`\nWatching ${sourcePath} for changes...`);
       }, 200);
     });
@@ -124,7 +163,7 @@ function findManifestFiles(dir: string): string[] {
   return files;
 }
 
-function serializeResult(result: import('../../core/types.js').CompilationResult): object {
+function serializeResult(result: import('../../core/types.js').CompilationResult, embedderType?: string): object {
   const selectors: Record<string, object> = {};
   for (const [key, sel] of result.selectors) {
     selectors[key] = {
@@ -150,8 +189,13 @@ function serializeResult(result: import('../../core/types.js').CompilationResult
   }
 
   return {
-    version: '0.0.1',
+    version: '0.1.0',
     timestamp: new Date().toISOString(),
+    embedding: {
+      model: embedderType === 'onnx' ? 'all-MiniLM-L6-v2' : 'hash-based',
+      dimensions: embedderType === 'onnx' ? 384 : 384,
+      embedderType: embedderType ?? 'local',
+    },
     stats: {
       toolCount: result.toolCount,
       uniqueSelectorCount: result.uniqueSelectorCount,

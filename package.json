@@ -10,6 +10,7 @@
   },
   "files": [
     "dist",
+    "models",
     "README.md",
     "LICENSE"
   ],
@@ -46,7 +47,8 @@
   "dependencies": {
     "better-sqlite3": "^11.0.0",
     "commander": "^13.0.0",
-    "onnxruntime-node": "^1.20.0"
+    "onnxruntime-node": "^1.20.0",
+    "sqlite-vec": "^0.1.7"
   },
   "engines": {
     "node": ">=20.0.0"
