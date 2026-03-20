@@ -150,6 +150,26 @@ npx smallchat serve --source ./examples --port 3001
 | `/sse` | GET | Server-Sent Events stream with keep-alive |
 | `tools/call` | POST (Accept: text/event-stream) | Streaming tool execution |
 
+## Example Manifests
+
+The `examples/` directory contains MCP server manifest files for popular services, ready to use with `smallchat compile`:
+
+| Category | Manifests |
+|----------|-----------|
+| **File & Storage** | filesystem, git, google-drive, dropbox |
+| **Code Hosting** | github, gitlab |
+| **Project Management** | atlassian (Jira + Confluence), linear, notion |
+| **Communication** | slack |
+| **Search & Web** | brave-search, fetch, puppeteer, google-maps |
+| **Databases** | postgres, sqlite, mongodb, redis, elasticsearch |
+| **Cloud & Infra** | aws, azure, cloudflare, firebase |
+| **Payments** | stripe |
+| **Monitoring** | sentry |
+| **Design** | figma, everart |
+| **Utilities** | time, memory, sequential-thinking, everything |
+
+A `full-pipeline-example/` shows how to compose multiple providers into a single agent toolkit with semantic overload generation enabled.
+
 ## Development
 
 ```bash

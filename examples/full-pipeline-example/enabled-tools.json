@@ -1,0 +1,134 @@
+{
+  "name": "Claude Code Agent Toolkit",
+  "description": "A comprehensive toolkit for a Claude Code-backed agent with file management, project tracking, search, code hosting, knowledge management, and cloud infrastructure capabilities.",
+  "version": "1.0.0",
+  "backend": {
+    "provider": "anthropic",
+    "model": "claude-sonnet-4-20250514",
+    "systemPromptHeader": "./compiled/tools.toolkit.header.txt"
+  },
+  "providers": [
+    {
+      "manifest": "../filesystem-manifest.json",
+      "enabled": true,
+      "notes": "Local file operations — the primary file interface"
+    },
+    {
+      "manifest": "../git-manifest.json",
+      "enabled": true,
+      "notes": "Git repository operations"
+    },
+    {
+      "manifest": "../github-manifest.json",
+      "enabled": true,
+      "notes": "GitHub platform — code search, issues, PRs"
+    },
+    {
+      "manifest": "../gitlab-manifest.json",
+      "enabled": true,
+      "notes": "GitLab platform — projects, MRs, pipelines"
+    },
+    {
+      "manifest": "../google-drive-manifest.json",
+      "enabled": true,
+      "notes": "Google Drive — authenticated cloud file storage"
+    },
+    {
+      "manifest": "../dropbox-manifest.json",
+      "enabled": true,
+      "notes": "Dropbox — authenticated cloud file storage"
+    },
+    {
+      "manifest": "../atlassian-manifest.json",
+      "enabled": true,
+      "notes": "Jira + Confluence — project tracking and wiki. OAuth2 authenticated."
+    },
+    {
+      "manifest": "../linear-manifest.json",
+      "enabled": true,
+      "notes": "Linear — issue tracking (overlaps semantically with Jira)"
+    },
+    {
+      "manifest": "../slack-manifest.json",
+      "enabled": true,
+      "notes": "Slack — team messaging"
+    },
+    {
+      "manifest": "../notion-manifest.json",
+      "enabled": true,
+      "notes": "Notion — wiki/docs/databases (overlaps with Confluence)"
+    },
+    {
+      "manifest": "../memory-manifest.json",
+      "enabled": true,
+      "notes": "Knowledge graph — persistent agent memory"
+    },
+    {
+      "manifest": "../fetch-manifest.json",
+      "enabled": true,
+      "notes": "Web content fetching"
+    },
+    {
+      "manifest": "../brave-search-manifest.json",
+      "enabled": true,
+      "notes": "Web search"
+    },
+    {
+      "manifest": "../postgres-manifest.json",
+      "enabled": true,
+      "notes": "PostgreSQL database access"
+    },
+    {
+      "manifest": "../mongodb-manifest.json",
+      "enabled": true,
+      "notes": "MongoDB database access"
+    },
+    {
+      "manifest": "../elasticsearch-manifest.json",
+      "enabled": true,
+      "notes": "Elasticsearch — full-text search and analytics"
+    },
+    {
+      "manifest": "../puppeteer-manifest.json",
+      "enabled": true,
+      "notes": "Browser automation and scraping"
+    },
+    {
+      "manifest": "../cloudflare-manifest.json",
+      "enabled": true,
+      "notes": "Cloudflare Workers, KV, R2, D1"
+    },
+    {
+      "manifest": "../aws-manifest.json",
+      "enabled": true,
+      "notes": "AWS S3, Lambda, DynamoDB, CloudWatch"
+    },
+    {
+      "manifest": "../firebase-manifest.json",
+      "enabled": true,
+      "notes": "Firebase Firestore, Auth, Storage"
+    },
+    {
+      "manifest": "../stripe-manifest.json",
+      "enabled": true,
+      "notes": "Stripe payments"
+    },
+    {
+      "manifest": "../sequential-thinking-manifest.json",
+      "enabled": true,
+      "notes": "Meta-cognitive reasoning tool"
+    },
+    {
+      "manifest": "../time-manifest.json",
+      "enabled": true,
+      "notes": "Time and timezone utilities"
+    }
+  ],
+  "compilation": {
+    "generateSemanticOverloads": true,
+    "semanticOverloadThreshold": 0.82,
+    "collisionThreshold": 0.89,
+    "deduplicationThreshold": 0.95,
+    "output": "./compiled/tools.toolkit.json"
+  }
+}
