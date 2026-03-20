@@ -1,0 +1,29 @@
+{
+  "id": "sequential-thinking",
+  "name": "Sequential Thinking",
+  "transportType": "mcp",
+  "description": "Dynamic and reflective problem-solving through thought sequences",
+  "tools": [
+    {
+      "name": "sequentialthinking",
+      "description": "A tool for dynamic and reflective problem-solving through sequential thinking steps with the ability to revise and branch",
+      "providerId": "sequential-thinking",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "thought": { "type": "string", "description": "The current thinking step content" },
+          "nextThoughtNeeded": { "type": "boolean", "description": "Whether another thought step is needed" },
+          "thoughtNumber": { "type": "integer", "description": "Current thought number in the sequence" },
+          "totalThoughts": { "type": "integer", "description": "Estimated total number of thoughts needed" },
+          "isRevision": { "type": "boolean", "description": "Whether this revises a previous thought" },
+          "revisesThought": { "type": "integer", "description": "Which thought number this revises" },
+          "branchFromThought": { "type": "integer", "description": "Which thought to branch from" },
+          "branchId": { "type": "string", "description": "Identifier for the branch" },
+          "needsMoreThoughts": { "type": "boolean", "description": "Whether more thoughts are needed beyond the estimate" }
+        },
+        "required": ["thought", "nextThoughtNeeded", "thoughtNumber", "totalThoughts"]
+      }
+    }
+  ]
+}

@@ -1,0 +1,160 @@
+{
+  "id": "git",
+  "name": "Git",
+  "transportType": "mcp",
+  "description": "Tools to read, search, and manipulate Git repositories",
+  "tools": [
+    {
+      "name": "git_status",
+      "description": "Shows the working tree status of a Git repository",
+      "providerId": "git",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "repoPath": { "type": "string", "description": "Path to the Git repository" }
+        },
+        "required": ["repoPath"]
+      }
+    },
+    {
+      "name": "git_diff_unstaged",
+      "description": "Shows changes in the working directory that are not yet staged",
+      "providerId": "git",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "repoPath": { "type": "string", "description": "Path to the Git repository" }
+        },
+        "required": ["repoPath"]
+      }
+    },
+    {
+      "name": "git_diff_staged",
+      "description": "Shows changes that are staged for the next commit",
+      "providerId": "git",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "repoPath": { "type": "string", "description": "Path to the Git repository" }
+        },
+        "required": ["repoPath"]
+      }
+    },
+    {
+      "name": "git_commit",
+      "description": "Record changes to the repository with a message",
+      "providerId": "git",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "repoPath": { "type": "string", "description": "Path to the Git repository" },
+          "message": { "type": "string", "description": "Commit message" }
+        },
+        "required": ["repoPath", "message"]
+      }
+    },
+    {
+      "name": "git_add",
+      "description": "Add file contents to the staging area",
+      "providerId": "git",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "repoPath": { "type": "string", "description": "Path to the Git repository" },
+          "files": { "type": "array", "items": { "type": "string" }, "description": "List of file paths to stage" }
+        },
+        "required": ["repoPath", "files"]
+      }
+    },
+    {
+      "name": "git_reset",
+      "description": "Unstage all staged changes",
+      "providerId": "git",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "repoPath": { "type": "string", "description": "Path to the Git repository" }
+        },
+        "required": ["repoPath"]
+      }
+    },
+    {
+      "name": "git_log",
+      "description": "Show recent commit logs",
+      "providerId": "git",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "repoPath": { "type": "string", "description": "Path to the Git repository" },
+          "maxCount": { "type": "number", "description": "Maximum number of commits to show" }
+        },
+        "required": ["repoPath"]
+      }
+    },
+    {
+      "name": "git_create_branch",
+      "description": "Create a new branch from an optional base branch",
+      "providerId": "git",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "repoPath": { "type": "string", "description": "Path to the Git repository" },
+          "branchName": { "type": "string", "description": "Name of the new branch" },
+          "baseBranch": { "type": "string", "description": "Base branch to create from" }
+        },
+        "required": ["repoPath", "branchName"]
+      }
+    },
+    {
+      "name": "git_checkout",
+      "description": "Switch to a different branch",
+      "providerId": "git",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "repoPath": { "type": "string", "description": "Path to the Git repository" },
+          "branchName": { "type": "string", "description": "Branch name to switch to" }
+        },
+        "required": ["repoPath", "branchName"]
+      }
+    },
+    {
+      "name": "git_search",
+      "description": "Search for a text pattern across the repository",
+      "providerId": "git",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "repoPath": { "type": "string", "description": "Path to the Git repository" },
+          "query": { "type": "string", "description": "Search query" },
+          "caseSensitive": { "type": "boolean", "description": "Whether search is case sensitive" }
+        },
+        "required": ["repoPath", "query"]
+      }
+    },
+    {
+      "name": "git_show",
+      "description": "Show the contents of a commit",
+      "providerId": "git",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "repoPath": { "type": "string", "description": "Path to the Git repository" },
+          "revision": { "type": "string", "description": "Commit hash or reference to show" }
+        },
+        "required": ["repoPath", "revision"]
+      }
+    }
+  ]
+}

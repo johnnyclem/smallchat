@@ -1,0 +1,83 @@
+{
+  "id": "sqlite",
+  "name": "SQLite",
+  "transportType": "mcp",
+  "description": "Database interaction and business intelligence capabilities",
+  "tools": [
+    {
+      "name": "read_query",
+      "description": "Execute a SELECT query on the SQLite database",
+      "providerId": "sqlite",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string", "description": "SELECT SQL query to execute" }
+        },
+        "required": ["query"]
+      }
+    },
+    {
+      "name": "write_query",
+      "description": "Execute an INSERT, UPDATE, or DELETE query on the SQLite database",
+      "providerId": "sqlite",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string", "description": "SQL query to execute (INSERT, UPDATE, or DELETE)" }
+        },
+        "required": ["query"]
+      }
+    },
+    {
+      "name": "create_table",
+      "description": "Create a new table in the SQLite database",
+      "providerId": "sqlite",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string", "description": "CREATE TABLE SQL statement" }
+        },
+        "required": ["query"]
+      }
+    },
+    {
+      "name": "list_tables",
+      "description": "List all tables in the SQLite database",
+      "providerId": "sqlite",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "describe_table",
+      "description": "Describe the schema of a specific table",
+      "providerId": "sqlite",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tableName": { "type": "string", "description": "Name of the table to describe" }
+        },
+        "required": ["tableName"]
+      }
+    },
+    {
+      "name": "append_insight",
+      "description": "Add a business insight derived from data analysis to the memo",
+      "providerId": "sqlite",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "insight": { "type": "string", "description": "Business insight to record" }
+        },
+        "required": ["insight"]
+      }
+    }
+  ]
+}

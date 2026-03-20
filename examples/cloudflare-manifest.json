@@ -1,0 +1,177 @@
+{
+  "id": "cloudflare",
+  "name": "Cloudflare",
+  "transportType": "mcp",
+  "description": "Deploy and manage Cloudflare developer platform resources",
+  "tools": [
+    {
+      "name": "kv_get",
+      "description": "Get a value from a KV namespace",
+      "providerId": "cloudflare",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "namespaceId": { "type": "string", "description": "KV namespace ID" },
+          "key": { "type": "string", "description": "Key to retrieve" }
+        },
+        "required": ["namespaceId", "key"]
+      }
+    },
+    {
+      "name": "kv_put",
+      "description": "Put a value into a KV namespace",
+      "providerId": "cloudflare",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "namespaceId": { "type": "string", "description": "KV namespace ID" },
+          "key": { "type": "string", "description": "Key to set" },
+          "value": { "type": "string", "description": "Value to store" },
+          "expirationTtl": { "type": "number", "description": "TTL in seconds" }
+        },
+        "required": ["namespaceId", "key", "value"]
+      }
+    },
+    {
+      "name": "kv_list",
+      "description": "List keys in a KV namespace",
+      "providerId": "cloudflare",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "namespaceId": { "type": "string", "description": "KV namespace ID" },
+          "prefix": { "type": "string", "description": "Filter keys by prefix" },
+          "limit": { "type": "number", "description": "Maximum number of keys to return" }
+        },
+        "required": ["namespaceId"]
+      }
+    },
+    {
+      "name": "kv_delete",
+      "description": "Delete a key from a KV namespace",
+      "providerId": "cloudflare",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "namespaceId": { "type": "string", "description": "KV namespace ID" },
+          "key": { "type": "string", "description": "Key to delete" }
+        },
+        "required": ["namespaceId", "key"]
+      }
+    },
+    {
+      "name": "worker_list",
+      "description": "List all Workers in the account",
+      "providerId": "cloudflare",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "worker_get",
+      "description": "Get a Worker's script content",
+      "providerId": "cloudflare",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string", "description": "Worker script name" }
+        },
+        "required": ["name"]
+      }
+    },
+    {
+      "name": "worker_put",
+      "description": "Create or update a Worker script",
+      "providerId": "cloudflare",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string", "description": "Worker script name" },
+          "script": { "type": "string", "description": "Worker script content" },
+          "bindings": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": { "type": "string", "description": "Binding type (kv_namespace, r2_bucket, etc.)" },
+                "name": { "type": "string", "description": "Binding name" },
+                "namespaceId": { "type": "string", "description": "ID of the bound resource" }
+              }
+            },
+            "description": "Resource bindings for the Worker"
+          }
+        },
+        "required": ["name", "script"]
+      }
+    },
+    {
+      "name": "worker_delete",
+      "description": "Delete a Worker script",
+      "providerId": "cloudflare",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string", "description": "Worker script name to delete" }
+        },
+        "required": ["name"]
+      }
+    },
+    {
+      "name": "r2_list_buckets",
+      "description": "List all R2 buckets",
+      "providerId": "cloudflare",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "r2_create_bucket",
+      "description": "Create a new R2 bucket",
+      "providerId": "cloudflare",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string", "description": "Bucket name" }
+        },
+        "required": ["name"]
+      }
+    },
+    {
+      "name": "d1_list_databases",
+      "description": "List all D1 databases",
+      "providerId": "cloudflare",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "d1_query",
+      "description": "Execute a SQL query against a D1 database",
+      "providerId": "cloudflare",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "databaseId": { "type": "string", "description": "D1 database ID" },
+          "query": { "type": "string", "description": "SQL query to execute" },
+          "params": { "type": "array", "items": { "type": "string" }, "description": "Query parameters" }
+        },
+        "required": ["databaseId", "query"]
+      }
+    }
+  ]
+}

@@ -1,0 +1,75 @@
+{
+  "id": "figma",
+  "name": "Figma",
+  "transportType": "mcp",
+  "description": "Design file analysis and context from Figma",
+  "tools": [
+    {
+      "name": "get_file",
+      "description": "Get a Figma file's contents and structure",
+      "providerId": "figma",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "fileKey": { "type": "string", "description": "Figma file key" },
+          "depth": { "type": "number", "description": "Depth of node tree to return" }
+        },
+        "required": ["fileKey"]
+      }
+    },
+    {
+      "name": "get_node",
+      "description": "Get a specific node from a Figma file",
+      "providerId": "figma",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "fileKey": { "type": "string", "description": "Figma file key" },
+          "nodeId": { "type": "string", "description": "Node ID to retrieve" }
+        },
+        "required": ["fileKey", "nodeId"]
+      }
+    },
+    {
+      "name": "get_comments",
+      "description": "Get comments on a Figma file",
+      "providerId": "figma",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "fileKey": { "type": "string", "description": "Figma file key" }
+        },
+        "required": ["fileKey"]
+      }
+    },
+    {
+      "name": "get_styles",
+      "description": "Get published styles from a Figma file",
+      "providerId": "figma",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "fileKey": { "type": "string", "description": "Figma file key" }
+        },
+        "required": ["fileKey"]
+      }
+    },
+    {
+      "name": "get_components",
+      "description": "Get published components from a Figma file",
+      "providerId": "figma",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "fileKey": { "type": "string", "description": "Figma file key" }
+        },
+        "required": ["fileKey"]
+      }
+    }
+  ]
+}

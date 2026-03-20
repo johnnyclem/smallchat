@@ -1,0 +1,152 @@
+{
+  "id": "filesystem",
+  "name": "Filesystem",
+  "transportType": "mcp",
+  "description": "Secure file operations with configurable access controls",
+  "tools": [
+    {
+      "name": "read_file",
+      "description": "Read the complete contents of a file from the file system",
+      "providerId": "filesystem",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string", "description": "Path to the file to read" }
+        },
+        "required": ["path"]
+      }
+    },
+    {
+      "name": "read_multiple_files",
+      "description": "Read the contents of multiple files simultaneously",
+      "providerId": "filesystem",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "paths": { "type": "array", "items": { "type": "string" }, "description": "List of file paths to read" }
+        },
+        "required": ["paths"]
+      }
+    },
+    {
+      "name": "write_file",
+      "description": "Create a new file or overwrite an existing file with new contents",
+      "providerId": "filesystem",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string", "description": "Path to the file to write" },
+          "content": { "type": "string", "description": "Content to write to the file" }
+        },
+        "required": ["path", "content"]
+      }
+    },
+    {
+      "name": "edit_file",
+      "description": "Make line-based edits to a text file using search and replace",
+      "providerId": "filesystem",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string", "description": "Path to the file to edit" },
+          "edits": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "oldText": { "type": "string", "description": "Text to search for" },
+                "newText": { "type": "string", "description": "Text to replace with" }
+              },
+              "required": ["oldText", "newText"]
+            },
+            "description": "List of edit operations to apply"
+          },
+          "dryRun": { "type": "boolean", "description": "Preview changes without applying them" }
+        },
+        "required": ["path", "edits"]
+      }
+    },
+    {
+      "name": "create_directory",
+      "description": "Create a new directory or ensure a directory exists",
+      "providerId": "filesystem",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string", "description": "Path of the directory to create" }
+        },
+        "required": ["path"]
+      }
+    },
+    {
+      "name": "list_directory",
+      "description": "List files and directories in a given path",
+      "providerId": "filesystem",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string", "description": "Path of the directory to list" }
+        },
+        "required": ["path"]
+      }
+    },
+    {
+      "name": "move_file",
+      "description": "Move or rename files and directories",
+      "providerId": "filesystem",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "source": { "type": "string", "description": "Source path" },
+          "destination": { "type": "string", "description": "Destination path" }
+        },
+        "required": ["source", "destination"]
+      }
+    },
+    {
+      "name": "search_files",
+      "description": "Recursively search for files and directories matching a pattern",
+      "providerId": "filesystem",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string", "description": "Starting path for the search" },
+          "pattern": { "type": "string", "description": "Search pattern (glob format)" },
+          "excludePatterns": { "type": "array", "items": { "type": "string" }, "description": "Patterns to exclude from results" }
+        },
+        "required": ["path", "pattern"]
+      }
+    },
+    {
+      "name": "get_file_info",
+      "description": "Retrieve metadata about a file or directory",
+      "providerId": "filesystem",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string", "description": "Path to the file or directory" }
+        },
+        "required": ["path"]
+      }
+    },
+    {
+      "name": "list_allowed_directories",
+      "description": "Returns the list of directories the server is allowed to access",
+      "providerId": "filesystem",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    }
+  ]
+}

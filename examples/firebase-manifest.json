@@ -1,0 +1,135 @@
+{
+  "id": "firebase",
+  "name": "Firebase",
+  "transportType": "mcp",
+  "description": "Firebase tools and services for app development",
+  "tools": [
+    {
+      "name": "firestore_get_document",
+      "description": "Get a document from a Firestore collection",
+      "providerId": "firebase",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "collection": { "type": "string", "description": "Collection path" },
+          "documentId": { "type": "string", "description": "Document ID" }
+        },
+        "required": ["collection", "documentId"]
+      }
+    },
+    {
+      "name": "firestore_list_documents",
+      "description": "List documents in a Firestore collection",
+      "providerId": "firebase",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "collection": { "type": "string", "description": "Collection path" },
+          "limit": { "type": "number", "description": "Maximum number of documents to return" },
+          "orderBy": { "type": "string", "description": "Field to order results by" }
+        },
+        "required": ["collection"]
+      }
+    },
+    {
+      "name": "firestore_add_document",
+      "description": "Add a new document to a Firestore collection",
+      "providerId": "firebase",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "collection": { "type": "string", "description": "Collection path" },
+          "data": { "type": "object", "description": "Document data as a JSON object" },
+          "documentId": { "type": "string", "description": "Optional document ID (auto-generated if not provided)" }
+        },
+        "required": ["collection", "data"]
+      }
+    },
+    {
+      "name": "firestore_update_document",
+      "description": "Update an existing document in Firestore",
+      "providerId": "firebase",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "collection": { "type": "string", "description": "Collection path" },
+          "documentId": { "type": "string", "description": "Document ID" },
+          "data": { "type": "object", "description": "Fields to update" }
+        },
+        "required": ["collection", "documentId", "data"]
+      }
+    },
+    {
+      "name": "firestore_delete_document",
+      "description": "Delete a document from Firestore",
+      "providerId": "firebase",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "collection": { "type": "string", "description": "Collection path" },
+          "documentId": { "type": "string", "description": "Document ID" }
+        },
+        "required": ["collection", "documentId"]
+      }
+    },
+    {
+      "name": "firestore_query",
+      "description": "Query documents in a Firestore collection with filters",
+      "providerId": "firebase",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "collection": { "type": "string", "description": "Collection path" },
+          "where": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": { "type": "string" },
+                "op": { "type": "string", "enum": ["==", "!=", "<", "<=", ">", ">=", "in", "not-in", "array-contains"] },
+                "value": { "description": "Value to compare against" }
+              },
+              "required": ["field", "op", "value"]
+            },
+            "description": "Filter conditions"
+          },
+          "orderBy": { "type": "string", "description": "Field to order by" },
+          "limit": { "type": "number", "description": "Maximum results to return" }
+        },
+        "required": ["collection"]
+      }
+    },
+    {
+      "name": "auth_get_user",
+      "description": "Get a Firebase Auth user by ID or email",
+      "providerId": "firebase",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "uid": { "type": "string", "description": "User ID" },
+          "email": { "type": "string", "description": "User email" }
+        }
+      }
+    },
+    {
+      "name": "storage_list_files",
+      "description": "List files in Firebase Storage",
+      "providerId": "firebase",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string", "description": "Storage path prefix" },
+          "maxResults": { "type": "number", "description": "Maximum number of files to return" }
+        }
+      }
+    }
+  ]
+}

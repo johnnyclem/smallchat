@@ -1,0 +1,113 @@
+{
+  "id": "puppeteer",
+  "name": "Puppeteer",
+  "transportType": "mcp",
+  "description": "Browser automation and web scraping capabilities",
+  "tools": [
+    {
+      "name": "puppeteer_navigate",
+      "description": "Navigate to a URL in the browser",
+      "providerId": "puppeteer",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "url": { "type": "string", "description": "URL to navigate to" },
+          "launchOptions": {
+            "type": "object",
+            "properties": {
+              "headless": { "type": "boolean", "description": "Run browser in headless mode" },
+              "width": { "type": "number", "description": "Browser viewport width" },
+              "height": { "type": "number", "description": "Browser viewport height" }
+            },
+            "description": "Browser launch configuration"
+          }
+        },
+        "required": ["url"]
+      }
+    },
+    {
+      "name": "puppeteer_screenshot",
+      "description": "Take a screenshot of the current page or a specific element",
+      "providerId": "puppeteer",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string", "description": "Name for the screenshot" },
+          "selector": { "type": "string", "description": "CSS selector to screenshot a specific element" },
+          "width": { "type": "number", "description": "Screenshot width" },
+          "height": { "type": "number", "description": "Screenshot height" }
+        },
+        "required": ["name"]
+      }
+    },
+    {
+      "name": "puppeteer_click",
+      "description": "Click an element on the page using a CSS selector",
+      "providerId": "puppeteer",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "selector": { "type": "string", "description": "CSS selector for the element to click" }
+        },
+        "required": ["selector"]
+      }
+    },
+    {
+      "name": "puppeteer_fill",
+      "description": "Fill out an input field with text",
+      "providerId": "puppeteer",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "selector": { "type": "string", "description": "CSS selector for the input field" },
+          "value": { "type": "string", "description": "Value to fill in" }
+        },
+        "required": ["selector", "value"]
+      }
+    },
+    {
+      "name": "puppeteer_select",
+      "description": "Select a value from a dropdown element",
+      "providerId": "puppeteer",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "selector": { "type": "string", "description": "CSS selector for the select element" },
+          "value": { "type": "string", "description": "Value to select" }
+        },
+        "required": ["selector", "value"]
+      }
+    },
+    {
+      "name": "puppeteer_hover",
+      "description": "Hover over an element on the page",
+      "providerId": "puppeteer",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "selector": { "type": "string", "description": "CSS selector for the element to hover over" }
+        },
+        "required": ["selector"]
+      }
+    },
+    {
+      "name": "puppeteer_evaluate",
+      "description": "Execute JavaScript in the browser console",
+      "providerId": "puppeteer",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "script": { "type": "string", "description": "JavaScript code to execute in the browser" }
+        },
+        "required": ["script"]
+      }
+    }
+  ]
+}

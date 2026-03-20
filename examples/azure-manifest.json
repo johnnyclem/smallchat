@@ -1,0 +1,97 @@
+{
+  "id": "azure",
+  "name": "Azure",
+  "transportType": "mcp",
+  "description": "Access Azure services including Storage, Cosmos DB, and Azure CLI",
+  "tools": [
+    {
+      "name": "blob_list",
+      "description": "List blobs in an Azure Blob Storage container",
+      "providerId": "azure",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "containerName": { "type": "string", "description": "Container name" },
+          "prefix": { "type": "string", "description": "Blob name prefix filter" },
+          "maxResults": { "type": "number", "description": "Maximum number of results" }
+        },
+        "required": ["containerName"]
+      }
+    },
+    {
+      "name": "blob_get",
+      "description": "Get a blob's contents from Azure Blob Storage",
+      "providerId": "azure",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "containerName": { "type": "string", "description": "Container name" },
+          "blobName": { "type": "string", "description": "Blob name" }
+        },
+        "required": ["containerName", "blobName"]
+      }
+    },
+    {
+      "name": "blob_upload",
+      "description": "Upload a blob to Azure Blob Storage",
+      "providerId": "azure",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "containerName": { "type": "string", "description": "Container name" },
+          "blobName": { "type": "string", "description": "Blob name" },
+          "content": { "type": "string", "description": "Content to upload" },
+          "contentType": { "type": "string", "description": "Content MIME type" }
+        },
+        "required": ["containerName", "blobName", "content"]
+      }
+    },
+    {
+      "name": "cosmos_query",
+      "description": "Query documents from an Azure Cosmos DB container",
+      "providerId": "azure",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": { "type": "string", "description": "Database name" },
+          "container": { "type": "string", "description": "Container name" },
+          "query": { "type": "string", "description": "SQL query string" },
+          "parameters": { "type": "array", "items": { "type": "object" }, "description": "Query parameters" }
+        },
+        "required": ["database", "container", "query"]
+      }
+    },
+    {
+      "name": "cosmos_upsert",
+      "description": "Upsert a document into an Azure Cosmos DB container",
+      "providerId": "azure",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": { "type": "string", "description": "Database name" },
+          "container": { "type": "string", "description": "Container name" },
+          "document": { "type": "object", "description": "Document to upsert" }
+        },
+        "required": ["database", "container", "document"]
+      }
+    },
+    {
+      "name": "az_cli",
+      "description": "Execute an Azure CLI command",
+      "providerId": "azure",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "command": { "type": "string", "description": "Azure CLI command to execute (without the 'az' prefix)" }
+        },
+        "required": ["command"]
+      }
+    }
+  ]
+}
