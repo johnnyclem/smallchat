@@ -149,6 +149,12 @@ export interface ResolvedTool {
   confidence: number;
   resolvedAt: number;
   hitCount: number;
+  /** Provider ID + version tag at resolution time */
+  providerVersion?: string;
+  /** Model/embedder version tag at resolution time */
+  modelVersion?: string;
+  /** Schema fingerprint at resolution time — stale entries expire on mismatch */
+  schemaFingerprint?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -184,6 +190,8 @@ export interface ProviderManifest {
   tools: ToolDefinition[];
   transportType: TransportType;
   endpoint?: string;
+  /** Opaque version string — cache entries tagged with this expire on change */
+  version?: string;
 }
 
 export interface CompilationResult {
@@ -251,3 +259,30 @@ export interface VectorIndex {
   remove(id: string): void;
   size(): number;
 }
+
+// ---------------------------------------------------------------------------
+// Cache versioning — provider + model version tagging
+// ---------------------------------------------------------------------------
+
+/** Tracks current versions for cache entry tagging and staleness checks */
+export interface CacheVersionContext {
+  /** Map of providerId → current version string */
+  providerVersions: Map<string, string>;
+  /** Current model/embedder version — entries from a different model expire */
+  modelVersion: string;
+  /** Map of providerId → current schema fingerprint */
+  schemaFingerprints: Map<string, string>;
+}
+
+/**
+ * InvalidationHook — registered callback that fires on invalidation events.
+ * Use for hot-reload coordination: the hook can trigger downstream cache
+ * clears, re-compilation, or UI refresh without a full restart.
+ */
+export type InvalidationEvent =
+  | { type: 'flush' }
+  | { type: 'provider'; providerId: string }
+  | { type: 'selector'; selector: ToolSelector }
+  | { type: 'stale'; reason: 'provider-version' | 'model-version' | 'schema-change'; key: string };
+
+export type InvalidationHook = (event: InvalidationEvent) => void;

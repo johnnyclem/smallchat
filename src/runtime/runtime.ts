@@ -1,5 +1,5 @@
-import type { Embedder, ToolCategory, ToolIMP, ToolProtocol, ToolResult, ToolSelector, VectorIndex, OverloadTableData } from '../core/types.js';
-import { ResolutionCache } from '../core/resolution-cache.js';
+import type { Embedder, ToolCategory, ToolIMP, ToolProtocol, ToolResult, ToolSelector, VectorIndex, OverloadTableData, InvalidationHook, CacheVersionContext } from '../core/types.js';
+import { ResolutionCache, computeSchemaFingerprint } from '../core/resolution-cache.js';
 import { SelectorTable } from '../core/selector-table.js';
 import { ToolClass } from '../core/tool-class.js';
 import { OverloadTable } from '../core/overload-table.js';
@@ -31,9 +31,16 @@ export class ToolRuntime {
       options?.selectorThreshold ?? 0.95,
     );
 
+    const versionContext: CacheVersionContext = {
+      providerVersions: new Map(),
+      modelVersion: options?.modelVersion ?? '',
+      schemaFingerprints: new Map(),
+    };
+
     this.cache = new ResolutionCache(
       options?.cacheSize ?? 1024,
       options?.minConfidence ?? 0.85,
+      versionContext,
     );
 
     this.context = new DispatchContext(
@@ -120,6 +127,53 @@ export class ToolRuntime {
     return toolkit_dispatch(this.context, intent, args);
   }
 
+  // ---------------------------------------------------------------------------
+  // Version management — provider + model version tagging
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Set a provider's version. Cached entries for this provider auto-expire
+   * on next lookup if the version has changed.
+   */
+  setProviderVersion(providerId: string, version: string): void {
+    this.cache.setProviderVersion(providerId, version);
+  }
+
+  /**
+   * Set the model/embedder version. All cached entries become stale
+   * if they were tagged with a different model version.
+   */
+  setModelVersion(version: string): void {
+    this.cache.setModelVersion(version);
+  }
+
+  /**
+   * Recompute and update a provider's schema fingerprint.
+   * Call this after a provider hot-reloads or changes its tool schemas.
+   * Stale cache entries auto-expire on next lookup.
+   */
+  updateSchemaFingerprint(toolClass: ToolClass): void {
+    const schemas: Array<{ name: string; inputSchema: unknown }> = [];
+    for (const [, imp] of toolClass.dispatchTable) {
+      if (imp.schema) {
+        schemas.push({ name: imp.schema.name, inputSchema: imp.schema.inputSchema });
+      }
+    }
+    const fingerprint = computeSchemaFingerprint(schemas);
+    this.cache.setSchemaFingerprint(toolClass.name, fingerprint);
+  }
+
+  /**
+   * Register a hook that fires on cache invalidation events.
+   * Returns an unsubscribe function.
+   *
+   * Use for hot-reload coordination: downstream consumers (UI, LLM context)
+   * react to invalidation without polling.
+   */
+  invalidateOn(hook: InvalidationHook): () => void {
+    return this.cache.invalidateOn(hook);
+  }
+
   /**
    * Generate the LLM-readable "header file" — a minimal capability summary.
    */
@@ -183,4 +237,6 @@ export interface RuntimeOptions {
   selectorThreshold?: number;
   cacheSize?: number;
   minConfidence?: number;
+  /** Model/embedder version — cache entries tagged with a different version auto-expire */
+  modelVersion?: string;
 }
