@@ -1,4 +1,4 @@
-import type { Embedder, ToolCandidate, ToolIMP, ToolProtocol, ToolResult, ToolSelector, VectorIndex } from '../core/types.js';
+import type { Embedder, ToolCandidate, ToolIMP, ToolProtocol, ToolResult, ToolSelector, VectorIndex, DispatchEvent } from '../core/types.js';
 import { ResolutionCache } from '../core/resolution-cache.js';
 import { SelectorTable } from '../core/selector-table.js';
 import { ToolClass } from '../core/tool-class.js';
@@ -336,6 +336,232 @@ export async function toolkit_dispatch(
     })),
   };
   return result;
+}
+
+/**
+ * smallchat_dispatchStream — async generator variant of toolkit_dispatch.
+ *
+ * Yields DispatchEvent objects for real-time UI feedback:
+ *   1. "resolving" — immediately, so the caller knows work has started
+ *   2. "tool-start" — once a tool is resolved, before execution
+ *   3. "chunk" — incremental content from the tool (if it supports streaming)
+ *   4. "done" — final result with the complete ToolResult
+ *   5. "error" — if anything goes wrong at any stage
+ *
+ * The resolution logic mirrors toolkit_dispatch exactly; only the execution
+ * phase changes to support streaming.
+ */
+export async function* smallchat_dispatchStream(
+  context: DispatchContext,
+  intent: string,
+  args?: Record<string, unknown>,
+): AsyncGenerator<DispatchEvent> {
+  // Yield resolving immediately so the caller gets instant feedback
+  yield { type: 'resolving', intent };
+
+  let resolvedImp: ToolIMP;
+  let resolvedConfidence: number;
+  let resolvedSelector: ToolSelector;
+
+  try {
+    // ---- Resolution (same logic as toolkit_dispatch) ----
+
+    const selector = await context.selectorTable.resolve(intent);
+    const hasArgs = args && Object.keys(args).length > 0;
+
+    // Cache lookup (no-args fast path)
+    if (!hasArgs) {
+      const cached = context.cache.lookup(selector);
+      if (cached) {
+        resolvedImp = cached.imp;
+        resolvedConfidence = cached.confidence;
+        resolvedSelector = selector;
+
+        yield {
+          type: 'tool-start',
+          toolName: resolvedImp.toolName,
+          providerId: resolvedImp.providerId,
+          confidence: resolvedConfidence,
+          selector: resolvedSelector.canonical,
+        };
+
+        yield* executeAndStream(resolvedImp, args ?? {});
+        return;
+      }
+    }
+
+    // Vector similarity search
+    const matches = context.vectorIndex.search(selector.vector, 5, 0.75);
+    const candidates: ToolCandidate[] = [];
+
+    for (const match of matches) {
+      const matchSelector = context.selectorTable.get(match.id);
+      if (!matchSelector) continue;
+
+      for (const toolClass of context.getClasses()) {
+        // Overload resolution
+        if (hasArgs && toolClass.hasOverloads(matchSelector)) {
+          const overloadResult = toolClass.resolveSelectorWithNamedArgs(
+            matchSelector,
+            args,
+          );
+          if (overloadResult) {
+            context.cache.store(selector, overloadResult.imp, 1 - match.distance);
+            resolvedImp = overloadResult.imp;
+            resolvedConfidence = 1 - match.distance;
+            resolvedSelector = matchSelector;
+
+            yield {
+              type: 'tool-start',
+              toolName: resolvedImp.toolName,
+              providerId: resolvedImp.providerId,
+              confidence: resolvedConfidence,
+              selector: resolvedSelector.canonical,
+            };
+
+            yield* executeAndStream(resolvedImp, args);
+            return;
+          }
+        }
+
+        const imp = toolClass.resolveSelector(matchSelector);
+        if (imp) {
+          candidates.push({
+            imp,
+            confidence: 1 - match.distance,
+            selector: matchSelector,
+          });
+        }
+      }
+    }
+
+    // Cache check for args case
+    if (hasArgs) {
+      const cached = context.cache.lookup(selector);
+      if (cached) {
+        resolvedImp = cached.imp;
+        resolvedConfidence = cached.confidence;
+        resolvedSelector = selector;
+
+        yield {
+          type: 'tool-start',
+          toolName: resolvedImp.toolName,
+          providerId: resolvedImp.providerId,
+          confidence: resolvedConfidence,
+          selector: resolvedSelector.canonical,
+        };
+
+        yield* executeAndStream(resolvedImp, args);
+        return;
+      }
+    }
+
+    if (candidates.length === 0) {
+      // ISA chain
+      const protocolMatch = context.resolveViaProtocol(selector);
+      if (protocolMatch) {
+        context.cache.store(selector, protocolMatch.imp, protocolMatch.confidence);
+        resolvedImp = protocolMatch.imp;
+        resolvedConfidence = protocolMatch.confidence;
+        resolvedSelector = protocolMatch.selector;
+
+        yield {
+          type: 'tool-start',
+          toolName: resolvedImp.toolName,
+          providerId: resolvedImp.providerId,
+          confidence: resolvedConfidence,
+          selector: resolvedSelector.canonical,
+        };
+
+        yield* executeAndStream(resolvedImp, args ?? {});
+        return;
+      }
+
+      // Forwarding — will throw UnrecognizedIntent
+      const forwardResult = await context.forward(selector, intent, args);
+      yield { type: 'done', result: forwardResult };
+      return;
+    }
+
+    // Pick best candidate
+    candidates.sort((a, b) => b.confidence - a.confidence);
+    const best = candidates[0];
+    context.cache.store(selector, best.imp, best.confidence);
+
+    resolvedImp = best.imp;
+    resolvedConfidence = best.confidence;
+    resolvedSelector = best.selector;
+  } catch (err) {
+    yield {
+      type: 'error',
+      error: err instanceof Error ? err.message : String(err),
+      metadata: err instanceof UnrecognizedIntent
+        ? { nearestSelectors: err.nearestSelectors, suggestion: err.suggestion }
+        : undefined,
+    };
+    return;
+  }
+
+  // ---- Execution phase ----
+
+  yield {
+    type: 'tool-start',
+    toolName: resolvedImp.toolName,
+    providerId: resolvedImp.providerId,
+    confidence: resolvedConfidence,
+    selector: resolvedSelector.canonical,
+  };
+
+  yield* executeAndStream(resolvedImp, args ?? {});
+}
+
+/**
+ * Execute a tool and stream its result. If the IMP exposes an
+ * `executeStream` method (AsyncIterable<ToolResult>), we yield
+ * individual chunks. Otherwise we fall back to the single-shot
+ * `execute()` and wrap the result as one chunk + done.
+ */
+async function* executeAndStream(
+  imp: ToolIMP,
+  args: Record<string, unknown>,
+): AsyncGenerator<DispatchEvent> {
+  const unwrapped: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(args)) {
+    unwrapped[key] = unwrapValue(value);
+  }
+
+  try {
+    // Check if the IMP supports streaming via executeStream
+    const streamable = imp as ToolIMP & {
+      executeStream?: (args: Record<string, unknown>) => AsyncIterable<ToolResult>;
+    };
+
+    if (typeof streamable.executeStream === 'function') {
+      let index = 0;
+      let lastResult: ToolResult | undefined;
+
+      for await (const chunk of streamable.executeStream(unwrapped)) {
+        yield { type: 'chunk', content: chunk.content, index };
+        index++;
+        lastResult = chunk;
+      }
+
+      yield {
+        type: 'done',
+        result: lastResult ?? { content: null },
+      };
+    } else {
+      // Single-shot fallback — execute and emit as one chunk + done
+      const result = await imp.execute(unwrapped);
+      yield { type: 'chunk', content: result.content, index: 0 };
+      yield { type: 'done', result };
+    }
+  } catch (err) {
+    yield {
+      type: 'error',
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
 }
 
 /**

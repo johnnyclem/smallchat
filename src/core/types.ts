@@ -173,6 +173,48 @@ export interface ToolCandidate {
 }
 
 // ---------------------------------------------------------------------------
+// Streaming dispatch events — real-time UI feedback from dispatchStream
+// ---------------------------------------------------------------------------
+
+export interface DispatchEventResolving {
+  type: 'resolving';
+  intent: string;
+}
+
+export interface DispatchEventToolStart {
+  type: 'tool-start';
+  toolName: string;
+  providerId: string;
+  confidence: number;
+  selector: string;
+}
+
+export interface DispatchEventChunk {
+  type: 'chunk';
+  content: unknown;
+  /** Index of this chunk in the stream (0-based) */
+  index: number;
+}
+
+export interface DispatchEventDone {
+  type: 'done';
+  result: ToolResult;
+}
+
+export interface DispatchEventError {
+  type: 'error';
+  error: string;
+  metadata?: Record<string, unknown>;
+}
+
+export type DispatchEvent =
+  | DispatchEventResolving
+  | DispatchEventToolStart
+  | DispatchEventChunk
+  | DispatchEventDone
+  | DispatchEventError;
+
+// ---------------------------------------------------------------------------
 // Compiler types
 // ---------------------------------------------------------------------------
 
