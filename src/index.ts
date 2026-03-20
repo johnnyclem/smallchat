@@ -28,6 +28,9 @@ export type {
   ValidationError,
   ValidationResult,
   VectorIndex,
+  CacheVersionContext,
+  InvalidationEvent,
+  InvalidationHook,
 } from './core/types.js';
 
 // SCObject hierarchy — NSObject-inspired base class for parameter passing
@@ -69,7 +72,7 @@ export type { OverloadEntry, OverloadResolutionResult } from './core/overload-ta
 
 // Core classes
 export { SelectorTable, canonicalize } from './core/selector-table.js';
-export { ResolutionCache } from './core/resolution-cache.js';
+export { ResolutionCache, computeSchemaFingerprint } from './core/resolution-cache.js';
 export { ToolClass, ToolProxy } from './core/tool-class.js';
 
 // Runtime
