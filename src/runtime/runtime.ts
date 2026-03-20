@@ -1,9 +1,9 @@
-import type { Embedder, ToolCategory, ToolIMP, ToolProtocol, ToolResult, ToolSelector, VectorIndex, OverloadTableData, InvalidationHook, CacheVersionContext } from '../core/types.js';
+import type { Embedder, ToolCategory, ToolIMP, ToolProtocol, ToolResult, ToolSelector, VectorIndex, OverloadTableData, InvalidationHook, CacheVersionContext, DispatchEvent } from '../core/types.js';
 import { ResolutionCache, computeSchemaFingerprint } from '../core/resolution-cache.js';
 import { SelectorTable } from '../core/selector-table.js';
 import { ToolClass } from '../core/tool-class.js';
 import { OverloadTable } from '../core/overload-table.js';
-import { DispatchContext, toolkit_dispatch } from './dispatch.js';
+import { DispatchContext, toolkit_dispatch, smallchat_dispatchStream } from './dispatch.js';
 import type { SCMethodSignature } from '../core/sc-types.js';
 
 /**
@@ -172,6 +172,15 @@ export class ToolRuntime {
    */
   invalidateOn(hook: InvalidationHook): () => void {
     return this.cache.invalidateOn(hook);
+  }
+
+  /**
+   * Streaming dispatch — yields DispatchEvent objects for real-time UI feedback.
+   *
+   * Events flow: resolving → tool-start → chunk* → done (or error at any point).
+   */
+  dispatchStream(intent: string, args?: Record<string, unknown>): AsyncGenerator<DispatchEvent> {
+    return smallchat_dispatchStream(this.context, intent, args);
   }
 
   /**
