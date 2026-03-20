@@ -207,10 +207,40 @@ export interface DispatchEventError {
   metadata?: Record<string, unknown>;
 }
 
+// ---------------------------------------------------------------------------
+// Progressive inference — token-level deltas from provider streams
+// ---------------------------------------------------------------------------
+
+/**
+ * InferenceDelta — a single token/delta from an LLM provider stream.
+ *
+ * Maps directly to what OpenAI and Anthropic SSE streams emit:
+ *   OpenAI:    choices[0].delta.content
+ *   Anthropic: content_block_delta.delta.text
+ */
+export interface InferenceDelta {
+  /** The token text (may be a partial word, whitespace, or punctuation) */
+  text: string;
+  /** Provider-specific finish reason, if this is the final delta */
+  finishReason?: 'stop' | 'length' | 'tool_use' | 'end_turn' | null;
+  /** Provider-assigned index (e.g. OpenAI choice index, Anthropic block index) */
+  index?: number;
+  /** Optional provider-specific metadata (logprobs, usage, etc.) */
+  providerMeta?: Record<string, unknown>;
+}
+
+export interface DispatchEventInferenceDelta {
+  type: 'inference-delta';
+  delta: InferenceDelta;
+  /** Running character count across all deltas in this stream */
+  tokenIndex: number;
+}
+
 export type DispatchEvent =
   | DispatchEventResolving
   | DispatchEventToolStart
   | DispatchEventChunk
+  | DispatchEventInferenceDelta
   | DispatchEventDone
   | DispatchEventError;
 

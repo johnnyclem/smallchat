@@ -1,4 +1,4 @@
-import type { Embedder, ToolCategory, ToolIMP, ToolProtocol, ToolResult, ToolSelector, VectorIndex, OverloadTableData, InvalidationHook, CacheVersionContext, DispatchEvent } from '../core/types.js';
+import type { Embedder, ToolCategory, ToolIMP, ToolProtocol, ToolResult, ToolSelector, VectorIndex, OverloadTableData, InvalidationHook, CacheVersionContext, DispatchEvent, InferenceDelta } from '../core/types.js';
 import { ResolutionCache, computeSchemaFingerprint } from '../core/resolution-cache.js';
 import { SelectorTable } from '../core/selector-table.js';
 import { ToolClass } from '../core/tool-class.js';
@@ -178,9 +178,45 @@ export class ToolRuntime {
    * Streaming dispatch — yields DispatchEvent objects for real-time UI feedback.
    *
    * Events flow: resolving → tool-start → chunk* → done (or error at any point).
+   * When the resolved IMP supports progressive inference, the flow becomes:
+   *   resolving → tool-start → inference-delta* → chunk → done
    */
   dispatchStream(intent: string, args?: Record<string, unknown>): AsyncGenerator<DispatchEvent> {
     return smallchat_dispatchStream(this.context, intent, args);
+  }
+
+  /**
+   * Progressive inference stream — convenience async generator that yields
+   * only the token text from inference deltas, filtering out dispatch
+   * lifecycle events. Perfect for piping straight into a UI append loop:
+   *
+   *   for await (const token of runtime.inferenceStream('summarise', { url })) {
+   *     process.stdout.write(token);
+   *   }
+   *
+   * Falls back gracefully: if the resolved IMP doesn't support
+   * executeInference, the final assembled chunk content is yielded as
+   * a single string.
+   */
+  async *inferenceStream(
+    intent: string,
+    args?: Record<string, unknown>,
+  ): AsyncGenerator<string> {
+    let sawDelta = false;
+    for await (const event of this.dispatchStream(intent, args)) {
+      if (event.type === 'inference-delta') {
+        sawDelta = true;
+        yield event.delta.text;
+      } else if (event.type === 'chunk' && !sawDelta) {
+        // Fallback: IMP didn't support inference, yield chunk content as string
+        const text = typeof event.content === 'string'
+          ? event.content
+          : JSON.stringify(event.content);
+        yield text;
+      } else if (event.type === 'error') {
+        throw new Error(event.error);
+      }
+    }
   }
 
   /**
