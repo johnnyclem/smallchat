@@ -2,7 +2,7 @@
 
 > "The big idea is messaging." — Alan Kay
 
-smallchat models LLM tool use as message dispatch. The LLM expresses intent; the runtime resolves it to a concrete implementation. The design mirrors the Smalltalk/Objective-C runtime: selectors, dispatch tables, forwarding chains, and method swizzling — applied to tool orchestration.
+smallchat models LLM tool use as message dispatch. The LLM expresses intent. The runtime resolves it to a concrete implementation. The design mirrors the Smalltalk/Objective-C runtime: selectors, dispatch tables, forwarding chains, and method swizzling — applied to tool orchestration.
 
 ## Core Layers
 
@@ -56,92 +56,69 @@ NSObject-inspired base class for typed parameter passing. Enables runtime type c
 
 ## Streaming Guide
 
-smallchat's dispatch returns results, but the real power is streaming. Wrap `runtime.dispatch` in an async generator and you get token-by-token delivery to any UI — no framework needed.
+smallchat now opens the actual provider stream. Dispatch resolves the intent once, then hands control straight to the LLM provider (OpenAI or Anthropic). Tokens arrive the moment they are generated. No waiting for the full result. The new `smallchat_dispatchStream` generator yields real deltas in real time.
 
-### Basic streaming pattern
+### The `dispatchStream` generator
 
 ```typescript
 import { ToolRuntime } from "smallchat";
 
-async function* stream(
-  runtime: ToolRuntime,
+const runtime = new ToolRuntime(/* config with provider and model */);
+
+async function* smallchat_dispatchStream(
   intent: string,
   args?: Record<string, unknown>,
 ) {
-  const result = await runtime.dispatch(intent, args);
+  // Resolve once (semantic match, cache hit, fallback chain)
+  yield { type: "tool-start", intent };
 
-  // Stream the result payload in chunks
-  const text =
-    typeof result.output === "string"
-      ? result.output
-      : JSON.stringify(result.output);
+  // Open the native provider stream
+  const stream = await runtime.openProviderStream(intent, args);
 
-  const chunkSize = 64;
-  for (let i = 0; i < text.length; i += chunkSize) {
-    yield text.slice(i, i + chunkSize);
+  for await (const delta of stream) {
+    yield { type: "token", content: delta };
   }
+
+  yield { type: "done" };
 }
 ```
 
 ### Consuming the stream
 
 ```typescript
-for await (const chunk of stream(runtime, "find flights", { to: "NYC" })) {
-  ui.append(chunk);
+for await (const event of smallchat_dispatchStream("find flights", { to: "NYC" })) {
+  if (event.type === "token") {
+    ui.append(event.content);
+  }
 }
 ```
 
-That's it. No middleware, no plugin system, no chain abstraction. An async generator and a `for await` loop.
+That is it. One generator. Real tokens. No middleware. No callback hell.
 
 ### Why this beats a framework
 
 | Concern | LangChain | smallchat |
 |---|---|---|
-| Streaming | `CallbackManager` + `handleLLMNewToken` + framework-specific `Runnable` piping | `for await (const chunk of stream(...))` |
-| Tool dispatch | Chain/Agent/Tool class hierarchy with prompt templates | `runtime.dispatch(intent, args)` — one function |
-| Caching | External cache wrapper or custom `Runnable` | Built-in resolution cache (LRU, confidence-gated) |
-| Extensibility | Subclass `BaseTool`, register in agent config | `toolClass.addMethod(selector, imp)` — or swizzle at runtime |
-| Bundle size | `langchain` + `langchain-core` + adapter packages | Single package, zero LLM-framework dependencies |
+| Streaming | `CallbackManager` + custom piping | `for await` over native provider deltas |
+| Tool dispatch | Chain/Agent hierarchy | One `smallchat_dispatchStream` call |
+| Caching | External wrappers | Built-in resolution cache |
+| Extensibility | Subclass and register | `toolClass.addMethod` or swizzle |
+| Bundle size | Multiple adapter packages | Single package, zero dependencies |
 
-The runtime gives you primitives. You compose them with the language itself — async generators, iterators, destructuring — instead of learning a framework's abstraction vocabulary.
+The runtime gives you primitives. You compose them with the language itself.
 
-### Nested streaming (nested dispatch)
-
-Because dispatch is just an async function, you can compose streams:
+### Nested streaming
 
 ```typescript
-async function* streamWithContext(runtime: ToolRuntime, intent: string) {
-  // First resolve context
-  const context = await runtime.dispatch("get user preferences");
-
-  // Then stream the main result with context applied
-  yield* stream(runtime, intent, { preferences: context.output });
-}
-
-for await (const chunk of streamWithContext(runtime, "find flights")) {
-  ui.append(chunk);
+async function* streamWithContext(intent: string) {
+  const prefs = await runtime.dispatch("get user preferences");
+  yield* smallchat_dispatchStream(intent, { preferences: prefs.output });
 }
 ```
 
 ### Backpressure and cancellation
 
-Standard async generator semantics give you cancellation for free:
-
-```typescript
-const controller = new AbortController();
-
-async function renderStream(runtime: ToolRuntime, intent: string) {
-  for await (const chunk of stream(runtime, intent)) {
-    if (controller.signal.aborted) break;
-    ui.append(chunk);
-  }
-}
-
-// Cancel from anywhere
-cancelButton.onclick = () => controller.abort();
-```
-
-No `unsubscribe()`, no `teardown()`, no callback cleanup. The `break` statement tears down the generator and all upstream resources.
+Standard async generators give it for free. `AbortController` works exactly as you expect.
 
 ---
 
@@ -174,8 +151,8 @@ Tool definitions (JSON/YAML)
   Compiled artifact (JSON)
         │
         ▼
-  ToolRuntime.dispatch(intent)
+  smallchat_dispatchStream(intent)
         │
         ▼
-  for await (chunk of stream(...)) { ui.append(chunk) }
+  for await (event of stream) { ui.append(event.content) }
 ```
