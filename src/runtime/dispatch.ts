@@ -30,6 +30,28 @@ export class UnrecognizedIntent extends Error {
 }
 
 /**
+ * FallbackStep — a single step in the fallback chain, recording what was tried.
+ */
+export interface FallbackStep {
+  strategy: 'superclass' | 'broadened_search' | 'llm_disambiguate';
+  tried: string;
+  result: 'hit' | 'miss';
+}
+
+/**
+ * FallbackChainResult — returned instead of throwing when no exact match is found.
+ * Contains the resolution attempt trace and either a resolved tool or a stub
+ * inviting the caller to search further.
+ */
+export interface FallbackChainResult {
+  tool: string;
+  message: string;
+  intent: string;
+  nearestSelectors: Array<{ id: string; distance: number }>;
+  fallbackSteps: FallbackStep[];
+}
+
+/**
  * DispatchContext — the runtime context for tool dispatch.
  *
  * Holds the selector table, resolution cache, tool classes (providers),
@@ -101,25 +123,105 @@ export class DispatchContext {
     return null;
   }
 
-  /** Forwarding chain — slow path when no compiled tool matches */
+  /**
+   * Forwarding chain — slow path when no compiled tool matches.
+   *
+   * Instead of throwing immediately, walks a fallback chain:
+   *  1. Superclass traversal — check superclass dispatch tables across all classes
+   *  2. Broadened vector search — lower the similarity threshold to find near-misses
+   *  3. LLM disambiguation stub — placeholder for Phase 3 LLM-assisted resolution
+   *  4. Return a stub result inviting the caller to search, rather than crashing
+   */
   async forward(
     selector: ToolSelector,
     intent: string,
-    _args?: Record<string, unknown>,
+    args?: Record<string, unknown>,
   ): Promise<ToolResult> {
-    // In v0.0.1, forwarding is limited. Full implementation will:
-    // 1. Try dynamic discovery from live MCP servers
-    // 2. Attempt LLM-assisted decomposition
-    // 3. Fall through to doesNotRecognizeSelector:
+    const fallbackSteps: FallbackStep[] = [];
 
+    // Step 1: SUPERCLASS TRAVERSAL — walk isa chains for a match
+    for (const toolClass of this.getClasses()) {
+      if (!toolClass.superclass) continue;
+
+      const imp = toolClass.superclass.resolveSelector(selector);
+      if (imp) {
+        fallbackSteps.push({
+          strategy: 'superclass',
+          tried: `${toolClass.name} → ${toolClass.superclass.name}`,
+          result: 'hit',
+        });
+        this.cache.store(selector, imp, 0.6);
+        return executeWithArgs(imp, args ?? {});
+      }
+
+      fallbackSteps.push({
+        strategy: 'superclass',
+        tried: `${toolClass.name} → ${toolClass.superclass.name}`,
+        result: 'miss',
+      });
+    }
+
+    // Step 2: BROADENED SEARCH — lower threshold to find near-misses
+    const broadMatches = this.vectorIndex.search(selector.vector, 5, 0.5);
+    if (broadMatches.length > 0) {
+      // Try to resolve the best broad match
+      for (const match of broadMatches) {
+        const matchSelector = this.selectorTable.get(match.id);
+        if (!matchSelector) continue;
+
+        for (const toolClass of this.getClasses()) {
+          const imp = toolClass.resolveSelector(matchSelector);
+          if (imp) {
+            fallbackSteps.push({
+              strategy: 'broadened_search',
+              tried: `${match.id} (distance: ${match.distance.toFixed(3)})`,
+              result: 'hit',
+            });
+            const confidence = 1 - match.distance;
+            this.cache.store(selector, imp, confidence);
+            return executeWithArgs(imp, args ?? {});
+          }
+        }
+      }
+
+      fallbackSteps.push({
+        strategy: 'broadened_search',
+        tried: broadMatches.map(m => m.id).join(', '),
+        result: 'miss',
+      });
+    }
+
+    // Step 3: LLM DISAMBIGUATION — Phase 3 stub
+    // In a full implementation this would call the LLM to interpret the intent,
+    // decompose it into sub-intents, or ask clarifying questions.
+    fallbackSteps.push({
+      strategy: 'llm_disambiguate',
+      tried: 'LLM disambiguation (not yet implemented)',
+      result: 'miss',
+    });
+
+    // Step 4: Return a stub instead of throwing
     const nearest = this.vectorIndex.search(selector.vector, 3, 0.5);
 
-    throw new UnrecognizedIntent(selector, intent, {
+    const fallbackResult: FallbackChainResult = {
+      tool: 'unknown',
+      message: nearest.length > 0
+        ? `No exact match for "${intent}". Nearest: ${nearest.map(n => n.id).join(', ')}. Want me to search?`
+        : `No match for "${intent}"—want me to search?`,
+      intent,
       nearestSelectors: nearest,
-      suggestion: nearest.length > 0
-        ? `Did you mean one of these? ${nearest.map(n => n.id).join(', ')}`
-        : 'No similar capabilities found.',
-    });
+      fallbackSteps,
+    };
+
+    return {
+      content: fallbackResult,
+      isError: false,
+      metadata: {
+        fallback: true,
+        stepsAttempted: fallbackSteps.length,
+        fallbackSteps,
+      },
+    };
   }
 
   /** Get all registered tool classes */
@@ -219,11 +321,21 @@ export async function toolkit_dispatch(
     return executeWithArgs(tool.imp, args ?? {});
   }
 
-  // Multiple candidates — for v0.0.1, take the best match.
-  // Full implementation will involve LLM-assisted disambiguation.
+  // Multiple ambiguous candidates — take the best match but annotate
+  // the result so callers know disambiguation may be needed (Phase 3).
   const best = candidates[0];
   context.cache.store(selector, best.imp, best.confidence);
-  return executeWithArgs(best.imp, args ?? {});
+  const result = await executeWithArgs(best.imp, args ?? {});
+  result.metadata = {
+    ...result.metadata,
+    ambiguous: true,
+    candidateCount: candidates.length,
+    topCandidates: candidates.slice(0, 3).map(c => ({
+      tool: c.imp.toolName,
+      confidence: c.confidence,
+    })),
+  };
+  return result;
 }
 
 /**
