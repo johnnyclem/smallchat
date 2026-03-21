@@ -150,6 +150,7 @@ async function runCompile(
   outputPath: string,
   embedderType: string,
   dbPath: string,
+  sourceType?: SourceType,
 ): Promise<boolean> {
   if (manifests.length === 0) {
     console.error('No valid manifests found.');
@@ -197,13 +198,10 @@ async function runCompile(
   console.log(`  - ${result.toolCount} tools`);
   console.log(`  - ${result.dispatchTables.size} providers`);
 
-  // Write manifest files for MCP config / auto-detect sources
-  const manifestDir = outputPath.replace(/\.json$/, '.manifests');
-  if (manifests.some(m => !findManifestFiles('.').some(f => {
-    try { return JSON.parse(readFileSync(f, 'utf-8')).id === m.id; } catch { return false; }
-  }))) {
-    // These manifests were discovered via introspection — save them
+  // Save discovered manifests as shareable files when introspected
+  if (sourceType === 'mcp-config' || sourceType === 'auto-detect') {
     const { mkdirSync } = await import('node:fs');
+    const manifestDir = outputPath.replace(/\.json$/, '.manifests');
     try {
       mkdirSync(manifestDir, { recursive: true });
       for (const m of manifests) {
@@ -211,8 +209,9 @@ async function runCompile(
         writeFileSync(manifestPath, JSON.stringify(m, null, 2));
       }
       console.log(`\nManifests saved: ${manifestDir}/`);
+      console.log('  (Shareable manifest files for each discovered server)');
     } catch {
-      // Non-critical, skip
+      // Non-critical
     }
   }
 
@@ -244,7 +243,7 @@ export const compileCommand = new Command('compile')
     const timeoutMs = parseInt(options.timeout, 10);
 
     const manifests = await resolveManifests(source, { timeoutMs });
-    const ok = await runCompile(manifests, outputPath, embedderType, dbPath);
+    const ok = await runCompile(manifests, outputPath, embedderType, dbPath, source.type);
 
     if (!options.watch) {
       if (!ok) process.exit(1);
@@ -267,7 +266,7 @@ export const compileCommand = new Command('compile')
       debounceTimer = setTimeout(async () => {
         console.log(`\n--- Recompiling (${filename} changed) ---\n`);
         const newManifests = await resolveManifests(source, { timeoutMs });
-        await runCompile(newManifests, outputPath, embedderType, dbPath);
+        await runCompile(newManifests, outputPath, embedderType, dbPath, source.type);
         console.log(`\nWatching ${watchPath} for changes...`);
       }, 200);
     });
