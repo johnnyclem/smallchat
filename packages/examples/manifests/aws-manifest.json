@@ -1,0 +1,137 @@
+{
+  "id": "aws",
+  "name": "AWS",
+  "transportType": "mcp",
+  "description": "AWS services and best practices for development workflows",
+  "tools": [
+    {
+      "name": "s3_list_buckets",
+      "description": "List all S3 buckets in the account",
+      "providerId": "aws",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "s3_list_objects",
+      "description": "List objects in an S3 bucket",
+      "providerId": "aws",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "bucket": { "type": "string", "description": "S3 bucket name" },
+          "prefix": { "type": "string", "description": "Key prefix to filter by" },
+          "maxKeys": { "type": "number", "description": "Maximum number of keys to return" }
+        },
+        "required": ["bucket"]
+      }
+    },
+    {
+      "name": "s3_get_object",
+      "description": "Get an object from S3",
+      "providerId": "aws",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "bucket": { "type": "string", "description": "S3 bucket name" },
+          "key": { "type": "string", "description": "Object key" }
+        },
+        "required": ["bucket", "key"]
+      }
+    },
+    {
+      "name": "s3_put_object",
+      "description": "Upload an object to S3",
+      "providerId": "aws",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "bucket": { "type": "string", "description": "S3 bucket name" },
+          "key": { "type": "string", "description": "Object key" },
+          "body": { "type": "string", "description": "Object content" },
+          "contentType": { "type": "string", "description": "Content MIME type" }
+        },
+        "required": ["bucket", "key", "body"]
+      }
+    },
+    {
+      "name": "lambda_list_functions",
+      "description": "List Lambda functions in the account",
+      "providerId": "aws",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "region": { "type": "string", "description": "AWS region" }
+        }
+      }
+    },
+    {
+      "name": "lambda_invoke",
+      "description": "Invoke a Lambda function",
+      "providerId": "aws",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "functionName": { "type": "string", "description": "Lambda function name or ARN" },
+          "payload": { "type": "object", "description": "JSON payload to send to the function" },
+          "invocationType": { "type": "string", "description": "Invocation type", "enum": ["RequestResponse", "Event", "DryRun"] }
+        },
+        "required": ["functionName"]
+      }
+    },
+    {
+      "name": "dynamodb_query",
+      "description": "Query items from a DynamoDB table",
+      "providerId": "aws",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tableName": { "type": "string", "description": "DynamoDB table name" },
+          "keyConditionExpression": { "type": "string", "description": "Key condition expression" },
+          "expressionAttributeValues": { "type": "object", "description": "Expression attribute values" },
+          "limit": { "type": "number", "description": "Maximum number of items to return" }
+        },
+        "required": ["tableName", "keyConditionExpression"]
+      }
+    },
+    {
+      "name": "dynamodb_put_item",
+      "description": "Put an item into a DynamoDB table",
+      "providerId": "aws",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tableName": { "type": "string", "description": "DynamoDB table name" },
+          "item": { "type": "object", "description": "Item to put into the table" }
+        },
+        "required": ["tableName", "item"]
+      }
+    },
+    {
+      "name": "cloudwatch_get_log_events",
+      "description": "Get log events from a CloudWatch log group",
+      "providerId": "aws",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "logGroupName": { "type": "string", "description": "Log group name" },
+          "logStreamName": { "type": "string", "description": "Log stream name" },
+          "startTime": { "type": "number", "description": "Start timestamp in milliseconds" },
+          "endTime": { "type": "number", "description": "End timestamp in milliseconds" },
+          "limit": { "type": "number", "description": "Maximum number of events to return" }
+        },
+        "required": ["logGroupName"]
+      }
+    }
+  ]
+}

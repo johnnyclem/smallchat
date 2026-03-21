@@ -1,0 +1,27 @@
+{
+  "id": "concepts/resolution-cache",
+  "title": "Resolution Cache",
+  "description": "The ResolutionCache is an LRU cache that stores resolved dispatches — analogous to the inline method cache in objc_msgSend. On a cache hit, dispatch skips the embedding and vector search entirely. On a cache miss, the full resolution runs and the result is stored for future calls.",
+  "source": "@site/docs/concepts/resolution-cache.md",
+  "sourceDirName": "concepts",
+  "slug": "/concepts/resolution-cache",
+  "permalink": "/docs/concepts/resolution-cache",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/johnnyclem/smallchat/tree/main/packages/docs/docs/concepts/resolution-cache.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "title": "Resolution Cache",
+    "sidebar_label": "Resolution Cache"
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "ToolClass & ToolProxy",
+    "permalink": "/docs/concepts/tool-class"
+  },
+  "next": {
+    "title": "SCObject System",
+    "permalink": "/docs/concepts/sc-object"
+  }
+}

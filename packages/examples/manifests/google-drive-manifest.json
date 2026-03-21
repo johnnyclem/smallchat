@@ -1,0 +1,36 @@
+{
+  "id": "google-drive",
+  "name": "Google Drive",
+  "transportType": "mcp",
+  "description": "File access and search capabilities for Google Drive",
+  "tools": [
+    {
+      "name": "search_files",
+      "description": "Search for files in Google Drive",
+      "providerId": "google-drive",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string", "description": "Search query to find files" },
+          "mimeType": { "type": "string", "description": "Filter by MIME type (e.g., application/pdf)" },
+          "maxResults": { "type": "number", "description": "Maximum number of results to return" }
+        },
+        "required": ["query"]
+      }
+    },
+    {
+      "name": "read_file",
+      "description": "Read the contents of a file from Google Drive",
+      "providerId": "google-drive",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "fileId": { "type": "string", "description": "The ID of the file to read" }
+        },
+        "required": ["fileId"]
+      }
+    }
+  ]
+}

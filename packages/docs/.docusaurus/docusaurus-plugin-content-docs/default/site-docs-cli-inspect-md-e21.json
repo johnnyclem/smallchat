@@ -1,0 +1,27 @@
+{
+  "id": "cli/inspect",
+  "title": "inspect",
+  "description": "Inspects a compiled artifact and prints structured information about its contents.",
+  "source": "@site/docs/cli/inspect.md",
+  "sourceDirName": "cli",
+  "slug": "/cli/inspect",
+  "permalink": "/docs/cli/inspect",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/johnnyclem/smallchat/tree/main/packages/docs/docs/cli/inspect.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "title": "inspect",
+    "sidebar_label": "inspect"
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "compile",
+    "permalink": "/docs/cli/compile"
+  },
+  "next": {
+    "title": "resolve",
+    "permalink": "/docs/cli/resolve"
+  }
+}

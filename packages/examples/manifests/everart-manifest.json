@@ -1,0 +1,33 @@
+{
+  "id": "everart",
+  "name": "EverArt",
+  "transportType": "mcp",
+  "description": "AI image generation using various models",
+  "tools": [
+    {
+      "name": "generate_image",
+      "description": "Generate an image using an AI model",
+      "providerId": "everart",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "prompt": { "type": "string", "description": "Text prompt describing the image to generate" },
+          "model": { "type": "string", "description": "Model ID to use for generation" },
+          "imageCount": { "type": "number", "description": "Number of images to generate (default: 1)" }
+        },
+        "required": ["prompt", "model"]
+      }
+    },
+    {
+      "name": "list_models",
+      "description": "List available image generation models",
+      "providerId": "everart",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "id": "why-it-matters",
+  "title": "Why it matters",
+  "description": "The problem: tool proliferation",
+  "source": "@site/docs/why-it-matters.md",
+  "sourceDirName": ".",
+  "slug": "/why-it-matters",
+  "permalink": "/docs/why-it-matters",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/johnnyclem/smallchat/tree/main/packages/docs/docs/why-it-matters.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "title": "Why it matters",
+    "sidebar_label": "Why it matters"
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "What it does",
+    "permalink": "/docs/what-it-does"
+  },
+  "next": {
+    "title": "Overview",
+    "permalink": "/docs/concepts/"
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "id": "concepts/index",
+  "title": "Deep Dive",
+  "description": "This section documents the internals of smallchat for engineers who want to understand or extend the runtime.",
+  "source": "@site/docs/concepts/index.md",
+  "sourceDirName": "concepts",
+  "slug": "/concepts/",
+  "permalink": "/docs/concepts/",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/johnnyclem/smallchat/tree/main/packages/docs/docs/concepts/index.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "title": "Deep Dive",
+    "sidebar_label": "Overview"
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "Why it matters",
+    "permalink": "/docs/why-it-matters"
+  },
+  "next": {
+    "title": "Selector Table",
+    "permalink": "/docs/concepts/selector-table"
+  }
+}

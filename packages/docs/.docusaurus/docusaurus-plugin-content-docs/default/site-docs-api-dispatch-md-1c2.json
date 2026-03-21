@@ -1,0 +1,27 @@
+{
+  "id": "api/dispatch",
+  "title": "Dispatch API",
+  "description": "The low-level dispatch API. These are the functions that ToolRuntime calls internally. You can use them directly if you want to manage DispatchContext yourself.",
+  "source": "@site/docs/api/dispatch.md",
+  "sourceDirName": "api",
+  "slug": "/api/dispatch",
+  "permalink": "/docs/api/dispatch",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/johnnyclem/smallchat/tree/main/packages/docs/docs/api/dispatch.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "title": "Dispatch API",
+    "sidebar_label": "Dispatch API"
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "ToolRuntime",
+    "permalink": "/docs/api/runtime"
+  },
+  "next": {
+    "title": "ToolCompiler",
+    "permalink": "/docs/api/compiler"
+  }
+}

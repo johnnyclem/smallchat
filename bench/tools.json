@@ -1,0 +1,280 @@
+[
+  {
+    "id": "weather.openweather",
+    "selector": "weather.get",
+    "description": "Get current weather for a city using OpenWeatherMap",
+    "provider": "openweather",
+    "args": {
+      "city": { "type": "string", "required": true, "description": "City name" }
+    },
+    "tags": ["weather", "global", "forecast"]
+  },
+  {
+    "id": "weather.noaa",
+    "selector": "weather.get",
+    "description": "Get US weather using NOAA official data",
+    "provider": "noaa",
+    "args": {
+      "location": { "type": "string", "required": true, "description": "US location (city, state or zip)" }
+    },
+    "tags": ["weather", "us", "official", "government"]
+  },
+  {
+    "id": "weather.darksky",
+    "selector": "weather.get",
+    "description": "Get hyperlocal weather forecast with minute-by-minute precipitation",
+    "provider": "darksky",
+    "args": {
+      "lat": { "type": "number", "required": true, "description": "Latitude" },
+      "lon": { "type": "number", "required": true, "description": "Longitude" }
+    },
+    "tags": ["weather", "hyperlocal", "precipitation", "forecast"]
+  },
+  {
+    "id": "calendar.google.create",
+    "selector": "calendar.create_event",
+    "description": "Create a calendar event in Google Calendar",
+    "provider": "google",
+    "args": {
+      "title": { "type": "string", "required": true, "description": "Event title" },
+      "time": { "type": "datetime", "required": true, "description": "Event start time" },
+      "attendees": { "type": "string[]", "required": false, "description": "Email addresses" }
+    },
+    "tags": ["calendar", "google", "event", "schedule"]
+  },
+  {
+    "id": "calendar.outlook.create",
+    "selector": "calendar.create_event",
+    "description": "Create an event in Outlook calendar",
+    "provider": "outlook",
+    "args": {
+      "subject": { "type": "string", "required": true, "description": "Event subject" },
+      "start": { "type": "datetime", "required": true, "description": "Start date/time" },
+      "invitees": { "type": "string[]", "required": false, "description": "Email addresses" }
+    },
+    "tags": ["calendar", "outlook", "microsoft", "event", "schedule"]
+  },
+  {
+    "id": "calendar.google.list",
+    "selector": "calendar.list_events",
+    "description": "List upcoming events from Google Calendar",
+    "provider": "google",
+    "args": {
+      "days": { "type": "number", "required": false, "description": "Number of days ahead to look" }
+    },
+    "tags": ["calendar", "google", "list", "upcoming"]
+  },
+  {
+    "id": "calendar.outlook.list",
+    "selector": "calendar.list_events",
+    "description": "List upcoming events from Outlook calendar",
+    "provider": "outlook",
+    "args": {
+      "range": { "type": "string", "required": false, "description": "Date range (e.g. 'this week')" }
+    },
+    "tags": ["calendar", "outlook", "microsoft", "list", "upcoming"]
+  },
+  {
+    "id": "finance.stock.price",
+    "selector": "stock.get_price",
+    "description": "Get stock price by ticker symbol from market data",
+    "provider": "alphavantage",
+    "args": {
+      "ticker": { "type": "string", "required": true, "description": "Stock ticker (e.g. AAPL)" }
+    },
+    "tags": ["finance", "stock", "market", "price", "equity"]
+  },
+  {
+    "id": "finance.crypto.price",
+    "selector": "crypto.get_price",
+    "description": "Get cryptocurrency price by symbol",
+    "provider": "coingecko",
+    "args": {
+      "symbol": { "type": "string", "required": true, "description": "Crypto symbol (e.g. BTC, ETH)" }
+    },
+    "tags": ["finance", "crypto", "cryptocurrency", "price", "defi"]
+  },
+  {
+    "id": "finance.forex.rate",
+    "selector": "forex.get_rate",
+    "description": "Get foreign exchange rate between two currencies",
+    "provider": "exchangerate",
+    "args": {
+      "from": { "type": "string", "required": true, "description": "Source currency code (e.g. USD)" },
+      "to": { "type": "string", "required": true, "description": "Target currency code (e.g. EUR)" }
+    },
+    "tags": ["finance", "forex", "currency", "exchange"]
+  },
+  {
+    "id": "search.google",
+    "selector": "search.web",
+    "description": "Search the web using Google",
+    "provider": "google",
+    "args": {
+      "query": { "type": "string", "required": true, "description": "Search query" },
+      "num_results": { "type": "number", "required": false, "description": "Number of results" }
+    },
+    "tags": ["search", "web", "google"]
+  },
+  {
+    "id": "search.bing",
+    "selector": "search.web",
+    "description": "Search the web using Bing",
+    "provider": "bing",
+    "args": {
+      "q": { "type": "string", "required": true, "description": "Search query" },
+      "count": { "type": "number", "required": false, "description": "Number of results" }
+    },
+    "tags": ["search", "web", "bing", "microsoft"]
+  },
+  {
+    "id": "search.code",
+    "selector": "search.code",
+    "description": "Search code repositories on GitHub",
+    "provider": "github",
+    "args": {
+      "query": { "type": "string", "required": true, "description": "Code search query" },
+      "language": { "type": "string", "required": false, "description": "Programming language filter" }
+    },
+    "tags": ["search", "code", "github", "repository"]
+  },
+  {
+    "id": "email.gmail.send",
+    "selector": "email.send",
+    "description": "Send an email via Gmail",
+    "provider": "gmail",
+    "args": {
+      "to": { "type": "string", "required": true, "description": "Recipient email" },
+      "subject": { "type": "string", "required": true, "description": "Email subject" },
+      "body": { "type": "string", "required": true, "description": "Email body" }
+    },
+    "tags": ["email", "gmail", "google", "send"]
+  },
+  {
+    "id": "email.outlook.send",
+    "selector": "email.send",
+    "description": "Send an email via Outlook",
+    "provider": "outlook",
+    "args": {
+      "recipient": { "type": "string", "required": true, "description": "Recipient email" },
+      "subject": { "type": "string", "required": true, "description": "Email subject" },
+      "content": { "type": "string", "required": true, "description": "Email content (HTML supported)" }
+    },
+    "tags": ["email", "outlook", "microsoft", "send"]
+  },
+  {
+    "id": "messaging.slack.send",
+    "selector": "messaging.send",
+    "description": "Send a message to a Slack channel or user",
+    "provider": "slack",
+    "args": {
+      "channel": { "type": "string", "required": true, "description": "Channel name or user ID" },
+      "text": { "type": "string", "required": true, "description": "Message text" }
+    },
+    "tags": ["messaging", "slack", "chat", "team"]
+  },
+  {
+    "id": "messaging.teams.send",
+    "selector": "messaging.send",
+    "description": "Send a message in Microsoft Teams",
+    "provider": "teams",
+    "args": {
+      "channel": { "type": "string", "required": true, "description": "Teams channel" },
+      "message": { "type": "string", "required": true, "description": "Message content" }
+    },
+    "tags": ["messaging", "teams", "microsoft", "chat"]
+  },
+  {
+    "id": "translate.google",
+    "selector": "translate.text",
+    "description": "Translate text using Google Translate",
+    "provider": "google",
+    "args": {
+      "text": { "type": "string", "required": true, "description": "Text to translate" },
+      "target": { "type": "string", "required": true, "description": "Target language code" },
+      "source": { "type": "string", "required": false, "description": "Source language code" }
+    },
+    "tags": ["translate", "language", "google"]
+  },
+  {
+    "id": "translate.deepl",
+    "selector": "translate.text",
+    "description": "Translate text using DeepL for high-quality translations",
+    "provider": "deepl",
+    "args": {
+      "text": { "type": "string", "required": true, "description": "Text to translate" },
+      "target_lang": { "type": "string", "required": true, "description": "Target language" },
+      "formality": { "type": "string", "required": false, "description": "Formality level: more/less/default" }
+    },
+    "tags": ["translate", "language", "deepl", "quality", "professional"]
+  },
+  {
+    "id": "storage.s3.upload",
+    "selector": "storage.upload",
+    "description": "Upload a file to AWS S3",
+    "provider": "aws",
+    "args": {
+      "bucket": { "type": "string", "required": true, "description": "S3 bucket name" },
+      "key": { "type": "string", "required": true, "description": "Object key/path" },
+      "data": { "type": "binary", "required": true, "description": "File data" }
+    },
+    "tags": ["storage", "aws", "s3", "upload", "cloud"]
+  },
+  {
+    "id": "storage.gcs.upload",
+    "selector": "storage.upload",
+    "description": "Upload a file to Google Cloud Storage",
+    "provider": "gcp",
+    "args": {
+      "bucket": { "type": "string", "required": true, "description": "GCS bucket name" },
+      "path": { "type": "string", "required": true, "description": "Object path" },
+      "content": { "type": "binary", "required": true, "description": "File content" }
+    },
+    "tags": ["storage", "gcp", "gcs", "upload", "cloud"]
+  },
+  {
+    "id": "db.postgres.query",
+    "selector": "db.query",
+    "description": "Execute a SQL query against PostgreSQL",
+    "provider": "postgres",
+    "args": {
+      "sql": { "type": "string", "required": true, "description": "SQL query" },
+      "params": { "type": "any[]", "required": false, "description": "Query parameters" }
+    },
+    "tags": ["database", "postgres", "sql", "query"]
+  },
+  {
+    "id": "db.mongo.query",
+    "selector": "db.query",
+    "description": "Execute a query against MongoDB",
+    "provider": "mongodb",
+    "args": {
+      "collection": { "type": "string", "required": true, "description": "Collection name" },
+      "filter": { "type": "object", "required": true, "description": "Query filter document" }
+    },
+    "tags": ["database", "mongodb", "nosql", "query"]
+  },
+  {
+    "id": "notifications.push.send",
+    "selector": "notification.send",
+    "description": "Send a push notification to a mobile device",
+    "provider": "firebase",
+    "args": {
+      "token": { "type": "string", "required": true, "description": "Device token" },
+      "title": { "type": "string", "required": true, "description": "Notification title" },
+      "body": { "type": "string", "required": true, "description": "Notification body" }
+    },
+    "tags": ["notification", "push", "mobile", "firebase"]
+  },
+  {
+    "id": "notifications.sms.send",
+    "selector": "notification.send",
+    "description": "Send an SMS notification via Twilio",
+    "provider": "twilio",
+    "args": {
+      "to": { "type": "string", "required": true, "description": "Phone number" },
+      "message": { "type": "string", "required": true, "description": "SMS message text" }
+    },
+    "tags": ["notification", "sms", "text", "twilio", "phone"]
+  }
+]

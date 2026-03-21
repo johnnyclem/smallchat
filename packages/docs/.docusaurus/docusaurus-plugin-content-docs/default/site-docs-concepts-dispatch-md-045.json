@@ -1,0 +1,27 @@
+{
+  "id": "concepts/dispatch",
+  "title": "Dispatch",
+  "description": "The dispatch layer is the hot path. It takes a natural-language intent, resolves it to a concrete implementation, and invokes it — either as a single call or as a streaming generator.",
+  "source": "@site/docs/concepts/dispatch.md",
+  "sourceDirName": "concepts",
+  "slug": "/concepts/dispatch",
+  "permalink": "/docs/concepts/dispatch",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/johnnyclem/smallchat/tree/main/packages/docs/docs/concepts/dispatch.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "title": "Dispatch",
+    "sidebar_label": "Dispatch"
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "Selector Table",
+    "permalink": "/docs/concepts/selector-table"
+  },
+  "next": {
+    "title": "ToolClass & ToolProxy",
+    "permalink": "/docs/concepts/tool-class"
+  }
+}

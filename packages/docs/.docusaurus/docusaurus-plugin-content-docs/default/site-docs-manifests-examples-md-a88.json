@@ -1,0 +1,27 @@
+{
+  "id": "manifests/examples",
+  "title": "Example Manifests",
+  "description": "The examples/ directory in the smallchat repository contains ready-to-use manifests for common providers. Below are four representative examples.",
+  "source": "@site/docs/manifests/examples.md",
+  "sourceDirName": "manifests",
+  "slug": "/manifests/examples",
+  "permalink": "/docs/manifests/examples",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/johnnyclem/smallchat/tree/main/packages/docs/docs/manifests/examples.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "title": "Example Manifests",
+    "sidebar_label": "Example Manifests"
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "Manifest Format",
+    "permalink": "/docs/manifests/format"
+  },
+  "next": {
+    "title": "Architecture",
+    "permalink": "/docs/architecture"
+  }
+}

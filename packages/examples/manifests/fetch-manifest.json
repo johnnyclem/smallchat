@@ -1,0 +1,24 @@
+{
+  "id": "fetch",
+  "name": "Fetch",
+  "transportType": "mcp",
+  "description": "Web content fetching and conversion for efficient LLM usage",
+  "tools": [
+    {
+      "name": "fetch",
+      "description": "Fetch a URL from the internet and extract its contents as markdown",
+      "providerId": "fetch",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "url": { "type": "string", "description": "URL to fetch" },
+          "maxLength": { "type": "number", "description": "Maximum number of characters to return" },
+          "startIndex": { "type": "number", "description": "Start content from this character index for pagination" },
+          "raw": { "type": "boolean", "description": "Get raw content without markdown conversion" }
+        },
+        "required": ["url"]
+      }
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "id": "api/mcp-server",
+  "title": "MCPServer",
+  "description": "MCPServer provides a MCP 2025-11-25 compliant HTTP server. It handles JSON-RPC requests, Server-Sent Events, and the MCP discovery endpoint.",
+  "source": "@site/docs/api/mcp-server.md",
+  "sourceDirName": "api",
+  "slug": "/api/mcp-server",
+  "permalink": "/docs/api/mcp-server",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/johnnyclem/smallchat/tree/main/packages/docs/docs/api/mcp-server.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "title": "MCPServer",
+    "sidebar_label": "MCPServer"
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "ToolCompiler",
+    "permalink": "/docs/api/compiler"
+  },
+  "next": {
+    "title": "Manifest Format",
+    "permalink": "/docs/manifests/format"
+  }
+}

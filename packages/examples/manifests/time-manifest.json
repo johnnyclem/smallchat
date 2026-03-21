@@ -1,0 +1,36 @@
+{
+  "id": "time",
+  "name": "Time",
+  "transportType": "mcp",
+  "description": "Time and timezone conversion capabilities",
+  "tools": [
+    {
+      "name": "get_current_time",
+      "description": "Get the current time in a specific timezone",
+      "providerId": "time",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "timezone": { "type": "string", "description": "IANA timezone name (e.g., America/New_York, Europe/London)" }
+        },
+        "required": ["timezone"]
+      }
+    },
+    {
+      "name": "convert_time",
+      "description": "Convert time between timezones",
+      "providerId": "time",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sourceTimezone": { "type": "string", "description": "Source IANA timezone name" },
+          "time": { "type": "string", "description": "Time to convert in 24-hour format (HH:MM)" },
+          "targetTimezone": { "type": "string", "description": "Target IANA timezone name" }
+        },
+        "required": ["sourceTimezone", "time", "targetTimezone"]
+      }
+    }
+  ]
+}

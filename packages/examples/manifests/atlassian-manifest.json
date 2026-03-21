@@ -1,0 +1,397 @@
+{
+  "id": "atlassian",
+  "name": "Atlassian",
+  "transportType": "mcp",
+  "description": "Securely interact with Jira work items, Confluence pages, and Atlassian platform services",
+  "auth": {
+    "type": "oauth2",
+    "authorizationUrl": "https://auth.atlassian.com/authorize",
+    "tokenUrl": "https://auth.atlassian.com/oauth/token",
+    "scopes": [
+      "read:jira-work",
+      "write:jira-work",
+      "read:jira-user",
+      "read:confluence-content.all",
+      "write:confluence-content",
+      "read:confluence-space.summary",
+      "search:confluence",
+      "read:confluence-user",
+      "manage:jira-project",
+      "manage:jira-configuration"
+    ],
+    "clientId": "${ATLASSIAN_CLIENT_ID}",
+    "clientSecret": "${ATLASSIAN_CLIENT_SECRET}"
+  },
+  "config": {
+    "cloudId": "${ATLASSIAN_CLOUD_ID}",
+    "baseUrl": "https://api.atlassian.com"
+  },
+  "tools": [
+    {
+      "name": "jira_search_issues",
+      "description": "Search for Jira issues using JQL (Jira Query Language)",
+      "providerId": "atlassian",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "jql": { "type": "string", "description": "JQL query string (e.g., 'project = PROJ AND status = \"In Progress\"')" },
+          "maxResults": { "type": "number", "description": "Maximum number of results to return (default: 50)" },
+          "startAt": { "type": "number", "description": "Index of the first result to return for pagination" },
+          "fields": { "type": "array", "items": { "type": "string" }, "description": "List of fields to include in results (e.g., ['summary', 'status', 'assignee'])" },
+          "expand": { "type": "array", "items": { "type": "string" }, "description": "Additional information to expand (e.g., ['changelog', 'renderedFields'])" }
+        },
+        "required": ["jql"]
+      }
+    },
+    {
+      "name": "jira_get_issue",
+      "description": "Get detailed information about a specific Jira issue",
+      "providerId": "atlassian",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "issueKey": { "type": "string", "description": "Issue key (e.g., PROJ-123)" },
+          "fields": { "type": "array", "items": { "type": "string" }, "description": "Fields to include in the response" },
+          "expand": { "type": "array", "items": { "type": "string" }, "description": "Additional information to expand" }
+        },
+        "required": ["issueKey"]
+      }
+    },
+    {
+      "name": "jira_create_issue",
+      "description": "Create a new Jira issue in a project",
+      "providerId": "atlassian",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectKey": { "type": "string", "description": "Project key (e.g., PROJ)" },
+          "issueType": { "type": "string", "description": "Issue type name (e.g., 'Bug', 'Story', 'Task', 'Epic')" },
+          "summary": { "type": "string", "description": "Issue summary/title" },
+          "description": { "type": "string", "description": "Issue description in Atlassian Document Format or markdown" },
+          "assignee": { "type": "string", "description": "Assignee account ID" },
+          "priority": { "type": "string", "description": "Priority name (e.g., 'Highest', 'High', 'Medium', 'Low', 'Lowest')" },
+          "labels": { "type": "array", "items": { "type": "string" }, "description": "Labels to apply to the issue" },
+          "components": { "type": "array", "items": { "type": "string" }, "description": "Component names to assign" },
+          "epicKey": { "type": "string", "description": "Epic issue key to link to" },
+          "sprintId": { "type": "number", "description": "Sprint ID to add the issue to" },
+          "storyPoints": { "type": "number", "description": "Story point estimate" },
+          "customFields": { "type": "object", "description": "Custom field values as key-value pairs" }
+        },
+        "required": ["projectKey", "issueType", "summary"]
+      }
+    },
+    {
+      "name": "jira_update_issue",
+      "description": "Update an existing Jira issue's fields",
+      "providerId": "atlassian",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "issueKey": { "type": "string", "description": "Issue key (e.g., PROJ-123)" },
+          "summary": { "type": "string", "description": "New summary" },
+          "description": { "type": "string", "description": "New description" },
+          "assignee": { "type": "string", "description": "New assignee account ID" },
+          "priority": { "type": "string", "description": "New priority name" },
+          "labels": { "type": "array", "items": { "type": "string" }, "description": "New labels (replaces existing)" },
+          "components": { "type": "array", "items": { "type": "string" }, "description": "New component names" },
+          "customFields": { "type": "object", "description": "Custom field values to update" }
+        },
+        "required": ["issueKey"]
+      }
+    },
+    {
+      "name": "jira_transition_issue",
+      "description": "Transition a Jira issue to a different status",
+      "providerId": "atlassian",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "issueKey": { "type": "string", "description": "Issue key (e.g., PROJ-123)" },
+          "transitionId": { "type": "string", "description": "Transition ID to apply" },
+          "transitionName": { "type": "string", "description": "Transition name (alternative to transitionId)" },
+          "comment": { "type": "string", "description": "Comment to add during transition" },
+          "resolution": { "type": "string", "description": "Resolution name (for 'Done' transitions)" },
+          "fields": { "type": "object", "description": "Additional fields required by the transition" }
+        },
+        "required": ["issueKey"]
+      }
+    },
+    {
+      "name": "jira_add_comment",
+      "description": "Add a comment to a Jira issue",
+      "providerId": "atlassian",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "issueKey": { "type": "string", "description": "Issue key (e.g., PROJ-123)" },
+          "body": { "type": "string", "description": "Comment body in markdown or ADF format" },
+          "visibility": {
+            "type": "object",
+            "properties": {
+              "type": { "type": "string", "enum": ["group", "role"], "description": "Visibility restriction type" },
+              "value": { "type": "string", "description": "Group name or role name" }
+            },
+            "description": "Optional visibility restriction"
+          }
+        },
+        "required": ["issueKey", "body"]
+      }
+    },
+    {
+      "name": "jira_link_issues",
+      "description": "Create a link between two Jira issues",
+      "providerId": "atlassian",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "inwardIssueKey": { "type": "string", "description": "Inward issue key" },
+          "outwardIssueKey": { "type": "string", "description": "Outward issue key" },
+          "linkType": { "type": "string", "description": "Link type name (e.g., 'Blocks', 'Clones', 'Duplicate', 'Relates')" }
+        },
+        "required": ["inwardIssueKey", "outwardIssueKey", "linkType"]
+      }
+    },
+    {
+      "name": "jira_get_transitions",
+      "description": "Get available status transitions for an issue",
+      "providerId": "atlassian",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "issueKey": { "type": "string", "description": "Issue key (e.g., PROJ-123)" }
+        },
+        "required": ["issueKey"]
+      }
+    },
+    {
+      "name": "jira_list_projects",
+      "description": "List all Jira projects accessible to the user",
+      "providerId": "atlassian",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string", "description": "Filter projects by name" },
+          "maxResults": { "type": "number", "description": "Maximum number of results" }
+        }
+      }
+    },
+    {
+      "name": "jira_get_board",
+      "description": "Get a Jira board's configuration and sprints",
+      "providerId": "atlassian",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "boardId": { "type": "number", "description": "Board ID" }
+        },
+        "required": ["boardId"]
+      }
+    },
+    {
+      "name": "jira_get_sprint",
+      "description": "Get details of a sprint including issues",
+      "providerId": "atlassian",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sprintId": { "type": "number", "description": "Sprint ID" },
+          "includeIssues": { "type": "boolean", "description": "Whether to include sprint issues" }
+        },
+        "required": ["sprintId"]
+      }
+    },
+    {
+      "name": "jira_add_worklog",
+      "description": "Log time spent on a Jira issue",
+      "providerId": "atlassian",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "issueKey": { "type": "string", "description": "Issue key (e.g., PROJ-123)" },
+          "timeSpent": { "type": "string", "description": "Time spent (e.g., '2h 30m', '1d')" },
+          "comment": { "type": "string", "description": "Worklog comment" },
+          "started": { "type": "string", "description": "Start date/time in ISO 8601 format" }
+        },
+        "required": ["issueKey", "timeSpent"]
+      }
+    },
+    {
+      "name": "jira_bulk_update",
+      "description": "Bulk update multiple Jira issues at once",
+      "providerId": "atlassian",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "issueKeys": { "type": "array", "items": { "type": "string" }, "description": "Issue keys to update" },
+          "fields": { "type": "object", "description": "Fields to update on all issues" }
+        },
+        "required": ["issueKeys", "fields"]
+      }
+    },
+    {
+      "name": "confluence_search",
+      "description": "Search for Confluence content using CQL (Confluence Query Language)",
+      "providerId": "atlassian",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "cql": { "type": "string", "description": "CQL query string (e.g., 'type = page AND space = DEV AND text ~ \"deployment\"')" },
+          "limit": { "type": "number", "description": "Maximum number of results (default: 25)" },
+          "start": { "type": "number", "description": "Pagination offset" },
+          "expand": { "type": "array", "items": { "type": "string" }, "description": "Properties to expand (e.g., ['body.storage', 'version', 'space'])" }
+        },
+        "required": ["cql"]
+      }
+    },
+    {
+      "name": "confluence_get_page",
+      "description": "Get a Confluence page by ID with its content",
+      "providerId": "atlassian",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "pageId": { "type": "string", "description": "Confluence page ID" },
+          "expand": { "type": "array", "items": { "type": "string" }, "description": "Properties to expand (e.g., ['body.storage', 'body.view', 'version', 'ancestors'])" }
+        },
+        "required": ["pageId"]
+      }
+    },
+    {
+      "name": "confluence_create_page",
+      "description": "Create a new Confluence page",
+      "providerId": "atlassian",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "spaceKey": { "type": "string", "description": "Space key where the page will be created" },
+          "title": { "type": "string", "description": "Page title" },
+          "body": { "type": "string", "description": "Page body content in Confluence storage format or markdown" },
+          "parentId": { "type": "string", "description": "Parent page ID (for creating child pages)" },
+          "labels": { "type": "array", "items": { "type": "string" }, "description": "Labels to apply to the page" },
+          "status": { "type": "string", "description": "Page status", "enum": ["current", "draft"] }
+        },
+        "required": ["spaceKey", "title", "body"]
+      }
+    },
+    {
+      "name": "confluence_update_page",
+      "description": "Update an existing Confluence page",
+      "providerId": "atlassian",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "pageId": { "type": "string", "description": "Page ID to update" },
+          "title": { "type": "string", "description": "New page title" },
+          "body": { "type": "string", "description": "New page body content" },
+          "version": { "type": "number", "description": "Current version number (required for conflict detection)" },
+          "status": { "type": "string", "description": "Page status", "enum": ["current", "draft"] }
+        },
+        "required": ["pageId", "body", "version"]
+      }
+    },
+    {
+      "name": "confluence_get_comments",
+      "description": "Get comments on a Confluence page",
+      "providerId": "atlassian",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "pageId": { "type": "string", "description": "Page ID to get comments for" },
+          "depth": { "type": "string", "description": "Comment depth", "enum": ["", "all"] },
+          "expand": { "type": "array", "items": { "type": "string" }, "description": "Properties to expand" }
+        },
+        "required": ["pageId"]
+      }
+    },
+    {
+      "name": "confluence_add_comment",
+      "description": "Add a comment to a Confluence page",
+      "providerId": "atlassian",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "pageId": { "type": "string", "description": "Page ID to comment on" },
+          "body": { "type": "string", "description": "Comment body in storage format or markdown" },
+          "parentCommentId": { "type": "string", "description": "Parent comment ID for replies" }
+        },
+        "required": ["pageId", "body"]
+      }
+    },
+    {
+      "name": "confluence_list_spaces",
+      "description": "List all Confluence spaces",
+      "providerId": "atlassian",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "type": { "type": "string", "description": "Filter by space type", "enum": ["global", "personal"] },
+          "status": { "type": "string", "description": "Filter by status", "enum": ["current", "archived"] },
+          "limit": { "type": "number", "description": "Maximum number of results" }
+        }
+      }
+    },
+    {
+      "name": "confluence_get_space",
+      "description": "Get details of a specific Confluence space",
+      "providerId": "atlassian",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "spaceKey": { "type": "string", "description": "Space key" },
+          "expand": { "type": "array", "items": { "type": "string" }, "description": "Properties to expand (e.g., ['description', 'homepage'])" }
+        },
+        "required": ["spaceKey"]
+      }
+    },
+    {
+      "name": "confluence_get_page_children",
+      "description": "Get child pages of a Confluence page",
+      "providerId": "atlassian",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "pageId": { "type": "string", "description": "Parent page ID" },
+          "limit": { "type": "number", "description": "Maximum number of results" },
+          "expand": { "type": "array", "items": { "type": "string" }, "description": "Properties to expand" }
+        },
+        "required": ["pageId"]
+      }
+    },
+    {
+      "name": "confluence_add_label",
+      "description": "Add labels to a Confluence page",
+      "providerId": "atlassian",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "pageId": { "type": "string", "description": "Page ID to label" },
+          "labels": { "type": "array", "items": { "type": "string" }, "description": "Labels to add" }
+        },
+        "required": ["pageId", "labels"]
+      }
+    }
+  ]
+}

@@ -1,0 +1,857 @@
+[
+  {
+    "id": "weather_simple_austin",
+    "query": "what's the weather in Austin?",
+    "expected": "weather.openweather",
+    "acceptable": ["weather.noaa"],
+    "difficulty": "easy",
+    "category": "weather",
+    "notes": "Basic current-weather lookup with city only."
+  },
+  {
+    "id": "weather_simple_seattle",
+    "query": "current weather in Seattle",
+    "expected": "weather.openweather",
+    "acceptable": ["weather.noaa"],
+    "difficulty": "easy",
+    "category": "weather",
+    "notes": "Simple synonym for current weather."
+  },
+  {
+    "id": "weather_official_us_report",
+    "query": "what's the official US weather report for Austin?",
+    "expected": "weather.noaa",
+    "acceptable": [],
+    "difficulty": "medium",
+    "category": "weather",
+    "notes": "Official US signal should bias NOAA."
+  },
+  {
+    "id": "weather_noaa_explicit",
+    "query": "use NOAA to get the weather in Denver",
+    "expected": "weather.noaa",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "weather",
+    "notes": "Explicit provider mention."
+  },
+  {
+    "id": "weather_forecast_phrase",
+    "query": "give me the weather forecast for Portland",
+    "expected": "weather.openweather",
+    "acceptable": ["weather.noaa"],
+    "difficulty": "easy",
+    "category": "weather",
+    "notes": "Forecast phrasing but still general weather tool."
+  },
+  {
+    "id": "weather_us_government_language",
+    "query": "I need the government weather forecast for Dallas",
+    "expected": "weather.noaa",
+    "acceptable": [],
+    "difficulty": "medium",
+    "category": "weather",
+    "notes": "Government signal should strongly favor NOAA."
+  },
+  {
+    "id": "weather_conditions_outside",
+    "query": "how are conditions outside in Chicago right now?",
+    "expected": "weather.openweather",
+    "acceptable": ["weather.noaa"],
+    "difficulty": "medium",
+    "category": "weather",
+    "notes": "Indirect wording for weather."
+  },
+  {
+    "id": "weather_us_bias_location",
+    "query": "show the US national weather for Miami",
+    "expected": "weather.noaa",
+    "acceptable": [],
+    "difficulty": "medium",
+    "category": "weather",
+    "notes": "National weather phrase should favor NOAA."
+  },
+  {
+    "id": "weather_openweather_preference",
+    "query": "use OpenWeather for San Francisco weather",
+    "expected": "weather.openweather",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "weather",
+    "notes": "Explicit provider preference."
+  },
+  {
+    "id": "weather_ambiguous_city_only",
+    "query": "Boston weather please",
+    "expected": "weather.openweather",
+    "acceptable": ["weather.noaa"],
+    "difficulty": "easy",
+    "category": "weather",
+    "notes": "Minimal natural language query."
+  },
+  {
+    "id": "calendar_google_tomorrow_3pm",
+    "query": "add a meeting to my Google Calendar tomorrow at 3",
+    "expected": "calendar.google.create",
+    "acceptable": ["calendar.outlook.create"],
+    "difficulty": "medium",
+    "category": "calendar",
+    "notes": "Provider mentioned explicitly."
+  },
+  {
+    "id": "calendar_outlook_tomorrow_3pm",
+    "query": "create an Outlook calendar event tomorrow at 3 called Budget Review",
+    "expected": "calendar.outlook.create",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "calendar",
+    "notes": "Explicit Outlook provider and subject-like phrasing."
+  },
+  {
+    "id": "calendar_schedule_meeting_ambiguous",
+    "query": "schedule a meeting tomorrow at 3",
+    "expected": null,
+    "acceptable": ["calendar.google.create", "calendar.outlook.create"],
+    "difficulty": "hard",
+    "category": "calendar",
+    "notes": "Underspecified calendar provider."
+  },
+  {
+    "id": "calendar_put_on_google_calendar",
+    "query": "put lunch with Priya on my Google calendar Friday at noon",
+    "expected": "calendar.google.create",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "calendar",
+    "notes": "Natural Google Calendar request."
+  },
+  {
+    "id": "calendar_add_to_outlook",
+    "query": "add dentist appointment to Outlook Monday at 9am",
+    "expected": "calendar.outlook.create",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "calendar",
+    "notes": "Short explicit Outlook request."
+  },
+  {
+    "id": "calendar_block_time_ambiguous",
+    "query": "block two hours tomorrow afternoon for deep work",
+    "expected": null,
+    "acceptable": ["calendar.google.create", "calendar.outlook.create"],
+    "difficulty": "hard",
+    "category": "calendar",
+    "notes": "Intent is calendar creation but provider not specified."
+  },
+  {
+    "id": "calendar_google_named_event",
+    "query": "make a Google Calendar event called Team Sync next Tuesday at 10am",
+    "expected": "calendar.google.create",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "calendar",
+    "notes": "Clear provider and title extraction."
+  },
+  {
+    "id": "calendar_outlook_subject_language",
+    "query": "create an Outlook event with subject QBR next Wednesday at 11",
+    "expected": "calendar.outlook.create",
+    "acceptable": [],
+    "difficulty": "medium",
+    "category": "calendar",
+    "notes": "Uses provider-native field language."
+  },
+  {
+    "id": "calendar_meeting_on_calendar_general",
+    "query": "put a meeting on my calendar for tomorrow morning",
+    "expected": null,
+    "acceptable": ["calendar.google.create", "calendar.outlook.create"],
+    "difficulty": "hard",
+    "category": "calendar",
+    "notes": "General calendar creation."
+  },
+  {
+    "id": "calendar_google_calendar_short",
+    "query": "Google calendar, lunch tomorrow at 1",
+    "expected": "calendar.google.create",
+    "acceptable": [],
+    "difficulty": "medium",
+    "category": "calendar",
+    "notes": "Fragmented provider-first query."
+  },
+  {
+    "id": "stock_price_aapl",
+    "query": "what's the stock price of AAPL?",
+    "expected": "finance.stock.price",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "finance",
+    "notes": "Ticker clearly stock."
+  },
+  {
+    "id": "stock_price_tesla_name",
+    "query": "get Tesla stock price",
+    "expected": "finance.stock.price",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "finance",
+    "notes": "Company-name phrasing still stock intent."
+  },
+  {
+    "id": "crypto_price_eth",
+    "query": "price of ETH",
+    "expected": "finance.crypto.price",
+    "acceptable": [],
+    "difficulty": "medium",
+    "category": "finance",
+    "notes": "Short symbol query should prefer crypto."
+  },
+  {
+    "id": "crypto_price_btc",
+    "query": "bitcoin price",
+    "expected": "finance.crypto.price",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "finance",
+    "notes": "Name rather than ticker."
+  },
+  {
+    "id": "stock_vs_crypto_ambiguous_sol",
+    "query": "price of SOL",
+    "expected": "finance.crypto.price",
+    "acceptable": [],
+    "difficulty": "medium",
+    "category": "finance",
+    "notes": "Likely crypto symbol."
+  },
+  {
+    "id": "stock_explicit_share_price",
+    "query": "share price for NVDA",
+    "expected": "finance.stock.price",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "finance",
+    "notes": "Share price language strongly implies equity."
+  },
+  {
+    "id": "crypto_explicit_token_price",
+    "query": "token price for DOGE",
+    "expected": "finance.crypto.price",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "finance",
+    "notes": "Token language strongly implies crypto."
+  },
+  {
+    "id": "stock_company_symbol_prompt",
+    "query": "lookup stock ticker MSFT price",
+    "expected": "finance.stock.price",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "finance",
+    "notes": "Ticker and stock both present."
+  },
+  {
+    "id": "crypto_symbol_language",
+    "query": "what's the crypto price for ADA?",
+    "expected": "finance.crypto.price",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "finance",
+    "notes": "Explicit crypto modifier."
+  },
+  {
+    "id": "finance_ambiguous_price_query",
+    "query": "what's the price of meta",
+    "expected": "finance.stock.price",
+    "acceptable": [],
+    "difficulty": "medium",
+    "category": "finance",
+    "notes": "Company name should resolve to stock."
+  },
+  {
+    "id": "email_send_basic",
+    "query": "send an email to Sarah saying I'll be five minutes late",
+    "expected": "email.send",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "email",
+    "notes": "Clear send intent."
+  },
+  {
+    "id": "email_draft_basic",
+    "query": "draft an email to Sarah apologizing for the delay",
+    "expected": "email.draft",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "email",
+    "notes": "Draft verb should override send."
+  },
+  {
+    "id": "email_search_from_sender",
+    "query": "find emails from Alex last week",
+    "expected": "email.search",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "email",
+    "notes": "Search inbox intent."
+  },
+  {
+    "id": "email_recent_messages",
+    "query": "show me unread emails from my boss",
+    "expected": "email.search",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "email",
+    "notes": "Search with filter."
+  },
+  {
+    "id": "email_send_vs_draft_ambiguous",
+    "query": "write an email to Dana about rescheduling",
+    "expected": "email.draft",
+    "acceptable": ["email.send"],
+    "difficulty": "hard",
+    "category": "email",
+    "notes": "Write could mean draft or send; draft is safer default."
+  },
+  {
+    "id": "email_reply",
+    "query": "reply to the latest email from Chris and say yes that works",
+    "expected": "email.reply",
+    "acceptable": ["email.send"],
+    "difficulty": "medium",
+    "category": "email",
+    "notes": "Thread-aware reply intent."
+  },
+  {
+    "id": "email_find_attachment",
+    "query": "find the email with the contract PDF from Morgan",
+    "expected": "email.search",
+    "acceptable": [],
+    "difficulty": "medium",
+    "category": "email",
+    "notes": "Search based on sender plus attachment clue."
+  },
+  {
+    "id": "email_draft_with_subject",
+    "query": "draft a message to Priya with subject Follow Up",
+    "expected": "email.draft",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "email",
+    "notes": "Clear draft with subject extraction."
+  },
+  {
+    "id": "email_send_with_subject",
+    "query": "send an email to team@example.com with subject Launch Update",
+    "expected": "email.send",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "email",
+    "notes": "Explicit send with subject."
+  },
+  {
+    "id": "email_search_keyword",
+    "query": "search my inbox for receipts from February",
+    "expected": "email.search",
+    "acceptable": [],
+    "difficulty": "medium",
+    "category": "email",
+    "notes": "Search query over mailbox."
+  },
+  {
+    "id": "docs_search_project_plan",
+    "query": "find the project plan document for Atlas",
+    "expected": "docs.search",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "docs",
+    "notes": "Document retrieval."
+  },
+  {
+    "id": "docs_create_brief",
+    "query": "create a new design brief called Summer Launch",
+    "expected": "docs.create",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "docs",
+    "notes": "Create new doc intent."
+  },
+  {
+    "id": "docs_update_existing",
+    "query": "update the Q2 strategy doc with today's notes",
+    "expected": "docs.update",
+    "acceptable": [],
+    "difficulty": "medium",
+    "category": "docs",
+    "notes": "Update existing doc intent."
+  },
+  {
+    "id": "docs_search_slides",
+    "query": "find the slides from the product kickoff",
+    "expected": "docs.search",
+    "acceptable": [],
+    "difficulty": "medium",
+    "category": "docs",
+    "notes": "Search should cover slides as docs corpus."
+  },
+  {
+    "id": "docs_make_doc_ambiguous",
+    "query": "write up a summary of the meeting in a doc",
+    "expected": "docs.create",
+    "acceptable": ["docs.update"],
+    "difficulty": "hard",
+    "category": "docs",
+    "notes": "Likely create new document, but update could be acceptable."
+  },
+  {
+    "id": "docs_search_notes",
+    "query": "look for my notes on semantic routing",
+    "expected": "docs.search",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "docs",
+    "notes": "Natural-language search phrasing."
+  },
+  {
+    "id": "docs_create_spec",
+    "query": "make a spec document for the agent benchmark project",
+    "expected": "docs.create",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "docs",
+    "notes": "Create spec intent."
+  },
+  {
+    "id": "docs_update_appendix",
+    "query": "append a risks section to the launch plan doc",
+    "expected": "docs.update",
+    "acceptable": [],
+    "difficulty": "medium",
+    "category": "docs",
+    "notes": "Edit existing doc."
+  },
+  {
+    "id": "docs_search_title_hint",
+    "query": "find the document titled API Migration Notes",
+    "expected": "docs.search",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "docs",
+    "notes": "Title-based search."
+  },
+  {
+    "id": "docs_update_with_patch_language",
+    "query": "edit the roadmap doc and add a section on benchmarks",
+    "expected": "docs.update",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "docs",
+    "notes": "Edit language maps to update."
+  },
+  {
+    "id": "tasks_create_basic",
+    "query": "add a task to renew passport next week",
+    "expected": "tasks.create",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "tasks",
+    "notes": "Create personal task."
+  },
+  {
+    "id": "tasks_complete_basic",
+    "query": "mark buy groceries as done",
+    "expected": "tasks.complete",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "tasks",
+    "notes": "Complete task intent."
+  },
+  {
+    "id": "tasks_list_today",
+    "query": "what tasks do I have today?",
+    "expected": "tasks.list",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "tasks",
+    "notes": "List tasks intent."
+  },
+  {
+    "id": "tasks_create_reminder_language",
+    "query": "remind me to call Mom tomorrow",
+    "expected": "tasks.create",
+    "acceptable": [],
+    "difficulty": "medium",
+    "category": "tasks",
+    "notes": "Reminder phrasing maps to task creation."
+  },
+  {
+    "id": "tasks_search_open_items",
+    "query": "show my open tasks for the launch",
+    "expected": "tasks.list",
+    "acceptable": [],
+    "difficulty": "medium",
+    "category": "tasks",
+    "notes": "List filtered tasks."
+  },
+  {
+    "id": "tasks_finish_item",
+    "query": "complete the task named file taxes",
+    "expected": "tasks.complete",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "tasks",
+    "notes": "Explicit completion action."
+  },
+  {
+    "id": "tasks_add_work_item",
+    "query": "create a task to draft the benchmark report",
+    "expected": "tasks.create",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "tasks",
+    "notes": "Straightforward creation."
+  },
+  {
+    "id": "tasks_list_due_this_week",
+    "query": "what's due this week on my task list?",
+    "expected": "tasks.list",
+    "acceptable": [],
+    "difficulty": "medium",
+    "category": "tasks",
+    "notes": "Time-filtered list request."
+  },
+  {
+    "id": "tasks_create_ambiguous_action",
+    "query": "don't let me forget to send the invoice",
+    "expected": "tasks.create",
+    "acceptable": [],
+    "difficulty": "medium",
+    "category": "tasks",
+    "notes": "Indirect reminder language."
+  },
+  {
+    "id": "tasks_complete_short_query",
+    "query": "done with benchmark writeup",
+    "expected": "tasks.complete",
+    "acceptable": [],
+    "difficulty": "medium",
+    "category": "tasks",
+    "notes": "Fragmentary completion phrasing."
+  },
+  {
+    "id": "contacts_lookup_person",
+    "query": "find John Smith's contact info",
+    "expected": "contacts.lookup",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "contacts",
+    "notes": "Contact lookup."
+  },
+  {
+    "id": "contacts_search_company",
+    "query": "look up Priya from Figma in my contacts",
+    "expected": "contacts.lookup",
+    "acceptable": [],
+    "difficulty": "medium",
+    "category": "contacts",
+    "notes": "Disambiguation by company."
+  },
+  {
+    "id": "contacts_add_new_person",
+    "query": "add a contact for Maya with email maya@example.com",
+    "expected": "contacts.create",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "contacts",
+    "notes": "Create contact intent."
+  },
+  {
+    "id": "contacts_update_phone",
+    "query": "update Alex's phone number in my contacts",
+    "expected": "contacts.update",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "contacts",
+    "notes": "Edit existing contact."
+  },
+  {
+    "id": "contacts_lookup_short",
+    "query": "what's Sam's email?",
+    "expected": "contacts.lookup",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "contacts",
+    "notes": "Simple lookup."
+  },
+  {
+    "id": "contacts_create_business_card_style",
+    "query": "save a new contact for Leo Chen at leo@acme.com",
+    "expected": "contacts.create",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "contacts",
+    "notes": "Natural-language create."
+  },
+  {
+    "id": "contacts_edit_company",
+    "query": "change Nora's company to Anthropic",
+    "expected": "contacts.update",
+    "acceptable": [],
+    "difficulty": "medium",
+    "category": "contacts",
+    "notes": "Specific field update."
+  },
+  {
+    "id": "contacts_lookup_phone_number",
+    "query": "find Ava's phone number",
+    "expected": "contacts.lookup",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "contacts",
+    "notes": "Lookup for phone field."
+  },
+  {
+    "id": "contacts_update_email",
+    "query": "replace Ben's old email with ben@newco.com",
+    "expected": "contacts.update",
+    "acceptable": [],
+    "difficulty": "medium",
+    "category": "contacts",
+    "notes": "Update operation with replacement language."
+  },
+  {
+    "id": "contacts_lookup_with_relationship",
+    "query": "get my sister Emma's contact card",
+    "expected": "contacts.lookup",
+    "acceptable": [],
+    "difficulty": "medium",
+    "category": "contacts",
+    "notes": "Relationship cue, still a lookup."
+  },
+  {
+    "id": "maps_directions_to_airport",
+    "query": "get directions to the airport",
+    "expected": "maps.route",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "maps",
+    "notes": "Routing request."
+  },
+  {
+    "id": "maps_find_coffee_nearby",
+    "query": "find coffee shops nearby",
+    "expected": "maps.search_places",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "maps",
+    "notes": "Place search intent."
+  },
+  {
+    "id": "maps_route_to_address",
+    "query": "route me to 123 Main Street",
+    "expected": "maps.route",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "maps",
+    "notes": "Address navigation."
+  },
+  {
+    "id": "maps_search_restaurants",
+    "query": "show sushi restaurants around me",
+    "expected": "maps.search_places",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "maps",
+    "notes": "Nearby place search."
+  },
+  {
+    "id": "maps_ambiguous_go_to_starbucks",
+    "query": "take me to the nearest Starbucks",
+    "expected": "maps.route",
+    "acceptable": ["maps.search_places"],
+    "difficulty": "hard",
+    "category": "maps",
+    "notes": "Could require search then route; route preferred."
+  },
+  {
+    "id": "maps_search_parks",
+    "query": "find parks in Austin",
+    "expected": "maps.search_places",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "maps",
+    "notes": "Place search with explicit city."
+  },
+  {
+    "id": "maps_drive_to_work",
+    "query": "navigate to work",
+    "expected": "maps.route",
+    "acceptable": [],
+    "difficulty": "medium",
+    "category": "maps",
+    "notes": "Saved-location route intent."
+  },
+  {
+    "id": "maps_search_gas_station",
+    "query": "where's the closest gas station?",
+    "expected": "maps.search_places",
+    "acceptable": ["maps.route"],
+    "difficulty": "medium",
+    "category": "maps",
+    "notes": "Search preferred; routing may be acceptable."
+  },
+  {
+    "id": "maps_get_route_phrase",
+    "query": "how do I get to downtown from here?",
+    "expected": "maps.route",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "maps",
+    "notes": "Directions phrasing."
+  },
+  {
+    "id": "maps_place_lookup_phrase",
+    "query": "look up bookstores near me",
+    "expected": "maps.search_places",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "maps",
+    "notes": "Lookup phrasing for places."
+  },
+  {
+    "id": "files_upload_report",
+    "query": "upload the benchmark report PDF",
+    "expected": "files.upload",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "files",
+    "notes": "Upload intent."
+  },
+  {
+    "id": "files_download_contract",
+    "query": "download the latest contract",
+    "expected": "files.download",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "files",
+    "notes": "Download intent."
+  },
+  {
+    "id": "files_search_by_name",
+    "query": "find the file called roadmap-v2",
+    "expected": "files.search",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "files",
+    "notes": "File search by name."
+  },
+  {
+    "id": "files_search_semantic",
+    "query": "look for the benchmark spreadsheet",
+    "expected": "files.search",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "files",
+    "notes": "Semantic file search."
+  },
+  {
+    "id": "files_upload_short",
+    "query": "send this file up to drive",
+    "expected": "files.upload",
+    "acceptable": [],
+    "difficulty": "medium",
+    "category": "files",
+    "notes": "Indirect upload phrasing."
+  },
+  {
+    "id": "files_download_named_asset",
+    "query": "grab the launch-assets zip",
+    "expected": "files.download",
+    "acceptable": [],
+    "difficulty": "medium",
+    "category": "files",
+    "notes": "Informal download phrasing."
+  },
+  {
+    "id": "files_search_latest_notes",
+    "query": "find my latest meeting notes file",
+    "expected": "files.search",
+    "acceptable": [],
+    "difficulty": "medium",
+    "category": "files",
+    "notes": "Recency-based search intent."
+  },
+  {
+    "id": "files_upload_docx",
+    "query": "upload the design-spec.docx",
+    "expected": "files.upload",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "files",
+    "notes": "File upload by explicit name."
+  },
+  {
+    "id": "files_download_pdf",
+    "query": "download the PDF named semantic-dispatch-kernel",
+    "expected": "files.download",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "files",
+    "notes": "Download by name and type."
+  },
+  {
+    "id": "files_search_contract_language",
+    "query": "search my files for contractor agreement",
+    "expected": "files.search",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "files",
+    "notes": "Search corpus query."
+  },
+  {
+    "id": "slack_send_message",
+    "query": "send a Slack message to #eng saying deploy is live",
+    "expected": "slack.send",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "slack",
+    "notes": "Send message intent."
+  },
+  {
+    "id": "slack_search_discussion",
+    "query": "search Slack for discussion about semantic routing",
+    "expected": "slack.search",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "slack",
+    "notes": "Search workspace intent."
+  },
+  {
+    "id": "slack_post_update",
+    "query": "post in #launch that benchmarks are ready",
+    "expected": "slack.send",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "slack",
+    "notes": "Alternative send phrasing."
+  },
+  {
+    "id": "slack_find_thread",
+    "query": "find the Slack thread about the MCP transport bug",
+    "expected": "slack.search",
+    "acceptable": [],
+    "difficulty": "medium",
+    "category": "slack",
+    "notes": "Thread retrieval."
+  },
+  {
+    "id": "slack_dm_someone",
+    "query": "Slack Priya that the meeting moved to 4",
+    "expected": "slack.send",
+    "acceptable": [],
+    "difficulty": "medium",
+    "category": "slack",
+    "notes": "Verbified brand usage."
+  }
+]

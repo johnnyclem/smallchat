@@ -1,0 +1,37 @@
+{
+  "id": "brave-search",
+  "name": "Brave Search",
+  "transportType": "mcp",
+  "description": "Web and local search using Brave's Search API",
+  "tools": [
+    {
+      "name": "brave_web_search",
+      "description": "Perform a web search using the Brave Search API for general queries, news, articles, and online content",
+      "providerId": "brave-search",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string", "description": "Search query (max 400 chars, 50 words)" },
+          "count": { "type": "number", "description": "Number of results (1-20, default 10)" },
+          "offset": { "type": "number", "description": "Pagination offset (max 9)" }
+        },
+        "required": ["query"]
+      }
+    },
+    {
+      "name": "brave_local_search",
+      "description": "Search for local businesses and places using Brave's Local Search API",
+      "providerId": "brave-search",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string", "description": "Local search query" },
+          "count": { "type": "number", "description": "Number of results (1-20, default 5)" }
+        },
+        "required": ["query"]
+      }
+    }
+  ]
+}

@@ -1,0 +1,53 @@
+{
+  "name": "@smallchat/examples",
+  "version": "0.1.0",
+  "description": "Example MCP server manifests for use with @smallchat/core",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./manifests": {
+      "types": "./dist/manifests.d.ts",
+      "import": "./dist/manifests.js"
+    },
+    "./manifests/*.json": "./manifests/*.json"
+  },
+  "files": [
+    "dist",
+    "manifests",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "smallchat",
+    "mcp",
+    "examples",
+    "manifests",
+    "llm",
+    "tools"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/johnnyclem/smallchat.git",
+    "directory": "packages/examples"
+  },
+  "homepage": "https://smallchat.dev",
+  "author": "Johnny Clem",
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

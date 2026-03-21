@@ -1,0 +1,27 @@
+{
+  "id": "cli/resolve",
+  "title": "resolve",
+  "description": "Tests dispatch resolution against a compiled artifact. Given a natural-language intent, prints the matched tool and confidence score. Useful for verifying that your tool descriptions produce the dispatch behaviour you expect.",
+  "source": "@site/docs/cli/resolve.md",
+  "sourceDirName": "cli",
+  "slug": "/cli/resolve",
+  "permalink": "/docs/cli/resolve",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/johnnyclem/smallchat/tree/main/packages/docs/docs/cli/resolve.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "title": "resolve",
+    "sidebar_label": "resolve"
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "inspect",
+    "permalink": "/docs/cli/inspect"
+  },
+  "next": {
+    "title": "serve",
+    "permalink": "/docs/cli/serve"
+  }
+}

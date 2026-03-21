@@ -1,0 +1,165 @@
+{
+  "/__docusaurus/debug-5ff": {
+    "__comp": "__comp---theme-debug-config-23-a-2ff",
+    "__context": {
+      "plugin": "plugin---docusaurus-debugb-38-ad3"
+    }
+  },
+  "/__docusaurus/debug/config-5ba": {
+    "__comp": "__comp---theme-debug-config-23-a-2ff",
+    "__context": {
+      "plugin": "plugin---docusaurus-debugb-38-ad3"
+    }
+  },
+  "/__docusaurus/debug/content-a2b": {
+    "__comp": "__comp---theme-debug-contentba-8-ce7",
+    "__context": {
+      "plugin": "plugin---docusaurus-debugb-38-ad3"
+    },
+    "__props": "__props---docusaurus-debug-content-3-c-0-be2"
+  },
+  "/__docusaurus/debug/globalData-c3c": {
+    "__comp": "__comp---theme-debug-global-dataede-0fa",
+    "__context": {
+      "plugin": "plugin---docusaurus-debugb-38-ad3"
+    }
+  },
+  "/__docusaurus/debug/metadata-156": {
+    "__comp": "__comp---theme-debug-site-metadata-68-e-3d4",
+    "__context": {
+      "plugin": "plugin---docusaurus-debugb-38-ad3"
+    }
+  },
+  "/__docusaurus/debug/registry-88c": {
+    "__comp": "__comp---theme-debug-registry-679-501",
+    "__context": {
+      "plugin": "plugin---docusaurus-debugb-38-ad3"
+    }
+  },
+  "/__docusaurus/debug/routes-000": {
+    "__comp": "__comp---theme-debug-routes-946-699",
+    "__context": {
+      "plugin": "plugin---docusaurus-debugb-38-ad3"
+    }
+  },
+  "/docs-0ce": {
+    "__comp": "__comp---theme-docs-root-5-e-9-0b6",
+    "__context": {
+      "plugin": "plugin---docsaba-d7c"
+    }
+  },
+  "/docs-169": {
+    "__comp": "__comp---theme-doc-version-roota-7-b-5de",
+    "__props": "__props---docs-005-788"
+  },
+  "/docs-f04": {
+    "__comp": "__comp---theme-doc-roota-94-67a"
+  },
+  "/docs/api/compiler-d76": {
+    "__comp": "__comp---theme-doc-item-178-a40",
+    "content": "content---docs-api-compilerd-48-675"
+  },
+  "/docs/api/dispatch-ba6": {
+    "__comp": "__comp---theme-doc-item-178-a40",
+    "content": "content---docs-api-dispatch-1-c-2-b04"
+  },
+  "/docs/api/mcp-server-7da": {
+    "__comp": "__comp---theme-doc-item-178-a40",
+    "content": "content---docs-api-mcp-serverdb-3-8bc"
+  },
+  "/docs/api/runtime-f1d": {
+    "__comp": "__comp---theme-doc-item-178-a40",
+    "content": "content---docs-api-runtimef-6-f-369"
+  },
+  "/docs/architecture-38d": {
+    "__comp": "__comp---theme-doc-item-178-a40",
+    "content": "content---docs-architecture-528-86f"
+  },
+  "/docs/cli/-8b4": {
+    "__comp": "__comp---theme-doc-item-178-a40",
+    "content": "content---docs-cli-776-349"
+  },
+  "/docs/cli/compile-995": {
+    "__comp": "__comp---theme-doc-item-178-a40",
+    "content": "content---docs-cli-compilef-6-f-22a"
+  },
+  "/docs/cli/inspect-ce2": {
+    "__comp": "__comp---theme-doc-item-178-a40",
+    "content": "content---docs-cli-inspecte-21-6bc"
+  },
+  "/docs/cli/resolve-8b7": {
+    "__comp": "__comp---theme-doc-item-178-a40",
+    "content": "content---docs-cli-resolve-9-ce-489"
+  },
+  "/docs/cli/serve-eac": {
+    "__comp": "__comp---theme-doc-item-178-a40",
+    "content": "content---docs-cli-serveea-8-85c"
+  },
+  "/docs/concepts/-6a4": {
+    "__comp": "__comp---theme-doc-item-178-a40",
+    "content": "content---docs-concepts-c-27-474"
+  },
+  "/docs/concepts/dispatch-5da": {
+    "__comp": "__comp---theme-doc-item-178-a40",
+    "content": "content---docs-concepts-dispatch-045-8df"
+  },
+  "/docs/concepts/overloading-2a8": {
+    "__comp": "__comp---theme-doc-item-178-a40",
+    "content": "content---docs-concepts-overloading-38-a-7dc"
+  },
+  "/docs/concepts/resolution-cache-ec1": {
+    "__comp": "__comp---theme-doc-item-178-a40",
+    "content": "content---docs-concepts-resolution-cache-82-e-fab"
+  },
+  "/docs/concepts/sc-object-e51": {
+    "__comp": "__comp---theme-doc-item-178-a40",
+    "content": "content---docs-concepts-sc-objecte-91-b38"
+  },
+  "/docs/concepts/selector-table-d70": {
+    "__comp": "__comp---theme-doc-item-178-a40",
+    "content": "content---docs-concepts-selector-table-5-b-4-57a"
+  },
+  "/docs/concepts/streaming-3b5": {
+    "__comp": "__comp---theme-doc-item-178-a40",
+    "content": "content---docs-concepts-streaming-57-a-284"
+  },
+  "/docs/concepts/swizzling-d4a": {
+    "__comp": "__comp---theme-doc-item-178-a40",
+    "content": "content---docs-concepts-swizzlingff-8-b9d"
+  },
+  "/docs/concepts/tool-class-4f4": {
+    "__comp": "__comp---theme-doc-item-178-a40",
+    "content": "content---docs-concepts-tool-classd-9-e-2e6"
+  },
+  "/docs/getting-started-565": {
+    "__comp": "__comp---theme-doc-item-178-a40",
+    "content": "content---docs-getting-startedd-58-f94"
+  },
+  "/docs/intro-a6e": {
+    "__comp": "__comp---theme-doc-item-178-a40",
+    "content": "content---docs-intro-0-e-3-be1"
+  },
+  "/docs/manifests/examples-7ab": {
+    "__comp": "__comp---theme-doc-item-178-a40",
+    "content": "content---docs-manifests-examplesa-88-502"
+  },
+  "/docs/manifests/format-945": {
+    "__comp": "__comp---theme-doc-item-178-a40",
+    "content": "content---docs-manifests-formatf-4-e-8d7"
+  },
+  "/docs/what-it-does-49c": {
+    "__comp": "__comp---theme-doc-item-178-a40",
+    "content": "content---docs-what-it-doesaf-4-9be"
+  },
+  "/docs/why-it-matters-854": {
+    "__comp": "__comp---theme-doc-item-178-a40",
+    "content": "content---docs-why-it-matters-79-d-13b"
+  },
+  "/-e5f": {
+    "__comp": "__comp---site-src-pages-index-tsx-1-df-d3e",
+    "__context": {
+      "plugin": "plugin---a-74-9d6"
+    },
+    "config": "config---5-e-9-4f3"
+  }
+}

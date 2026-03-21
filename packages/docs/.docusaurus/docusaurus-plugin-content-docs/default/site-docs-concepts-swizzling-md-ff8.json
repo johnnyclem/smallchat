@@ -1,0 +1,27 @@
+{
+  "id": "concepts/swizzling",
+  "title": "Method Swizzling",
+  "description": "Method swizzling replaces a tool implementation at runtime — analogous to method swizzling in Objective-C. The original implementation can be preserved and optionally called from the replacement.",
+  "source": "@site/docs/concepts/swizzling.md",
+  "sourceDirName": "concepts",
+  "slug": "/concepts/swizzling",
+  "permalink": "/docs/concepts/swizzling",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/johnnyclem/smallchat/tree/main/packages/docs/docs/concepts/swizzling.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "title": "Method Swizzling",
+    "sidebar_label": "Method Swizzling"
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "Streaming",
+    "permalink": "/docs/concepts/streaming"
+  },
+  "next": {
+    "title": "Overview",
+    "permalink": "/docs/cli/"
+  }
+}

@@ -1,0 +1,94 @@
+{
+  "id": "linear",
+  "name": "Linear",
+  "transportType": "mcp",
+  "description": "Issue tracking and project management with Linear",
+  "tools": [
+    {
+      "name": "list_issues",
+      "description": "List issues with optional filters",
+      "providerId": "linear",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "teamId": { "type": "string", "description": "Filter by team ID" },
+          "assigneeId": { "type": "string", "description": "Filter by assignee ID" },
+          "status": { "type": "string", "description": "Filter by status name" },
+          "limit": { "type": "number", "description": "Maximum number of results" }
+        }
+      }
+    },
+    {
+      "name": "create_issue",
+      "description": "Create a new issue in Linear",
+      "providerId": "linear",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "title": { "type": "string", "description": "Issue title" },
+          "description": { "type": "string", "description": "Issue description in markdown" },
+          "teamId": { "type": "string", "description": "Team ID to create the issue in" },
+          "assigneeId": { "type": "string", "description": "Assignee user ID" },
+          "priority": { "type": "number", "description": "Priority (0=none, 1=urgent, 2=high, 3=medium, 4=low)" },
+          "labelIds": { "type": "array", "items": { "type": "string" }, "description": "Label IDs to apply" }
+        },
+        "required": ["title", "teamId"]
+      }
+    },
+    {
+      "name": "update_issue",
+      "description": "Update an existing issue",
+      "providerId": "linear",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "issueId": { "type": "string", "description": "Issue ID to update" },
+          "title": { "type": "string", "description": "New title" },
+          "description": { "type": "string", "description": "New description" },
+          "status": { "type": "string", "description": "New status name" },
+          "assigneeId": { "type": "string", "description": "New assignee user ID" },
+          "priority": { "type": "number", "description": "New priority level" }
+        },
+        "required": ["issueId"]
+      }
+    },
+    {
+      "name": "search_issues",
+      "description": "Search for issues by text query",
+      "providerId": "linear",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string", "description": "Search query" }
+        },
+        "required": ["query"]
+      }
+    },
+    {
+      "name": "list_teams",
+      "description": "List all teams in the workspace",
+      "providerId": "linear",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "list_projects",
+      "description": "List projects with optional team filter",
+      "providerId": "linear",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "teamId": { "type": "string", "description": "Filter by team ID" }
+        }
+      }
+    }
+  ]
+}

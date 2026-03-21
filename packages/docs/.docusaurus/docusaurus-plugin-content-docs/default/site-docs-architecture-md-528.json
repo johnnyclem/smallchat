@@ -1,0 +1,23 @@
+{
+  "id": "architecture",
+  "title": "Architecture",
+  "description": "\"The big idea is messaging.\" — Alan Kay",
+  "source": "@site/docs/architecture.md",
+  "sourceDirName": ".",
+  "slug": "/architecture",
+  "permalink": "/docs/architecture",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/johnnyclem/smallchat/tree/main/packages/docs/docs/architecture.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "title": "Architecture",
+    "sidebar_label": "Architecture"
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "Example Manifests",
+    "permalink": "/docs/manifests/examples"
+  }
+}
