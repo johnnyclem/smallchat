@@ -5,6 +5,7 @@ import { ToolClass } from '../core/tool-class.js';
 import { OverloadTable } from '../core/overload-table.js';
 import { DispatchContext, toolkit_dispatch, smallchat_dispatchStream } from './dispatch.js';
 import type { SCMethodSignature } from '../core/sc-types.js';
+import { DispatchBuilder } from './dispatch-builder.js';
 
 /**
  * ToolRuntime — the top-level runtime that manages everything.
@@ -121,10 +122,26 @@ export class ToolRuntime {
   }
 
   /**
-   * The main entry point — dispatch an intent to the resolved tool.
+   * Fluent dispatch — returns a DispatchBuilder for chaining .withArgs().exec()/.stream().
+   *
+   * @example
+   *   // Fluent (new):
+   *   const result = await runtime.dispatch("fetch url").withArgs({ url }).exec();
+   *   // for await (const tok of runtime.dispatch("summarise").withArgs({ url }).inferStream()) ...
+   *
+   *   // Direct (legacy):
+   *   const result = await runtime.dispatch("fetch url", { url });
    */
-  async dispatch(intent: string, args?: Record<string, unknown>): Promise<ToolResult> {
-    return toolkit_dispatch(this.context, intent, args);
+  dispatch(intent: string): DispatchBuilder;
+  dispatch(intent: string, args: Record<string, unknown>): Promise<ToolResult>;
+  dispatch(
+    intent: string,
+    args?: Record<string, unknown>,
+  ): DispatchBuilder | Promise<ToolResult> {
+    if (args !== undefined) {
+      return toolkit_dispatch(this.context, intent, args);
+    }
+    return new DispatchBuilder(this.context, intent);
   }
 
   // ---------------------------------------------------------------------------
