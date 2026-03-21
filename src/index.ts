@@ -88,6 +88,7 @@ export { DispatchContext, UnrecognizedIntent, toolkit_dispatch, smallchat_dispat
 export type { FallbackStep, FallbackChainResult } from './runtime/dispatch.js';
 export { ToolRuntime } from './runtime/runtime.js';
 export type { RuntimeOptions } from './runtime/runtime.js';
+export { DispatchBuilder } from './runtime/dispatch-builder.js';
 
 // Compiler
 export { ToolCompiler } from './compiler/compiler.js';
@@ -131,3 +132,258 @@ export { validateServerConfig, formatValidationErrors } from './config/validator
 export type { ValidationError as ConfigValidationError, ValidationResult as ConfigValidationResult } from './config/validator.js';
 export { parseDotenv, expandEnvVars, expandObject, loadEnv, isSecretKey, redactSecrets } from './config/secrets.js';
 export type { LoadEnvOptions } from './config/secrets.js';
+// MCP Compliance (full MCP 2025-03-26 spec)
+export {
+  negotiateProtocolVersion,
+  validateJsonRpcRequest,
+  requireSession,
+  paginate,
+  buildProgressNotification,
+  buildCancellationNotification,
+  buildLogNotification,
+  buildRootsChangedNotification,
+  buildToolsChangedNotification,
+  buildResourcesChangedNotification,
+  buildPromptsChangedNotification,
+  mcpError,
+  MCPErrorCode,
+  MCP_PROTOCOL_VERSIONS,
+  LATEST_MCP_VERSION,
+} from './mcp/compliance.js';
+export type {
+  MCPProtocolVersion,
+  MCPClientCapabilities,
+  MCPServerCapabilities,
+  MCPLogLevel,
+  MCPLogNotification,
+  MCPRoot,
+  MCPRootsListResult,
+  MCPSamplingMessage,
+  MCPCreateMessageRequest,
+  MCPCreateMessageResult,
+  ProgressToken,
+  ProgressNotification,
+  CancellationNotification,
+  PaginationParams,
+  PaginatedResult,
+} from './mcp/compliance.js';
+
+// MCP Client Registry
+export { MCPClientRegistry, mcpClientRegistry } from './mcp/client-registry.js';
+export type { MCPClientEntry, MCPClientConfig, MCPClientAuth, AuthType } from './mcp/client-registry.js';
+
+// ---------------------------------------------------------------------------
+// Integrations
+// ---------------------------------------------------------------------------
+
+// LangChain
+export { SmallChatTool, SmallChatToolkit, SmallChatDispatchTool } from './integrations/langchain/index.js';
+export type { LangChainToolFields, LangChainSchema, LangChainToolCallResult, LangChainToolCall } from './integrations/langchain/index.js';
+
+// Semantic Kernel
+export {
+  SmallChatKernelFunction,
+  SmallChatPlugin as SmallChatSKPlugin,
+  SmallChatDispatchPlugin,
+  registerSmallChatPlugin,
+  createSemanticKernelPlugins,
+} from './integrations/semantic-kernel/index.js';
+export type {
+  SKKernelFunction,
+  SKKernelPlugin,
+  SKKernelFunctionMetadata,
+  SKParameterMetadata,
+  SKFunctionResult,
+} from './integrations/semantic-kernel/index.js';
+
+// OpenAI
+export {
+  toOpenAIFunctionTool,
+  toOpenAIAssistantTools,
+  toOpenAIChatTools,
+  handleAssistantToolCall,
+  diffAssistantTools,
+} from './integrations/openai/assistant-adapter.js';
+export type {
+  OpenAIFunctionDefinition,
+  OpenAIAssistantFunctionTool,
+  OpenAIAssistantTool,
+  OpenAIToolCall,
+  OpenAIToolOutput,
+  OpenAISubmitToolOutputs,
+  OpenAIChatTool,
+} from './integrations/openai/assistant-adapter.js';
+
+export {
+  dispatchToOpenAIStream,
+  dispatchToOpenAICompletion,
+  chatRequestToDispatch,
+  createOpenAIHandler,
+} from './integrations/openai/streaming.js';
+export type {
+  OpenAIChatCompletionChunk,
+  OpenAIChatCompletion,
+  OpenAIChatRequest,
+  OpenAIChatMessage,
+  OpenAIStreamOptions,
+} from './integrations/openai/streaming.js';
+
+// Anthropic
+export {
+  toAnthropicTool,
+  toAnthropicTools,
+  handleAnthropicToolUse,
+  buildAnthropicToolResultMessage,
+  dispatchToAnthropicStream,
+} from './integrations/anthropic/adapter.js';
+export type {
+  AnthropicTool,
+  AnthropicInputSchema,
+  AnthropicToolUseBlock,
+  AnthropicToolResultBlock,
+  AnthropicContentBlock,
+  AnthropicMessage,
+} from './integrations/anthropic/adapter.js';
+
+// Vercel AI SDK
+export {
+  toVercelAITools,
+  impToVercelAITool,
+  createSmallChatProvider,
+} from './integrations/vercel-ai/index.js';
+export type {
+  VercelAITool,
+  VercelAITools,
+  VercelAISchema,
+  LanguageModelV1,
+  LanguageModelV1CallOptions,
+  LanguageModelV1StreamPart,
+} from './integrations/vercel-ai/index.js';
+
+// LlamaIndex
+export {
+  SmallChatFunctionTool,
+  SmallChatDispatchFunctionTool,
+  SmallChatToolset,
+  toLlamaIndexTools,
+} from './integrations/llamaindex/index.js';
+export type {
+  LlamaIndexBaseTool,
+  LlamaIndexToolMetadata,
+  LlamaIndexToolOutput,
+} from './integrations/llamaindex/index.js';
+
+// Zapier
+export { createSmallChatZapierApp, createLocalDispatchAction } from './integrations/zapier/index.js';
+export type {
+  ZapierApp,
+  ZapierAction,
+  ZapierTrigger,
+  ZapierBundle,
+  ZapierAppOptions,
+} from './integrations/zapier/index.js';
+
+// n8n
+export {
+  SMALLCHAT_NODE_DESCRIPTION,
+  SMALLCHAT_CREDENTIAL_DEFINITION,
+  executeSmallchatNode,
+  createN8nDispatchEndpoints,
+} from './integrations/n8n/index.js';
+export type {
+  N8nNodeDescription,
+  N8nNodeProperty,
+  N8nNodeExecuteContext,
+  N8nNodeExecuteResult,
+} from './integrations/n8n/index.js';
+
+// ---------------------------------------------------------------------------
+// Transports
+// ---------------------------------------------------------------------------
+
+// GraphQL Transport
+export { GraphQLTransport, createGraphQLToolIMP } from './transports/graphql.js';
+export type {
+  GraphQLTransportOptions,
+  GraphQLOperation,
+  GraphQLResponse,
+  GraphQLToolDefinition,
+} from './transports/graphql.js';
+
+// SQL Transport
+export { SQLTransport, BetterSqlite3Adapter, HttpSqlAdapter, createSQLToolIMPs } from './transports/sql.js';
+export type { SQLTransportOptions, SqlAdapter, SqlQueryResult, SqlExecuteOptions } from './transports/sql.js';
+
+// Redis Transport
+export { RedisTransport, UpstashRestAdapter, createRedisToolIMPs } from './transports/redis.js';
+export type { RedisTransportOptions, RedisAdapter, UpstashConfig } from './transports/redis.js';
+
+// AWS Lambda Transport
+export {
+  AWSLambdaTransport,
+  HttpLambdaAdapter,
+  LambdaFunctionUrlAdapter,
+  createLambdaToolIMP,
+} from './transports/aws-lambda.js';
+export type {
+  AWSLambdaTransportOptions,
+  LambdaAdapter,
+  LambdaToolDefinition,
+  AWSCredentials,
+} from './transports/aws-lambda.js';
+
+// Webhook Transport
+export {
+  WebhookRouter,
+  createGitHubWebhookReceiver,
+  createStripeWebhookReceiver,
+  createSlackWebhookReceiver,
+} from './transports/webhook.js';
+export type {
+  WebhookReceiverDef,
+  WebhookHandler,
+  WebhookEventMeta,
+  WebhookRouterOptions,
+  WebhookDelivery,
+  WebhookIncomingRequest,
+  WebhookResponse,
+} from './transports/webhook.js';
+
+// ---------------------------------------------------------------------------
+// Plugin System
+// ---------------------------------------------------------------------------
+
+export {
+  SmallChatPlugin,
+  PluginRegistry,
+  defineTransportPlugin,
+  defineProviderPlugin,
+  defineEmbedderPlugin,
+  defineMiddlewarePlugin,
+} from './plugins/index.js';
+export type {
+  PluginMetadata,
+  PluginContext,
+  TransportHandler,
+  DispatchMiddleware,
+  PluginLogEntry,
+} from './plugins/index.js';
+
+// ---------------------------------------------------------------------------
+// Federation
+// ---------------------------------------------------------------------------
+
+export {
+  FederationNode,
+  FederationPeer,
+  FEDERATION_PROTOCOL_VERSION,
+} from './federation/index.js';
+export type {
+  FederationNodeInfo,
+  FederationCapability,
+  FederationDispatchRequest,
+  FederationDispatchResponse,
+  FederationPeerConfig,
+  FederationNodeOptions,
+  FederationHttpHandlers,
+} from './federation/index.js';
