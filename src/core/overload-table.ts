@@ -43,9 +43,19 @@ export class OverloadAmbiguityError extends Error {
     const names = candidates
       .map(c => c.originalToolName ?? c.signature.signatureKey)
       .join(', ');
+    const argTypes = args.map(a => typeof a).join(', ');
+    const candidateDetails = candidates
+      .map(c => `  - ${c.originalToolName ?? c.signature.signatureKey}: ${c.signature.signatureKey}`)
+      .join('\n');
     super(
       `Ambiguous overload for "${selectorCanonical}": ` +
-      `${candidates.length} candidates match equally [${names}]`,
+      `${candidates.length} candidates match equally [${names}]\n` +
+      `\nArgument types received: (${argTypes})\n` +
+      `Matching candidates:\n${candidateDetails}\n` +
+      `\nTo fix this:\n` +
+      `  1. Make argument types more specific to distinguish overloads\n` +
+      `  2. Use named arguments with runtime.intent('...').withArgs({...}) for explicit dispatch\n` +
+      `  3. Remove one of the ambiguous overloads if they are duplicates`,
     );
     this.name = 'OverloadAmbiguityError';
     this.candidates = candidates;

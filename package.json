@@ -5,6 +5,29 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./runtime": {
+      "types": "./dist/runtime/runtime.d.ts",
+      "import": "./dist/runtime/runtime.js"
+    },
+    "./compiler": {
+      "types": "./dist/compiler/compiler.d.ts",
+      "import": "./dist/compiler/compiler.js"
+    },
+    "./mcp": {
+      "types": "./dist/mcp/index.d.ts",
+      "import": "./dist/mcp/index.js"
+    },
+    "./embedding": {
+      "types": "./dist/embedding/local-embedder.d.ts",
+      "import": "./dist/embedding/local-embedder.js"
+    }
+  },
   "bin": {
     "smallchat": "dist/cli/index.js"
   },
@@ -12,7 +35,8 @@
     "dist",
     "models",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "build": "tsc",
@@ -20,6 +44,7 @@
     "test:watch": "vitest",
     "lint": "tsc --noEmit",
     "dev": "tsc --watch",
+    "docs:api": "typedoc --entryPoints src/index.ts --out docs/api --plugin typedoc-plugin-markdown",
     "prepublishOnly": "npm run build"
   },
   "keywords": [

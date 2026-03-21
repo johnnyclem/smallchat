@@ -1,0 +1,68 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "smallchat Manifest",
+  "description": "Schema for smallchat provider manifest files",
+  "type": "object",
+  "required": ["id", "name", "tools", "transportType"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Unique provider identifier"
+    },
+    "name": {
+      "type": "string",
+      "description": "Human-readable provider name"
+    },
+    "version": {
+      "type": "string",
+      "description": "Provider version string"
+    },
+    "transportType": {
+      "type": "string",
+      "enum": ["mcp", "rest", "local", "grpc"],
+      "description": "Transport mechanism for this provider"
+    },
+    "endpoint": {
+      "type": "string",
+      "description": "Endpoint URL for remote transports"
+    },
+    "tools": {
+      "type": "array",
+      "description": "Tool definitions",
+      "items": {
+        "type": "object",
+        "required": ["name", "description", "inputSchema"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Tool name"
+          },
+          "description": {
+            "type": "string",
+            "description": "What this tool does"
+          },
+          "providerId": {
+            "type": "string",
+            "description": "Provider that owns this tool"
+          },
+          "transportType": {
+            "type": "string",
+            "enum": ["mcp", "rest", "local", "grpc"]
+          },
+          "inputSchema": {
+            "type": "object",
+            "description": "JSON Schema for the tool's input arguments",
+            "properties": {
+              "type": { "type": "string" },
+              "properties": { "type": "object" },
+              "required": {
+                "type": "array",
+                "items": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
