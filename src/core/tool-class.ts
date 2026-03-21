@@ -1,7 +1,8 @@
-import type { ToolIMP, ToolMethod, ToolProtocol, ToolSchema, ToolSelector, ToolResult, TransportType, ArgumentConstraints, ValidationResult } from './types.js';
+import type { ToolIMP, ToolMethod, ToolProtocol, ToolSchema, ToolSelector, ToolResult, TransportType, ArgumentConstraints, ValidationResult, InferenceDelta } from './types.js';
 import { OverloadTable } from './overload-table.js';
 import type { OverloadResolutionResult } from './overload-table.js';
 import type { SCMethodSignature } from './sc-types.js';
+import { MCPTransport, getTransport, type TransportOptions } from '../mcp/transport.js';
 
 /**
  * ToolClass — a group of related tools from one provider.
@@ -156,7 +157,13 @@ export class ToolProxy implements ToolIMP {
   schemaLoader: () => Promise<ToolSchema>;
   constraints: ArgumentConstraints;
 
+  /** Optional endpoint for remote transports */
+  endpoint?: string;
+  /** Optional headers for remote transports */
+  headers?: Record<string, string>;
+
   private realized = false;
+  private transport: MCPTransport | null = null;
 
   constructor(
     providerId: string,
@@ -164,12 +171,15 @@ export class ToolProxy implements ToolIMP {
     transportType: TransportType,
     schemaLoader: () => Promise<ToolSchema>,
     constraints?: ArgumentConstraints,
+    transportOptions?: { endpoint?: string; headers?: Record<string, string> },
   ) {
     this.providerId = providerId;
     this.toolName = toolName;
     this.transportType = transportType;
     this.schemaLoader = schemaLoader;
     this.constraints = constraints ?? createPassthroughConstraints();
+    this.endpoint = transportOptions?.endpoint;
+    this.headers = transportOptions?.headers;
   }
 
   /** Load full schema on first use */
@@ -177,6 +187,18 @@ export class ToolProxy implements ToolIMP {
     if (this.realized) return;
     this.schema = await this.schemaLoader();
     this.realized = true;
+  }
+
+  /** Get or create the transport instance */
+  private getTransport(): MCPTransport {
+    if (!this.transport) {
+      this.transport = getTransport(this.providerId, {
+        transportType: this.transportType,
+        endpoint: this.endpoint,
+        headers: this.headers,
+      });
+    }
+    return this.transport;
   }
 
   async execute(args: Record<string, unknown>): Promise<ToolResult> {
@@ -191,13 +213,44 @@ export class ToolProxy implements ToolIMP {
       };
     }
 
-    // In v0.0.1, actual transport execution is stubbed.
-    // Real implementations will route through MCP/REST/gRPC transports.
-    return {
-      content: null,
-      isError: true,
-      metadata: { error: `Transport '${this.transportType}' not yet implemented for ${this.toolName}` },
-    };
+    // Route through the real MCP transport engine
+    const transport = this.getTransport();
+    return transport.execute(this.toolName, args);
+  }
+
+  /**
+   * Chunk-level streaming execution.
+   * Falls back to single-shot if the transport doesn't support streaming.
+   */
+  async *executeStream(args: Record<string, unknown>): AsyncGenerator<ToolResult> {
+    await this.realize();
+
+    const validation = this.constraints.validate(args);
+    if (!validation.valid) {
+      yield {
+        content: { errors: validation.errors },
+        isError: true,
+        metadata: { validationErrors: validation.errors },
+      };
+      return;
+    }
+
+    const transport = this.getTransport();
+    yield* transport.executeStream(this.toolName, args);
+  }
+
+  /**
+   * Token-level inference streaming.
+   * Only supported by MCP transport — other transports return nothing.
+   */
+  async *executeInference(args: Record<string, unknown>): AsyncGenerator<InferenceDelta> {
+    await this.realize();
+
+    const validation = this.constraints.validate(args);
+    if (!validation.valid) return;
+
+    const transport = this.getTransport();
+    yield* transport.executeInference(this.toolName, args);
   }
 }
 
