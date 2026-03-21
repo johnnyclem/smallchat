@@ -119,3 +119,71 @@ export { ResourceRegistry, ResourceNotFoundError } from './mcp/resources.js';
 export type { MCPResource, MCPResourceContent, MCPResourceTemplate, ResourceChangeEvent, ResourceHandler } from './mcp/resources.js';
 export { PromptRegistry, PromptNotFoundError } from './mcp/prompts.js';
 export type { MCPPrompt, MCPPromptArgument, MCPPromptMessage, MCPPromptContent, PromptHandler, StaticPrompt } from './mcp/prompts.js';
+
+// Transport Layer — ITransport interface and implementations
+export type {
+  ITransport,
+  TransportKind,
+  TransportInput,
+  TransportOutput,
+  TransportMetadata,
+  HttpMethod,
+  FileUpload,
+  AuthStrategy,
+  BearerTokenConfig,
+  OAuth2ClientCredentialsConfig,
+  HttpTransportConfig,
+  HttpTransportRoute,
+  GeneratedHttpConfig,
+  McpStdioTransportConfig,
+  McpSseTransportConfig,
+  LocalTransportConfig,
+  LocalHandler,
+  SandboxConfig,
+  RetryConfig,
+  CircuitBreakerConfig,
+} from './transport/index.js';
+
+export {
+  // Error types
+  ToolExecutionError,
+  TransportTimeoutError,
+  CircuitOpenError,
+  SandboxError,
+  httpStatusToError,
+  jsonRpcErrorToError,
+  errorToOutput,
+  isRetryable,
+  // Auth strategies
+  BearerTokenAuth,
+  OAuth2ClientCredentialsAuth,
+  // Transport implementations
+  HttpTransport,
+  McpStdioTransport,
+  McpSseTransport,
+  LocalTransport,
+  // Middleware
+  withRetry,
+  CircuitBreaker,
+  withTimeout,
+  // Serialization
+  serializeInput,
+  parseOutput,
+  // Streaming
+  parseSSEStream as parseTransportSSEStream,
+  parseNDJSONStream,
+  parseTextStream,
+  getStreamParser,
+  // File uploads
+  buildMultipartBody,
+  requiresMultipart,
+  // Connection pooling
+  ConnectionPool,
+  // Generators
+  generateFromOpenAPI,
+  openAPIToToolDefinitions,
+  fetchOpenAPISpec,
+  importPostmanCollection,
+  postmanToToolDefinitions,
+  parsePostmanCollection,
+} from './transport/index.js';
