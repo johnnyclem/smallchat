@@ -1,5 +1,5 @@
 import { Command } from 'commander';
-import { readFileSync, readdirSync, writeFileSync, statSync, watch } from 'node:fs';
+import { readFileSync, readdirSync, writeFileSync, statSync, existsSync, watch } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { Embedder, VectorIndex, ProviderManifest } from '../../core/types.js';
 import { ToolCompiler } from '../../compiler/compiler.js';
@@ -7,6 +7,118 @@ import { LocalEmbedder } from '../../embedding/local-embedder.js';
 import { MemoryVectorIndex } from '../../embedding/memory-vector-index.js';
 import { ONNXEmbedder } from '../../embedding/onnx-embedder.js';
 import { SqliteVectorIndex } from '../../embedding/sqlite-vector-index.js';
+import {
+  isMcpConfigFile,
+  isMcpServerProject,
+  introspectMcpConfigFile,
+  introspectLocalMcpServer,
+} from '../../mcp/client.js';
+
+// ---------------------------------------------------------------------------
+// Source type detection
+// ---------------------------------------------------------------------------
+
+type SourceType = 'directory' | 'mcp-config' | 'auto-detect';
+
+function detectSourceType(sourcePath: string | undefined): { type: SourceType; path: string } {
+  // No source given → auto-detect from cwd
+  if (!sourcePath) {
+    return { type: 'auto-detect', path: process.cwd() };
+  }
+
+  const resolved = resolve(sourcePath);
+
+  // Check if it's a file
+  if (existsSync(resolved) && statSync(resolved).isFile()) {
+    try {
+      const content = JSON.parse(readFileSync(resolved, 'utf-8'));
+      if (isMcpConfigFile(content)) {
+        return { type: 'mcp-config', path: resolved };
+      }
+    } catch {
+      // Not valid JSON, treat as directory
+    }
+    // Single file but not an MCP config — treat as directory containing it
+    return { type: 'directory', path: resolved };
+  }
+
+  // Check if it's a directory
+  if (existsSync(resolved) && statSync(resolved).isDirectory()) {
+    return { type: 'directory', path: resolved };
+  }
+
+  // Path doesn't exist yet — assume directory (will error later)
+  return { type: 'directory', path: resolved };
+}
+
+// ---------------------------------------------------------------------------
+// Manifest resolution
+// ---------------------------------------------------------------------------
+
+async function resolveManifests(
+  source: { type: SourceType; path: string },
+  options?: { timeoutMs?: number },
+): Promise<ProviderManifest[]> {
+  switch (source.type) {
+    case 'mcp-config': {
+      console.log(`Introspecting MCP servers from ${source.path}...\n`);
+      return introspectMcpConfigFile(source.path, options);
+    }
+
+    case 'auto-detect': {
+      console.log(`Auto-detecting MCP server project in ${source.path}...\n`);
+
+      if (!isMcpServerProject(source.path)) {
+        // Fall back to looking for manifest files in cwd
+        const files = findManifestFiles(source.path);
+        if (files.length > 0) {
+          console.log(`Found ${files.length} manifest file(s) in ${source.path}`);
+          return loadManifestFiles(files);
+        }
+
+        console.error('No MCP server project detected and no manifest files found.');
+        console.error('');
+        console.error('Usage:');
+        console.error('  smallchat compile --source ./manifests       # Directory of manifest JSON files');
+        console.error('  smallchat compile --source ~/.mcp.json       # MCP config file (mcpServers)');
+        console.error('  cd my-mcp-server && smallchat compile        # Auto-detect from MCP server repo');
+        return [];
+      }
+
+      const manifest = await introspectLocalMcpServer(source.path, options);
+      return manifest ? [manifest] : [];
+    }
+
+    case 'directory': {
+      console.log(`Parsing manifests from ${source.path}...`);
+      const files = findManifestFiles(source.path);
+      return loadManifestFiles(files);
+    }
+  }
+}
+
+function loadManifestFiles(files: string[]): ProviderManifest[] {
+  const manifests: ProviderManifest[] = [];
+  for (const file of files) {
+    try {
+      const content = readFileSync(file, 'utf-8');
+      const manifest = JSON.parse(content) as ProviderManifest;
+      if (!Array.isArray(manifest.tools)) {
+        // Not a valid manifest (e.g. config file, metadata), skip silently
+        continue;
+      }
+      manifests.push(manifest);
+      console.log(`  ${manifest.id ?? manifest.name}: ${manifest.tools.length} tools`);
+    } catch (e) {
+      console.error(`  Warning: Could not parse ${file}: ${(e as Error).message}`);
+    }
+  }
+  return manifests;
+}
+
+// ---------------------------------------------------------------------------
+// Embedder / index factories
+// ---------------------------------------------------------------------------
 
 async function createEmbedder(type: string): Promise<Embedder> {
   if (type === 'onnx') {
@@ -29,28 +141,16 @@ function createVectorIndex(type: string, dbPath: string): VectorIndex {
   return new MemoryVectorIndex();
 }
 
+// ---------------------------------------------------------------------------
+// Core compile
+// ---------------------------------------------------------------------------
+
 async function runCompile(
-  sourcePath: string,
+  manifests: ProviderManifest[],
   outputPath: string,
   embedderType: string,
   dbPath: string,
 ): Promise<boolean> {
-  console.log(`Parsing manifests from ${sourcePath}...`);
-
-  const manifests: ProviderManifest[] = [];
-  const files = findManifestFiles(sourcePath);
-
-  for (const file of files) {
-    try {
-      const content = readFileSync(file, 'utf-8');
-      const manifest = JSON.parse(content) as ProviderManifest;
-      manifests.push(manifest);
-      console.log(`  ${manifest.id ?? manifest.name}: ${manifest.tools.length} tools`);
-    } catch (e) {
-      console.error(`  Warning: Could not parse ${file}: ${(e as Error).message}`);
-    }
-  }
-
   if (manifests.length === 0) {
     console.error('No valid manifests found.');
     return false;
@@ -97,28 +197,54 @@ async function runCompile(
   console.log(`  - ${result.toolCount} tools`);
   console.log(`  - ${result.dispatchTables.size} providers`);
 
+  // Write manifest files for MCP config / auto-detect sources
+  const manifestDir = outputPath.replace(/\.json$/, '.manifests');
+  if (manifests.some(m => !findManifestFiles('.').some(f => {
+    try { return JSON.parse(readFileSync(f, 'utf-8')).id === m.id; } catch { return false; }
+  }))) {
+    // These manifests were discovered via introspection — save them
+    const { mkdirSync } = await import('node:fs');
+    try {
+      mkdirSync(manifestDir, { recursive: true });
+      for (const m of manifests) {
+        const manifestPath = join(manifestDir, `${m.id}-manifest.json`);
+        writeFileSync(manifestPath, JSON.stringify(m, null, 2));
+      }
+      console.log(`\nManifests saved: ${manifestDir}/`);
+    } catch {
+      // Non-critical, skip
+    }
+  }
+
   const headerPath = outputPath.replace(/\.json$/, '.header.txt');
   const header = generateHeader(result);
   writeFileSync(headerPath, header);
-  console.log(`\nHeader file: ${headerPath} (${header.split(/\s+/).length} tokens approx)`);
+  console.log(`Header file: ${headerPath} (${header.split(/\s+/).length} tokens approx)`);
 
   return true;
 }
 
+// ---------------------------------------------------------------------------
+// Command definition
+// ---------------------------------------------------------------------------
+
 export const compileCommand = new Command('compile')
-  .description('Compile tool definitions from MCP server manifests')
-  .requiredOption('-s, --source <path>', 'Source directory containing manifest JSON files')
+  .description('Compile tool definitions from MCP server manifests, config files, or auto-detect')
+  .option('-s, --source [path]', 'Source: directory of manifests, MCP config file, or omit to auto-detect')
   .option('-o, --output <path>', 'Output file path', 'tools.toolkit.json')
-  .option('-w, --watch', 'Watch source directory and recompile on changes')
+  .option('-w, --watch', 'Watch source and recompile on changes')
   .option('-e, --embedder <type>', 'Embedder to use: onnx (default) or local', 'onnx')
   .option('--db-path <path>', 'Path to sqlite-vec database', 'smallchat.db')
+  .option('--timeout <ms>', 'Timeout for MCP server introspection (ms)', '30000')
   .action(async (options) => {
-    const sourcePath = resolve(options.source);
+    const source = detectSourceType(options.source);
     const outputPath = resolve(options.output);
     const embedderType = options.embedder;
     const dbPath = resolve(options.dbPath);
+    const timeoutMs = parseInt(options.timeout, 10);
 
-    const ok = await runCompile(sourcePath, outputPath, embedderType, dbPath);
+    const manifests = await resolveManifests(source, { timeoutMs });
+    const ok = await runCompile(manifests, outputPath, embedderType, dbPath);
 
     if (!options.watch) {
       if (!ok) process.exit(1);
@@ -129,21 +255,27 @@ export const compileCommand = new Command('compile')
       console.log('\nInitial compile failed, watching for changes...');
     }
 
-    console.log(`\nWatching ${sourcePath} for changes...`);
+    const watchPath = source.path;
+    console.log(`\nWatching ${watchPath} for changes...`);
 
     let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
-    watch(sourcePath, { recursive: true }, (_event, filename) => {
-      if (!filename?.endsWith('.json')) return;
+    watch(watchPath, { recursive: true }, (_event, filename) => {
+      if (!filename?.endsWith('.json') && !filename?.endsWith('.ts')) return;
 
       if (debounceTimer) clearTimeout(debounceTimer);
       debounceTimer = setTimeout(async () => {
         console.log(`\n--- Recompiling (${filename} changed) ---\n`);
-        await runCompile(sourcePath, outputPath, embedderType, dbPath);
-        console.log(`\nWatching ${sourcePath} for changes...`);
+        const newManifests = await resolveManifests(source, { timeoutMs });
+        await runCompile(newManifests, outputPath, embedderType, dbPath);
+        console.log(`\nWatching ${watchPath} for changes...`);
       }, 200);
     });
   });
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 function findManifestFiles(dir: string): string[] {
   const files: string[] = [];
@@ -170,7 +302,6 @@ function serializeResult(result: import('../../core/types.js').CompilationResult
       canonical: sel.canonical,
       parts: sel.parts,
       arity: sel.arity,
-      // Vector stored as array for JSON
       vector: Array.from(sel.vector),
     };
   }

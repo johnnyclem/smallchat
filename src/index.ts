@@ -102,6 +102,10 @@ export { ONNXEmbedder } from './embedding/onnx-embedder.js';
 export type { ONNXEmbedderOptions } from './embedding/onnx-embedder.js';
 export { SqliteVectorIndex } from './embedding/sqlite-vector-index.js';
 
+// MCP Client — stdio introspection
+export { introspectMcpServer, introspectMcpConfigFile, introspectLocalMcpServer, isMcpConfigFile, isMcpServerProject } from './mcp/client.js';
+export type { McpServerConfig, McpConfigFile, IntrospectionResult } from './mcp/client.js';
+
 // MCP Server & Transport Engine
 export { MCPServer } from './mcp/server.js';
 export type { MCPServerConfig } from './mcp/server.js';

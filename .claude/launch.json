@@ -1,0 +1,23 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "Docs (Docusaurus)",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "packages/docs", "start"],
+      "port": 3000
+    },
+    {
+      "name": "TypeScript watch",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "autoPort": true
+    },
+    {
+      "name": "MCP server",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["smallchat", "serve", "-s", "./packages/examples/manifests", "-p", "3001"],
+      "port": 3001
+    }
+  ]
+}

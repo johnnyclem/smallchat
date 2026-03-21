@@ -9,7 +9,7 @@ A message-passing tool compiler inspired by the Smalltalk/Objective-C runtime. s
 ## Install
 
 ```bash
-npm install smallchat
+npm install @smallchat/core
 ```
 
 ## v0.1.0
@@ -120,24 +120,58 @@ const original = runtime.swizzle(toolClass, selector, newImp);
 ## Quick Start
 
 ```bash
-npm install
-npm run build
+npm install @smallchat/core
 
-# Compile tool definitions
-npx smallchat compile --source ./examples --output tools.smallchat.json
+# Compile from a directory of manifest files
+npx smallchat compile --source ./manifests
 
-# Watch mode — auto-recompile on manifest changes
-npx smallchat compile --source ./examples --output tools.smallchat.json --watch
+# Compile from an MCP config file (Claude Desktop, .mcp.json, etc.)
+npx smallchat compile --source ~/.mcp.json
+
+# Auto-detect: run from inside any MCP server repo
+cd my-mcp-server && npx smallchat compile
+
+# Watch mode — auto-recompile on changes
+npx smallchat compile --source ./manifests --watch
 
 # Inspect the compiled artifact
-npx smallchat inspect tools.smallchat.json --providers --selectors
+npx smallchat inspect tools.toolkit.json --providers --selectors
 
 # Test dispatch resolution
-npx smallchat resolve tools.smallchat.json "search for code"
+npx smallchat resolve tools.toolkit.json "search for code"
 
 # Start MCP-compatible server with SSE streaming
-npx smallchat serve --source ./examples --port 3001
+npx smallchat serve --source ./manifests --port 3001
 ```
+
+### Compile Sources
+
+The `compile` command accepts three types of input:
+
+| Source | Example | What it does |
+|--------|---------|--------------|
+| **Directory** | `--source ./manifests` | Reads all `.json` manifest files from the directory |
+| **MCP config file** | `--source ~/.mcp.json` | Parses `mcpServers`, spawns each server via stdio, and introspects tools via JSON-RPC |
+| **Auto-detect** | _(no --source)_ | Detects if cwd is an MCP server repo, builds & introspects it |
+
+**MCP config file format** (used by Claude Desktop, Claude Code `.mcp.json`, etc.):
+
+```json
+{
+  "mcpServers": {
+    "memory": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"]
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+    }
+  }
+}
+```
+
+When compiling from an MCP config or auto-detecting, smallchat spawns each server, sends `initialize` and `tools/list` over MCP's stdio transport, captures the tool schemas, and generates shareable manifest files alongside the compiled artifact.
 
 ### Serve Command
 
