@@ -1,0 +1,62 @@
+{
+  "id": "sql-assistant",
+  "name": "SQL Assistant",
+  "transportType": "local",
+  "tools": [
+    {
+      "name": "query",
+      "description": "Execute a SQL query against the database and return results",
+      "providerId": "sql-assistant",
+      "transportType": "local",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sql": { "type": "string", "description": "The SQL query to execute" },
+          "params": { "type": "array", "description": "Query parameters for parameterized queries" },
+          "limit": { "type": "number", "description": "Maximum rows to return", "default": 100 }
+        },
+        "required": ["sql"]
+      }
+    },
+    {
+      "name": "list_tables",
+      "description": "List all tables in the current database",
+      "providerId": "sql-assistant",
+      "transportType": "local",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "schema": { "type": "string", "description": "Database schema name", "default": "public" }
+        }
+      }
+    },
+    {
+      "name": "describe_table",
+      "description": "Get the column definitions and schema for a database table",
+      "providerId": "sql-assistant",
+      "transportType": "local",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "table": { "type": "string", "description": "Table name to describe" },
+          "schema": { "type": "string", "description": "Database schema", "default": "public" }
+        },
+        "required": ["table"]
+      }
+    },
+    {
+      "name": "insert_row",
+      "description": "Insert a new row into a database table",
+      "providerId": "sql-assistant",
+      "transportType": "local",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "table": { "type": "string", "description": "Target table name" },
+          "data": { "type": "object", "description": "Column-value pairs to insert" }
+        },
+        "required": ["table", "data"]
+      }
+    }
+  ]
+}

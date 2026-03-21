@@ -20,7 +20,19 @@ export class UnrecognizedIntent extends Error {
     intent: string,
     context: { nearestSelectors: Array<{ id: string; distance: number }>; suggestion: string },
   ) {
-    super(`No tool available for: "${intent}" (selector: ${selector.canonical})`);
+    const nearest = context.nearestSelectors;
+    const suggestions = nearest.length > 0
+      ? `\n\nDid you mean one of these?\n${nearest.slice(0, 3).map(s => `  - "${s.id}" (${((1 - s.distance) * 100).toFixed(0)}% match)`).join('\n')}`
+      : '';
+    const fixes = [
+      '\nTo fix this:',
+      '  1. Check that your manifest includes a tool for this intent',
+      '  2. Run "smallchat compile" to rebuild the dispatch table',
+      '  3. Run "smallchat resolve <artifact> <intent>" to debug resolution',
+      '  4. Lower the selector threshold if tools exist but similarity is too low',
+    ].join('\n');
+
+    super(`No tool available for: "${intent}" (selector: ${selector.canonical})${suggestions}\n${fixes}`);
     this.name = 'UnrecognizedIntent';
     this.selector = selector;
     this.intent = intent;

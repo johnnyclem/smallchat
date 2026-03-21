@@ -1,0 +1,29 @@
+{
+  "name": "@smallchat/testing",
+  "version": "0.1.0",
+  "description": "Testing utilities and mocks for smallchat tool dispatch",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "peerDependencies": {
+    "smallchat": ">=0.1.0"
+  },
+  "devDependencies": {
+    "smallchat": "^0.1.0",
+    "typescript": "^5.7.0"
+  },
+  "keywords": ["smallchat", "testing", "mocks", "unit-test"],
+  "license": "MIT"
+}

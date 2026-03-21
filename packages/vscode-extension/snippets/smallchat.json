@@ -1,0 +1,50 @@
+{
+  "New Tool Definition": {
+    "prefix": "sc-tool",
+    "body": [
+      "{",
+      "  \"name\": \"${1:toolName}\",",
+      "  \"description\": \"${2:Description of what this tool does}\",",
+      "  \"providerId\": \"${3:provider}\",",
+      "  \"transportType\": \"${4|local,mcp,rest,grpc|}\",",
+      "  \"inputSchema\": {",
+      "    \"type\": \"object\",",
+      "    \"properties\": {",
+      "      \"${5:param}\": {",
+      "        \"type\": \"${6|string,number,boolean,object,array|}\",",
+      "        \"description\": \"${7:Parameter description}\"",
+      "      }",
+      "    },",
+      "    \"required\": [\"${5:param}\"]",
+      "  }",
+      "}"
+    ],
+    "description": "Create a new smallchat tool definition"
+  },
+  "New Provider Manifest": {
+    "prefix": "sc-manifest",
+    "body": [
+      "{",
+      "  \"id\": \"${1:provider-id}\",",
+      "  \"name\": \"${2:Provider Name}\",",
+      "  \"transportType\": \"${3|local,mcp,rest,grpc|}\",",
+      "  \"tools\": [",
+      "    $0",
+      "  ]",
+      "}"
+    ],
+    "description": "Create a new smallchat provider manifest"
+  },
+  "New Config": {
+    "prefix": "sc-config",
+    "body": [
+      "{",
+      "  \"version\": \"0.1.0\",",
+      "  \"embedder\": \"${1|local,onnx|}\",",
+      "  \"manifests\": [\"${2:./manifests}\"],",
+      "  \"output\": \"${3:tools.toolkit.json}\"",
+      "}"
+    ],
+    "description": "Create a smallchat configuration file"
+  }
+}

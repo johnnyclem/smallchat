@@ -1,0 +1,97 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "smallchat",
+  "scopeName": "source.smallchat",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#keywords" },
+    { "include": "#selectors" },
+    { "include": "#types" },
+    { "include": "#providers" },
+    { "include": "#constants" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.smallchat",
+          "match": "//.*$"
+        },
+        {
+          "name": "comment.block.smallchat",
+          "begin": "/\\*",
+          "end": "\\*/"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.smallchat",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.smallchat",
+              "match": "\\\\."
+            }
+          ]
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.smallchat",
+          "match": "\\b[0-9]+(\\.[0-9]+)?\\b"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.smallchat",
+          "match": "\\b(tool|provider|protocol|category|selector|import|export|extends|implements|dispatch|resolve|compile)\\b"
+        },
+        {
+          "name": "keyword.other.smallchat",
+          "match": "\\b(required|optional|default|description|name|type|inputSchema|transportType|version)\\b"
+        }
+      ]
+    },
+    "selectors": {
+      "patterns": [
+        {
+          "name": "entity.name.function.selector.smallchat",
+          "match": "[a-zA-Z_][a-zA-Z0-9_]*(:[a-zA-Z_][a-zA-Z0-9_]*)*:"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "support.type.smallchat",
+          "match": "\\b(string|number|boolean|object|array|null|integer)\\b"
+        }
+      ]
+    },
+    "providers": {
+      "patterns": [
+        {
+          "name": "entity.name.class.provider.smallchat",
+          "match": "\\b[A-Z][a-zA-Z0-9]*Provider\\b"
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.language.smallchat",
+          "match": "\\b(true|false|null)\\b"
+        }
+      ]
+    }
+  }
+}

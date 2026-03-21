@@ -1,0 +1,50 @@
+{
+  "name": "smallchat-vscode",
+  "displayName": "smallchat",
+  "description": "Syntax highlighting and intellisense for smallchat manifest files",
+  "version": "0.1.0",
+  "publisher": "smallchat",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Programming Languages", "Snippets"],
+  "contributes": {
+    "languages": [
+      {
+        "id": "smallchat",
+        "aliases": ["smallchat", "SmallChat"],
+        "extensions": [".smallchat", ".smallchat.json"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "smallchat",
+        "scopeName": "source.smallchat",
+        "path": "./syntaxes/smallchat.tmLanguage.json"
+      }
+    ],
+    "jsonValidation": [
+      {
+        "fileMatch": ["*-manifest.json", "*.toolkit.json", "smallchat.config.json"],
+        "url": "./schemas/manifest.schema.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "json",
+        "path": "./snippets/smallchat.json"
+      }
+    ]
+  },
+  "main": "./out/extension.js",
+  "scripts": {
+    "build": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.7.0"
+  },
+  "license": "MIT"
+}
