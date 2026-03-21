@@ -1,0 +1,17 @@
+apiVersion: v2
+name: smallchat
+description: A Helm chart for the smallchat MCP runtime server
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - mcp
+  - llm
+  - tools
+  - message-passing
+home: https://smallchat.dev
+sources:
+  - https://github.com/johnnyclem/smallchat
+maintainers:
+  - name: Johnny Clem
+    url: https://github.com/johnnyclem

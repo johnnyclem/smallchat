@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from 'node:http';
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync, watchFile, unwatchFile } from 'node:fs';
 import { resolve, join } from 'node:path';
 import type { CompilationResult, ProviderManifest, ToolResult, DispatchEvent } from '../core/types.js';
 import { ToolClass, ToolProxy } from '../core/tool-class.js';
@@ -11,6 +11,13 @@ import { SessionStore, type MCPSession } from './session-store.js';
 import { OAuthManager, type TokenIntrospection } from './oauth.js';
 import { ResourceRegistry, ResourceNotFoundError } from './resources.js';
 import { PromptRegistry, PromptNotFoundError } from './prompts.js';
+import { rootLogger } from '../observability/logger.js';
+import { getTracer, SpanStatusCode, flushTracing } from '../observability/tracing.js';
+import { metrics, metricsRegistry, cacheHitRate } from '../observability/metrics.js';
+import { flightRecorder } from '../observability/flight-recorder.js';
+
+const log = rootLogger.child({ component: 'mcp-server' });
+const tracer = getTracer('smallchat.server');
 
 /**
  * MCPServer — production-grade MCP 2026 compliant JSON-RPC server.
@@ -83,6 +90,20 @@ export interface MCPServerConfig {
   enableAudit?: boolean;
   /** Session TTL in milliseconds (default: 24h) */
   sessionTTLMs?: number;
+  /** Max concurrent tool executions (0 = unlimited) */
+  maxConcurrentExecutions?: number;
+  /** Max dispatch queue depth (0 = unlimited) */
+  maxQueueDepth?: number;
+  /** Per-tool rate limits: map of tool name → RPM */
+  toolRateLimits?: Record<string, number>;
+  /** Enable hot-reload watching of sourcePath */
+  enableHotReload?: boolean;
+  /** Hot-reload debounce delay in ms (default: 500) */
+  hotReloadDebounceMs?: number;
+  /** Enable /metrics endpoint */
+  enableMetrics?: boolean;
+  /** Graceful shutdown timeout in ms (default: 30s) */
+  gracefulShutdownTimeoutMs?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -146,6 +167,100 @@ class AuditLog {
 }
 
 // ---------------------------------------------------------------------------
+// Per-tool rate limiter
+// ---------------------------------------------------------------------------
+
+class ToolRateLimiter {
+  private windows: Map<string, { count: number; resetAt: number }> = new Map();
+
+  /** Returns true if the request is allowed */
+  check(tool: string, limits: Record<string, number>): boolean {
+    const rpm = limits[tool];
+    if (!rpm) return true; // No limit configured for this tool
+
+    const key = tool;
+    const now = Date.now();
+    const window = this.windows.get(key);
+
+    if (!window || now > window.resetAt) {
+      this.windows.set(key, { count: 1, resetAt: now + 60000 });
+      return true;
+    }
+
+    if (window.count >= rpm) {
+      return false;
+    }
+
+    window.count++;
+    return true;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Concurrency limiter with queue
+// ---------------------------------------------------------------------------
+
+class ConcurrencyLimiter {
+  private activeCount = 0;
+  private queue: Array<{ resolve: () => void; reject: (err: Error) => void }> = [];
+  private readonly maxConcurrent: number;
+  private readonly maxQueueDepth: number;
+
+  constructor(maxConcurrent: number, maxQueueDepth: number) {
+    this.maxConcurrent = maxConcurrent;
+    this.maxQueueDepth = maxQueueDepth;
+  }
+
+  get active(): number { return this.activeCount; }
+  get queued(): number { return this.queue.length; }
+
+  /** Acquire a slot. Waits in queue if at capacity. */
+  acquire(): Promise<void> {
+    if (this.maxConcurrent === 0) return Promise.resolve(); // unlimited
+
+    if (this.activeCount < this.maxConcurrent) {
+      this.activeCount++;
+      metrics.activeExecutions.set(this.activeCount);
+      metrics.queueDepth.set(this.queue.length);
+      return Promise.resolve();
+    }
+
+    // Queue the request
+    if (this.maxQueueDepth > 0 && this.queue.length >= this.maxQueueDepth) {
+      return Promise.reject(new Error('Dispatch queue is full'));
+    }
+
+    return new Promise((resolve, reject) => {
+      this.queue.push({ resolve, reject });
+      metrics.queueDepth.set(this.queue.length);
+    });
+  }
+
+  /** Release a slot and unblock the next queued request */
+  release(): void {
+    if (this.maxConcurrent === 0) return;
+
+    const next = this.queue.shift();
+    if (next) {
+      metrics.queueDepth.set(this.queue.length);
+      next.resolve();
+    } else {
+      this.activeCount = Math.max(0, this.activeCount - 1);
+      metrics.activeExecutions.set(this.activeCount);
+    }
+  }
+
+  /** Drain the queue with an error (used during shutdown) */
+  drain(reason: string): void {
+    const waiting = this.queue.splice(0);
+    for (const waiter of waiting) {
+      waiter.reject(new Error(reason));
+    }
+    metrics.queueDepth.set(0);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // SSE client tracker
 // ---------------------------------------------------------------------------
 
@@ -168,10 +283,20 @@ export class MCPServer {
   private resourceRegistry: ResourceRegistry;
   private promptRegistry: PromptRegistry;
   private rateLimiter: RateLimiter;
+  private toolRateLimiter: ToolRateLimiter;
+  private concurrencyLimiter: ConcurrencyLimiter;
   private auditLog: AuditLog;
   private sseClients: Map<string, SSEClient> = new Map();
   private config: MCPServerConfig;
   private sseCounter = 0;
+  /** Set to true when shutdown is in progress — blocks new requests */
+  private shuttingDown = false;
+  /** Tracks in-flight request count for graceful drain */
+  private inFlightCount = 0;
+  /** Resolves when all in-flight requests finish during shutdown */
+  private drainResolve: (() => void) | null = null;
+  /** Hot-reload debounce timer */
+  private hotReloadTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(config: MCPServerConfig) {
     this.config = config;
@@ -179,6 +304,11 @@ export class MCPServer {
     this.resourceRegistry = new ResourceRegistry();
     this.promptRegistry = new PromptRegistry();
     this.rateLimiter = new RateLimiter(config.rateLimitRPM ?? 600);
+    this.toolRateLimiter = new ToolRateLimiter();
+    this.concurrencyLimiter = new ConcurrencyLimiter(
+      config.maxConcurrentExecutions ?? 0,
+      config.maxQueueDepth ?? 0,
+    );
     this.auditLog = new AuditLog();
   }
 
@@ -201,6 +331,8 @@ export class MCPServer {
    * Start the MCP server.
    */
   async start(): Promise<void> {
+    log.info({ sourcePath: this.config.sourcePath }, 'Loading toolkit');
+
     // Load runtime
     const { runtime, artifact } = await loadRuntime(this.config.sourcePath);
     this.runtime = runtime;
@@ -214,28 +346,100 @@ export class MCPServer {
     const ttl = this.config.sessionTTLMs ?? 24 * 60 * 60 * 1000;
     this.sessionStore.prune(ttl);
 
-    console.log(`  ${artifact.stats.toolCount} tools across ${artifact.stats.providerCount} providers`);
-    console.log(`  ${this.sessionStore.count()} active sessions`);
+    log.info({
+      tools: artifact.stats.toolCount,
+      providers: artifact.stats.providerCount,
+      sessions: this.sessionStore.count(),
+    }, 'Toolkit loaded');
+
+    // Start hot-reload watcher
+    if (this.config.enableHotReload) {
+      this.startHotReload();
+    }
 
     // Create HTTP server
     this.server = createServer((req, res) => this.handleRequest(req, res));
 
     return new Promise((resolve) => {
       this.server!.listen(this.config.port, this.config.host, () => {
-        console.log(`\nsmallchat MCP server listening on http://${this.config.host}:${this.config.port}`);
-        console.log(`  POST /                    JSON-RPC 2.0 (all MCP methods)`);
-        console.log(`  GET  /.well-known/mcp.json  Discovery endpoint`);
-        console.log(`  GET  /sse                 SSE event stream`);
-        console.log(`  GET  /health              Health check`);
-        console.log(`  POST /oauth/token         OAuth 2.1 token endpoint`);
-        console.log(`\nMCP Protocol Version: ${MCP_PROTOCOL_VERSION}`);
+        log.info({
+          host: this.config.host,
+          port: this.config.port,
+          protocol: MCP_PROTOCOL_VERSION,
+          endpoints: ['/', '/.well-known/mcp.json', '/sse', '/health', '/ready', '/metrics', '/oauth/token'],
+        }, 'smallchat MCP server started');
         resolve();
       });
     });
   }
 
-  /** Stop the server and clean up */
+  /**
+   * Reload tool definitions without restarting the process.
+   * Flushes the resolution cache and reloads from sourcePath.
+   */
+  async hotReload(): Promise<void> {
+    log.info({ sourcePath: this.config.sourcePath }, 'Hot-reload triggered');
+    try {
+      const { runtime, artifact } = await loadRuntime(this.config.sourcePath);
+
+      // Flush caches on old runtime before swap
+      if (this.runtime) {
+        this.runtime.cache.flush();
+      }
+
+      this.runtime = runtime;
+      this.artifact = artifact;
+
+      // Notify SSE clients
+      this.broadcastListChanged('tools');
+
+      log.info({ tools: artifact.stats.toolCount }, 'Hot-reload complete');
+    } catch (err) {
+      log.error({ err }, 'Hot-reload failed');
+    }
+  }
+
+  private startHotReload(): void {
+    const debounceMs = this.config.hotReloadDebounceMs ?? 500;
+
+    const triggerReload = () => {
+      if (this.hotReloadTimer) clearTimeout(this.hotReloadTimer);
+      this.hotReloadTimer = setTimeout(() => {
+        void this.hotReload();
+      }, debounceMs);
+    };
+
+    try {
+      watchFile(this.config.sourcePath, { interval: 1000 }, triggerReload);
+      log.info({ sourcePath: this.config.sourcePath }, 'Hot-reload watcher active');
+    } catch (err) {
+      log.warn({ err }, 'Failed to start hot-reload watcher');
+    }
+  }
+
+  /** Stop the server and clean up with graceful drain */
   async stop(): Promise<void> {
+    log.info({ inFlight: this.inFlightCount }, 'Graceful shutdown initiated');
+    this.shuttingDown = true;
+
+    // Stop accepting new requests; stop hot-reload watcher
+    if (this.hotReloadTimer) clearTimeout(this.hotReloadTimer);
+    try { unwatchFile(this.config.sourcePath); } catch { /* ignore */ }
+
+    // Drain the dispatch queue
+    this.concurrencyLimiter.drain('Server shutting down');
+
+    // Wait for in-flight requests to complete (with timeout)
+    const timeoutMs = this.config.gracefulShutdownTimeoutMs ?? 30000;
+
+    if (this.inFlightCount > 0) {
+      log.info({ inFlight: this.inFlightCount, timeoutMs }, 'Waiting for in-flight requests to finish');
+      await Promise.race([
+        new Promise<void>((res) => { this.drainResolve = res; }),
+        new Promise<void>((res) => setTimeout(res, timeoutMs)),
+      ]);
+    }
+
     // Close SSE connections
     for (const client of this.sseClients.values()) {
       client.response.end();
@@ -247,6 +451,11 @@ export class MCPServer {
       this.sessionStore.close();
       this.sessionStore = null;
     }
+
+    // Flush tracing and flight recorder
+    await Promise.all([flushTracing(), flightRecorder.flush()]);
+
+    log.info('Server stopped');
 
     // Close HTTP server
     return new Promise((resolve) => {
@@ -263,6 +472,8 @@ export class MCPServer {
   // ---------------------------------------------------------------------------
 
   private async handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const reqStart = Date.now();
+
     // CORS
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
@@ -275,12 +486,33 @@ export class MCPServer {
       return;
     }
 
+    // Reject new requests during shutdown (except health/ready)
     const url = req.url ?? '/';
+    if (this.shuttingDown && url !== '/health' && url !== '/ready') {
+      res.writeHead(503, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Service unavailable — shutting down' }));
+      return;
+    }
+
+    // Track in-flight requests for graceful drain
+    this.inFlightCount++;
+    res.on('finish', () => {
+      this.inFlightCount = Math.max(0, this.inFlightCount - 1);
+      const method = req.method ?? 'GET';
+      const statusCode = String(res.statusCode);
+      metrics.httpLatency.observe(Date.now() - reqStart, { method, path: url.split('?')[0] ?? '/', status: statusCode });
+      if (this.shuttingDown && this.inFlightCount === 0 && this.drainResolve) {
+        this.drainResolve();
+      }
+    });
 
     // Static routes
     if (req.method === 'GET') {
       if (url === '/.well-known/mcp.json') return this.handleDiscovery(res);
       if (url === '/health') return this.handleHealth(res);
+      if (url === '/ready') return this.handleReady(res);
+      if (url === '/metrics' && this.config.enableMetrics) return this.handleMetrics(res);
+      if (url === '/debug/flight') return this.handleDebugFlight(res);
       if (url === '/sse') return this.handleSSE(req, res);
     }
 
@@ -327,16 +559,65 @@ export class MCPServer {
   // ---------------------------------------------------------------------------
 
   private handleHealth(res: ServerResponse): void {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
+    const isHealthy = !!this.runtime && !!this.artifact && !this.shuttingDown;
+    res.writeHead(isHealthy ? 200 : 503, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
-      status: 'ok',
+      status: isHealthy ? 'ok' : 'degraded',
       version: SERVER_VERSION,
       protocolVersion: MCP_PROTOCOL_VERSION,
       tools: this.artifact?.stats.toolCount ?? 0,
       providers: this.artifact?.stats.providerCount ?? 0,
       sessions: this.sessionStore?.count() ?? 0,
       sseClients: this.sseClients.size,
+      activeExecutions: this.concurrencyLimiter.active,
+      queueDepth: this.concurrencyLimiter.queued,
+      cacheHitRate: cacheHitRate(),
+      shuttingDown: this.shuttingDown,
     }));
+  }
+
+  // ---------------------------------------------------------------------------
+  // /ready — Readiness probe (for k8s)
+  // ---------------------------------------------------------------------------
+
+  private handleReady(res: ServerResponse): void {
+    // Ready when runtime is loaded and not shutting down
+    const isReady = !!this.runtime && !!this.artifact && !this.shuttingDown;
+
+    if (isReady) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'ready', tools: this.artifact?.stats.toolCount ?? 0 }));
+    } else {
+      res.writeHead(503, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        status: 'not_ready',
+        reason: this.shuttingDown ? 'shutting_down' : 'runtime_not_loaded',
+      }));
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // /metrics — Prometheus metrics endpoint
+  // ---------------------------------------------------------------------------
+
+  private handleMetrics(res: ServerResponse): void {
+    // Update live gauges before rendering
+    metrics.sseConnections.set(this.sseClients.size);
+    metrics.activeExecutions.set(this.concurrencyLimiter.active);
+    metrics.queueDepth.set(this.concurrencyLimiter.queued);
+
+    res.writeHead(200, { 'Content-Type': 'text/plain; version=0.0.4; charset=utf-8' });
+    res.end(metricsRegistry.toPrometheus());
+  }
+
+  // ---------------------------------------------------------------------------
+  // /debug/flight — Flight recorder data for Debug UI
+  // ---------------------------------------------------------------------------
+
+  private handleDebugFlight(res: ServerResponse): void {
+    const entries = flightRecorder.recent(200);
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(entries));
   }
 
   // ---------------------------------------------------------------------------
@@ -492,10 +773,19 @@ export class MCPServer {
 
     const wantsStream = req.headers.accept?.includes('text/event-stream');
 
+    const rpcSpan = tracer.startSpan('json-rpc', { attributes: { 'rpc.method': rpcReq.method } });
+    let success = true;
+
     try {
       await this.dispatchMethod(rpcReq, id, sessionId, wantsStream ?? false, res);
     } catch (err) {
+      success = false;
+      rpcSpan.recordException(err);
+      rpcSpan.setStatus({ code: SpanStatusCode.ERROR });
+      log.error({ err, method: rpcReq.method, sessionId }, 'JSON-RPC handler error');
       sendJsonRpc(res, id, undefined, { code: INTERNAL_ERROR, message: (err as Error).message });
+    } finally {
+      rpcSpan.end();
     }
 
     // Audit log
@@ -504,10 +794,12 @@ export class MCPServer {
         timestamp: new Date().toISOString(),
         method: rpcReq.method,
         sessionId,
-        success: true,
+        success,
         durationMs: Date.now() - startTime,
       });
     }
+
+    log.debug({ method: rpcReq.method, sessionId, durationMs: Date.now() - startTime, success }, 'JSON-RPC request completed');
   }
 
   // ---------------------------------------------------------------------------
@@ -660,19 +952,77 @@ export class MCPServer {
       return;
     }
 
-    if (wantsStream) {
-      return this.handleToolsCallStreaming(toolName, args, id, res);
+    // Per-tool rate limiting
+    if (this.config.toolRateLimits) {
+      if (!this.toolRateLimiter.check(toolName, this.config.toolRateLimits)) {
+        metrics.rateLimitRejections.inc({ client: 'tool:' + toolName });
+        sendJsonRpc(res, id, undefined, { code: -32000, message: `Rate limit exceeded for tool: ${toolName}` });
+        return;
+      }
     }
 
-    // Standard JSON-RPC response
+    // Acquire concurrency slot (may queue)
+    try {
+      await this.concurrencyLimiter.acquire();
+    } catch (err) {
+      sendJsonRpc(res, id, undefined, { code: -32000, message: (err as Error).message });
+      return;
+    }
+
+    if (wantsStream) {
+      try {
+        return await this.handleToolsCallStreaming(toolName, args, id, res);
+      } finally {
+        this.concurrencyLimiter.release();
+      }
+    }
+
+    // Standard JSON-RPC response with OTel tracing + metrics + flight recorder
+    const span = tracer.startSpan('tools/call', { attributes: { 'tool.name': toolName } });
+    const startMs = Date.now();
+
     try {
       const result = await this.runtime.dispatch(toolName, args);
+      const durationMs = Date.now() - startMs;
+
+      metrics.dispatchTotal.inc({ tool: toolName, status: 'success' });
+      metrics.toolLatency.observe(durationMs, { tool: toolName });
+      span.setAttribute('tool.duration_ms', durationMs);
+      span.setStatus({ code: SpanStatusCode.OK });
+
+      flightRecorder.record({
+        intent: toolName,
+        args,
+        resolvedTool: toolName,
+        durationMs,
+        success: true,
+      });
+
       sendJsonRpc(res, id, {
         content: formatContent(result),
         isError: result.isError ?? false,
       });
     } catch (err) {
-      sendJsonRpc(res, id, undefined, { code: INTERNAL_ERROR, message: (err as Error).message });
+      const durationMs = Date.now() - startMs;
+      const errMsg = (err as Error).message;
+
+      metrics.dispatchErrors.inc({ tool: toolName, error_type: (err as Error).name });
+      metrics.toolLatency.observe(durationMs, { tool: toolName });
+      span.recordException(err);
+      span.setStatus({ code: SpanStatusCode.ERROR, message: errMsg });
+
+      flightRecorder.record({
+        intent: toolName,
+        args,
+        durationMs,
+        success: false,
+        error: errMsg,
+      });
+
+      sendJsonRpc(res, id, undefined, { code: INTERNAL_ERROR, message: errMsg });
+    } finally {
+      span.end();
+      this.concurrencyLimiter.release();
     }
   }
 

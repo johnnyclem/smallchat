@@ -20,7 +20,10 @@
     "test:watch": "vitest",
     "lint": "tsc --noEmit",
     "dev": "tsc --watch",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "debug-ui": "cd packages/debug-ui && npm install && npm run dev",
+    "docker:build": "docker build -t smallchat:latest .",
+    "docker:run": "docker run -p 3001:3001 --rm smallchat:latest"
   },
   "keywords": [
     "mcp",

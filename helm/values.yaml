@@ -1,0 +1,132 @@
+# Default values for smallchat Helm chart.
+# Override with: helm install smallchat ./helm -f my-values.yaml
+
+# ---- Image ----
+image:
+  repository: smallchat
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+# ---- Replicas ----
+replicaCount: 1
+
+# ---- Service ----
+service:
+  type: ClusterIP
+  port: 3001
+
+# ---- Ingress ----
+ingress:
+  enabled: false
+  className: nginx
+  annotations: {}
+  hosts:
+    - host: smallchat.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# ---- Resources ----
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+
+# ---- Autoscaling ----
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 70
+
+# ---- Persistence ----
+persistence:
+  enabled: true
+  storageClass: ""
+  accessMode: ReadWriteOnce
+  size: 5Gi
+  mountPath: /data
+
+# ---- Server configuration ----
+server:
+  port: 3001
+  host: "0.0.0.0"
+  sourcePath: /app/examples
+  logLevel: info
+  enableAudit: true
+  enableMetrics: true
+  enableRateLimit: true
+  rateLimitRPM: 600
+  maxConcurrentExecutions: 50
+  maxQueueDepth: 200
+  enableHotReload: false
+  gracefulShutdownTimeoutMs: 30000
+
+# ---- Secrets (use sealed-secrets or external-secrets in production) ----
+secrets:
+  # Provide as env vars from a Secret
+  existingSecretName: ""
+  keys: []
+  # - ANTHROPIC_API_KEY
+  # - OPENAI_API_KEY
+
+# ---- OpenTelemetry ----
+otel:
+  enabled: false
+  endpoint: ""  # e.g. http://otel-collector:4318
+
+# ---- Redis (for future caching integration) ----
+redis:
+  enabled: false
+  url: ""
+
+# ---- Pod settings ----
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "3001"
+  prometheus.io/path: "/metrics"
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  capabilities:
+    drop: [ALL]
+
+# ---- Probes ----
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 3001
+  initialDelaySeconds: 30
+  periodSeconds: 30
+  timeoutSeconds: 10
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /ready
+    port: 3001
+  initialDelaySeconds: 10
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+# ---- Node selector / tolerations / affinity ----
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# ---- Service Account ----
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""

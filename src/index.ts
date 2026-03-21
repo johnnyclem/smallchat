@@ -115,3 +115,19 @@ export { ResourceRegistry, ResourceNotFoundError } from './mcp/resources.js';
 export type { MCPResource, MCPResourceContent, MCPResourceTemplate, ResourceChangeEvent, ResourceHandler } from './mcp/resources.js';
 export { PromptRegistry, PromptNotFoundError } from './mcp/prompts.js';
 export type { MCPPrompt, MCPPromptArgument, MCPPromptMessage, MCPPromptContent, PromptHandler, StaticPrompt } from './mcp/prompts.js';
+
+// Observability — structured logging, tracing, metrics, flight recorder
+export { Logger, createLogger, rootLogger } from './observability/logger.js';
+export type { LogLevel, LoggerOptions, LogRecord } from './observability/logger.js';
+export { getTracer, flushTracing, setSpanExporter, SpanStatusCode } from './observability/tracing.js';
+export type { Span, Tracer, SpanOptions, SpanAttributes, SpanData, SpanExporter } from './observability/tracing.js';
+export { MetricsRegistry, Counter, Histogram, Gauge, metricsRegistry, metrics, cacheHitRate } from './observability/metrics.js';
+export type { MetricLabels, MetricOptions } from './observability/metrics.js';
+export { FlightRecorder, flightRecorder } from './observability/flight-recorder.js';
+export type { DispatchRecord, FlightRecorderOptions, FlightAnalysis } from './observability/flight-recorder.js';
+
+// Config — validation and secrets management
+export { validateServerConfig, formatValidationErrors } from './config/validator.js';
+export type { ValidationError as ConfigValidationError, ValidationResult as ConfigValidationResult } from './config/validator.js';
+export { parseDotenv, expandEnvVars, expandObject, loadEnv, isSecretKey, redactSecrets } from './config/secrets.js';
+export type { LoadEnvOptions } from './config/secrets.js';

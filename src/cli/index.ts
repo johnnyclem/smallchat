@@ -6,6 +6,12 @@ import { inspectCommand } from './commands/inspect.js';
 import { resolveCommand } from './commands/resolve.js';
 import { serveCommand } from './commands/serve.js';
 import { doctorCommand } from './commands/doctor.js';
+import { backupCommand } from './commands/backup.js';
+import { restoreCommand } from './commands/restore.js';
+
+// Load environment variables before parsing commands
+import { loadEnv } from '../config/secrets.js';
+loadEnv();
 
 const program = new Command();
 
@@ -19,5 +25,7 @@ program.addCommand(inspectCommand);
 program.addCommand(resolveCommand);
 program.addCommand(serveCommand);
 program.addCommand(doctorCommand);
+program.addCommand(backupCommand);
+program.addCommand(restoreCommand);
 
 program.parse();

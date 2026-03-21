@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "smallchat.fullname" . }}-config
+  labels:
+    {{- include "smallchat.labels" . | nindent 4 }}
+data:
+  NODE_ENV: production
+  SC_PORT: {{ .Values.server.port | quote }}
+  SC_HOST: {{ .Values.server.host | quote }}
+  SC_LOG_LEVEL: {{ .Values.server.logLevel | quote }}
+  SC_LOG_PRETTY: "0"
+  SC_DB_PATH: /data/smallchat.db
+  SC_FR_FILE: /data/smallchat-flight.ndjson
+  SC_FR_MAX_ENTRIES: "500"
+  {{- if .Values.otel.enabled }}
+  SC_OTEL_ENDPOINT: {{ .Values.otel.endpoint | quote }}
+  {{- end }}
+  {{- if .Values.redis.enabled }}
+  REDIS_URL: {{ .Values.redis.url | quote }}
+  {{- end }}

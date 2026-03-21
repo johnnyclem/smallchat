@@ -1,0 +1,16 @@
+node_modules
+dist
+.env
+.env.local
+.env.*.local
+*.ndjson
+*.db
+*.db-shm
+*.db-wal
+packages/debug-ui/node_modules
+packages/debug-ui/dist
+bench
+docs
+.git
+coverage
+*.log

@@ -4,6 +4,13 @@ import { SelectorTable } from '../core/selector-table.js';
 import { ToolClass } from '../core/tool-class.js';
 import { SCObject, wrapValue, unwrapValue } from '../core/sc-object.js';
 import type { OverloadResolutionResult } from '../core/overload-table.js';
+import { rootLogger } from '../observability/logger.js';
+import { getTracer, SpanStatusCode } from '../observability/tracing.js';
+import { metrics } from '../observability/metrics.js';
+import { flightRecorder } from '../observability/flight-recorder.js';
+
+const log = rootLogger.child({ component: 'dispatch' });
+const tracer = getTracer('smallchat.dispatch');
 
 /**
  * UnrecognizedIntent — doesNotRecognizeSelector: equivalent.
@@ -246,8 +253,71 @@ export async function toolkit_dispatch(
   intent: string,
   args?: Record<string, unknown>,
 ): Promise<ToolResult> {
+  const span = tracer.startSpan('dispatch', { attributes: { 'dispatch.intent': intent } });
+  const startMs = Date.now();
+
+  try {
+    const result = await _toolkit_dispatch_inner(context, intent, args, span);
+    const durationMs = Date.now() - startMs;
+
+    metrics.dispatchTotal.inc({ status: 'success' });
+    metrics.toolLatency.observe(durationMs, { tool: result.metadata?.tool as string ?? 'unknown' });
+    span.setAttribute('dispatch.duration_ms', durationMs);
+    span.setStatus({ code: SpanStatusCode.OK });
+
+    flightRecorder.record({
+      intent,
+      args,
+      resolvedTool: result.metadata?.tool as string | undefined,
+      selector: span.traceId,
+      durationMs,
+      success: true,
+      cacheHit: !!(result.metadata?.cacheHit),
+      usedFallback: !!(result.metadata?.fallback),
+    });
+
+    return result;
+  } catch (err) {
+    const durationMs = Date.now() - startMs;
+    const errMsg = (err as Error).message;
+
+    metrics.dispatchErrors.inc({ error_type: (err as Error).name });
+    span.recordException(err);
+    span.setStatus({ code: SpanStatusCode.ERROR, message: errMsg });
+
+    flightRecorder.record({
+      intent,
+      args,
+      durationMs,
+      success: false,
+      error: errMsg,
+    });
+
+    log.error({ err, intent }, 'Dispatch failed');
+    throw err;
+  } finally {
+    span.end();
+  }
+}
+
+async function _toolkit_dispatch_inner(
+  context: DispatchContext,
+  intent: string,
+  args: Record<string, unknown> | undefined,
+  span: import('../observability/tracing.js').Span,
+): Promise<ToolResult> {
   // 1. RESOLVE SELECTOR (embed + intern)
-  const selector = await context.selectorTable.resolve(intent);
+  const resolveSpan = tracer.startSpan('resolve', { attributes: { 'resolve.intent': intent } });
+  let selector: ToolSelector;
+  try {
+    selector = await context.selectorTable.resolve(intent);
+    span.setAttribute('dispatch.selector', selector.canonical);
+    resolveSpan.setAttribute('resolve.selector', selector.canonical);
+    resolveSpan.setStatus({ code: SpanStatusCode.OK });
+    log.debug({ intent, selector: selector.canonical }, 'Selector resolved');
+  } finally {
+    resolveSpan.end();
+  }
 
   // 2. CHECK CACHE (the inline cache / method cache)
   // Skip cache when args are provided and overloads may exist — type matters
@@ -255,8 +325,11 @@ export async function toolkit_dispatch(
   if (!hasArgs) {
     const cached = context.cache.lookup(selector);
     if (cached) {
+      metrics.cacheHits.inc();
+      log.trace({ selector: selector.canonical, tool: cached.imp.toolName }, 'Cache hit');
       return cached.imp.execute(args ?? {});
     }
+    metrics.cacheMisses.inc();
   }
 
   // 3. SEARCH DISPATCH TABLE (vector similarity)
@@ -308,6 +381,8 @@ export async function toolkit_dispatch(
     }
 
     // 4b. FORWARDING — slow path
+    log.debug({ intent, selector: selector.canonical }, 'Entering forwarding chain');
+    metrics.fallbackTotal.inc({ strategy: 'forward' });
     return context.forward(selector, intent, args);
   }
 
@@ -316,15 +391,35 @@ export async function toolkit_dispatch(
 
   if (candidates.length === 1 || candidates[0].confidence > 0.90) {
     // Unambiguous match. Cache and execute.
-    const tool = candidates[0];
+    const tool = candidates[0]!;
     context.cache.store(selector, tool.imp, tool.confidence);
-    return executeWithArgs(tool.imp, args ?? {});
+    span.setAttribute('dispatch.tool', tool.imp.toolName);
+    span.setAttribute('dispatch.confidence', tool.confidence);
+    log.debug({ intent, tool: tool.imp.toolName, confidence: tool.confidence }, 'Dispatching to tool');
+
+    const execSpan = tracer.startSpan('execute', { attributes: { 'tool.name': tool.imp.toolName, 'tool.provider': tool.imp.providerId } });
+    try {
+      const result = await executeWithArgs(tool.imp, args ?? {});
+      execSpan.setStatus({ code: SpanStatusCode.OK });
+      return result;
+    } catch (err) {
+      execSpan.recordException(err);
+      execSpan.setStatus({ code: SpanStatusCode.ERROR });
+      throw err;
+    } finally {
+      execSpan.end();
+    }
   }
 
   // Multiple ambiguous candidates — take the best match but annotate
   // the result so callers know disambiguation may be needed (Phase 3).
-  const best = candidates[0];
+  const best = candidates[0]!;
   context.cache.store(selector, best.imp, best.confidence);
+  span.setAttribute('dispatch.tool', best.imp.toolName);
+  span.setAttribute('dispatch.ambiguous', true);
+  span.setAttribute('dispatch.candidate_count', candidates.length);
+  log.warn({ intent, candidates: candidates.length, best: best.imp.toolName }, 'Ambiguous dispatch — using best match');
+
   const result = await executeWithArgs(best.imp, args ?? {});
   result.metadata = {
     ...result.metadata,
