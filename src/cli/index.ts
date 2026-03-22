@@ -2,6 +2,7 @@
 
 import { Command } from 'commander';
 import { compileCommand } from './commands/compile.js';
+import { initCommand } from './commands/init.js';
 import { inspectCommand } from './commands/inspect.js';
 import { resolveCommand } from './commands/resolve.js';
 import { serveCommand } from './commands/serve.js';

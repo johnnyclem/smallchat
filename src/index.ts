@@ -88,6 +88,7 @@ export { DispatchContext, UnrecognizedIntent, toolkit_dispatch, smallchat_dispat
 export type { FallbackStep, FallbackChainResult } from './runtime/dispatch.js';
 export { ToolRuntime } from './runtime/runtime.js';
 export type { RuntimeOptions } from './runtime/runtime.js';
+export { DispatchBuilder } from './runtime/dispatch-builder.js';
 
 // Fluent dispatch builder
 export { DispatchBuilder } from './runtime/fluent.js';

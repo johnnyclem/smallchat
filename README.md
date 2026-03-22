@@ -9,7 +9,7 @@ A message-passing tool compiler inspired by the Smalltalk/Objective-C runtime. s
 ## Install
 
 ```bash
-npm install smallchat
+npm install @smallchat/core
 ```
 
 Requires Node.js >= 20.
