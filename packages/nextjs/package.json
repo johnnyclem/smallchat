@@ -1,0 +1,31 @@
+{
+  "name": "@smallchat/nextjs",
+  "version": "0.1.0",
+  "description": "Next.js API route helpers and server-side utilities for smallchat",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "peerDependencies": {
+    "next": ">=13.0.0",
+    "smallchat": ">=0.1.0"
+  },
+  "devDependencies": {
+    "next": "^14.0.0",
+    "smallchat": "^0.1.0",
+    "typescript": "^5.7.0"
+  },
+  "keywords": ["smallchat", "nextjs", "api-routes", "server-actions"],
+  "license": "MIT"
+}

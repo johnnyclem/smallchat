@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { createRequire } from 'node:module';
 
 /**
  * MCPSession — a single client session with metadata.
@@ -33,8 +34,7 @@ export class SessionStore {
 
   constructor(dbOrPath: string | import('better-sqlite3').Database = 'smallchat.db') {
     if (typeof dbOrPath === 'string') {
-      // Synchronous import via createRequire for ESM compatibility
-      const { createRequire } = require('node:module') as typeof import('node:module');
+      // Synchronous require via createRequire for ESM compatibility
       const req = createRequire(import.meta.url);
       const Database = req('better-sqlite3') as typeof import('better-sqlite3');
       this.db = new Database(dbOrPath);

@@ -1,0 +1,18 @@
+{
+  "name": "@smallchat/playground",
+  "version": "0.1.0",
+  "description": "Web UI playground for testing smallchat tool dispatch and resolution chains",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "dependencies": {
+    "smallchat": "^0.1.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0"
+  },
+  "license": "MIT"
+}

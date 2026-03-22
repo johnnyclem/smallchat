@@ -5,6 +5,8 @@ dist/
 .env
 .DS_Store
 coverage/
+.docusaurus/
+build/
 smallchat.db
 smallchat.db-wal
 smallchat.db-shm

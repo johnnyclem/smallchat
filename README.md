@@ -1,4 +1,4 @@
-# smallchat - object oriented inference
+# smallchat — object oriented inference
 
 > "The big idea is messaging." — Alan Kay
 
@@ -10,6 +10,100 @@ A message-passing tool compiler inspired by the Smalltalk/Objective-C runtime. s
 
 ```bash
 npm install @smallchat/core
+```
+
+Requires Node.js >= 20.
+
+## Quick Start
+
+```bash
+# Compile from a directory of manifest files
+npx smallchat compile --source ./manifests
+
+# Compile from an MCP config file (Claude Desktop, .mcp.json, etc.)
+npx smallchat compile --source ~/.mcp.json
+
+# Auto-detect: run from inside any MCP server repo
+cd my-mcp-server && npx smallchat compile
+
+# Watch mode — auto-recompile on changes
+npx smallchat compile --source ./manifests --watch
+
+# Inspect the compiled artifact
+npx smallchat inspect tools.toolkit.json --providers --selectors
+
+# Test dispatch resolution
+npx smallchat resolve tools.toolkit.json "search for code"
+
+# Start MCP-compatible server
+npx smallchat serve --source ./manifests --port 3001
+
+# Diagnostic checks
+npx smallchat doctor
+```
+
+### Compile Sources
+
+The `compile` command accepts three types of input:
+
+| Source | Example | What it does |
+|--------|---------|--------------|
+| **Directory** | `--source ./manifests` | Reads all `.json` manifest files from the directory |
+| **MCP config file** | `--source ~/.mcp.json` | Parses `mcpServers`, spawns each server via stdio, and introspects tools via JSON-RPC |
+| **Auto-detect** | _(no --source)_ | Detects if cwd is an MCP server repo, builds & introspects it |
+
+**MCP config file format** (used by Claude Desktop, Claude Code `.mcp.json`, etc.):
+
+```json
+{
+  "mcpServers": {
+    "memory": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"]
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+    }
+  }
+}
+```
+
+When compiling from an MCP config or auto-detecting, smallchat spawns each server, sends `initialize` and `tools/list` over MCP's stdio transport, captures the tool schemas, and generates shareable manifest files alongside the compiled artifact.
+
+### Programmatic Usage
+
+```typescript
+import {
+  ToolRuntime,
+  ONNXEmbedder,
+  SqliteVectorIndex,
+  MemoryVectorIndex,
+  LocalEmbedder,
+} from 'smallchat';
+
+// Production: semantic embeddings + persistent vector index
+const runtime = new ToolRuntime(
+  new SqliteVectorIndex('tools.db'),
+  new ONNXEmbedder(),
+  { cacheSize: 1024, minConfidence: 0.85 }
+);
+
+// Development: fast hash embeddings + in-memory index
+const devRuntime = new ToolRuntime(
+  new MemoryVectorIndex(),
+  new LocalEmbedder(),
+);
+
+// Streaming dispatch — async generator with typed events
+for await (const event of runtime.dispatchStream("find flights", { to: "NYC" })) {
+  if (event.type === "inference-delta") process.stdout.write(event.content);
+}
+
+// Convenience: token-only stream
+for await (const token of runtime.inferenceStream("find flights", { to: "NYC" })) {
+  process.stdout.write(token);
+}
 ```
 
 ## v0.1.0
@@ -81,6 +175,35 @@ When no exact dispatch match is found, the runtime attempts graceful degradation
 
 Results include `fallbackSteps` metadata so callers know the resolution path taken.
 
+### Embeddings & Vector Search
+
+smallchat provides two embedding strategies and two vector index backends:
+
+| Component | Implementation | Use case |
+|-----------|---------------|----------|
+| **LocalEmbedder** | Deterministic hash-based | Fast development, testing, CI |
+| **ONNXEmbedder** | all-MiniLM-L6-v2 via ONNX Runtime (384-dim) | Production semantic matching |
+| **MemoryVectorIndex** | In-memory brute-force cosine similarity | Development, small tool sets |
+| **SqliteVectorIndex** | sqlite-vec with persistent storage | Production, large tool sets |
+
+The ONNX model ships with the package in `models/` (quantized, ~30MB).
+
+### MCP Server
+
+`smallchat serve` starts an HTTP server implementing the MCP 2026 protocol:
+
+| Capability | Description |
+|------------|-------------|
+| **JSON-RPC** | `initialize`, `tools/list` (paginated), `tools/call` |
+| **Resources** | `resources/list`, `resources/read`, `resources/subscribe` with change notifications |
+| **Prompts** | `prompts/list`, `prompts/get` with template arguments |
+| **SSE** | Server-Sent Events stream with keep-alive |
+| **Streaming execution** | `tools/call` with `Accept: text/event-stream` |
+| **Sessions** | SQLite-backed session management |
+| **OAuth 2.1** | Token-based auth with scopes (`tools:read`, `tools:execute`, `resources:read`, `prompts:read`) |
+| **Rate limiting** | Per-session request throttling |
+| **Health** | `/health` endpoint with tool count |
+
 ### Cache Versioning & Hot Reload
 
 Resolution cache entries are tagged with provider version, model version, and schema fingerprint (DJB2 hash). Entries are automatically evicted on version changes, enabling hot-reload workflows. Invalidation hooks allow subscribing to flush, provider, selector, and staleness events.
@@ -98,7 +221,52 @@ const original = runtime.swizzle(toolClass, selector, newImp);
 
 `runtime.generateHeader()` produces a token-efficient capability summary for LLM system prompts, including protocol groupings, overload signatures, and instruction text.
 
-### Concept Mapping
+## CLI
+
+| Command | Description |
+|---------|-------------|
+| `smallchat compile` | Parse manifests, embed selectors, link dispatch tables → `.toolkit.json` |
+| `smallchat serve` | Start MCP-compatible HTTP server with SSE streaming |
+| `smallchat resolve` | Test dispatch resolution against a compiled artifact |
+| `smallchat inspect` | Examine providers, selectors, and protocols in a compiled artifact |
+| `smallchat doctor` | Check environment: Node version, ONNX model availability, dependencies |
+
+## Example Manifests
+
+The `examples/` directory contains 32 MCP server manifest files for popular services, ready to use with `smallchat compile`:
+
+| Category | Manifests |
+|----------|-----------|
+| **File & Storage** | filesystem, git, google-drive, dropbox |
+| **Code Hosting** | github, gitlab |
+| **Project Management** | atlassian (Jira + Confluence), linear, notion |
+| **Communication** | slack |
+| **Search & Web** | brave-search, fetch, puppeteer, google-maps |
+| **Databases** | postgres, sqlite, mongodb, redis, elasticsearch |
+| **Cloud & Infra** | aws, azure, cloudflare, firebase |
+| **Payments** | stripe |
+| **Monitoring** | sentry |
+| **Design** | figma, everart |
+| **Utilities** | time, memory, sequential-thinking, everything |
+
+A `full-pipeline-example/` shows how to compose multiple providers into a single agent toolkit with semantic overload generation enabled.
+
+## Benchmarks
+
+The `bench/` directory contains a benchmarking suite with 700+ intent-to-tool test cases across easy, medium, and hard difficulty tiers, evaluated against 100+ tool definitions.
+
+Four dispatch strategies are compared:
+
+| Strategy | Method |
+|----------|--------|
+| **Keyword** | Simple string matching baseline |
+| **Embedding-only** | Pure cosine similarity |
+| **LLM** | GPT-4 tool selection |
+| **smallchat** | Semantic dispatch with caching and fallback chains |
+
+Metrics include top-1 accuracy, top-5 accuracy, acceptable hit rate, and latency. Per-case breakdowns provide explainability for dispatch decisions.
+
+## Concept Mapping
 
 | Smalltalk / Obj-C | smallchat |
 |---|---|
@@ -117,63 +285,10 @@ const original = runtime.swizzle(toolClass, selector, newImp);
 | NSProxy | ToolProxy (lazy schema loading) |
 | NSObject | SCObject (typed parameter hierarchy) |
 
-## Quick Start
-
-```bash
-npm install
-npm run build
-
-# Compile tool definitions
-npx smallchat compile --source ./examples --output tools.smallchat.json
-
-# Watch mode — auto-recompile on manifest changes
-npx smallchat compile --source ./examples --output tools.smallchat.json --watch
-
-# Inspect the compiled artifact
-npx smallchat inspect tools.smallchat.json --providers --selectors
-
-# Test dispatch resolution
-npx smallchat resolve tools.smallchat.json "search for code"
-
-# Start MCP-compatible server with SSE streaming
-npx smallchat serve --source ./examples --port 3001
-```
-
-### Serve Command
-
-`smallchat serve` starts an HTTP server implementing a subset of the MCP protocol:
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/` | POST | JSON-RPC (`initialize`, `tools/list`, `tools/call`) |
-| `/health` | GET | Health check with tool count |
-| `/sse` | GET | Server-Sent Events stream with keep-alive |
-| `tools/call` | POST (Accept: text/event-stream) | Streaming tool execution |
-
-## Example Manifests
-
-The `examples/` directory contains MCP server manifest files for popular services, ready to use with `smallchat compile`:
-
-| Category | Manifests |
-|----------|-----------|
-| **File & Storage** | filesystem, git, google-drive, dropbox |
-| **Code Hosting** | github, gitlab |
-| **Project Management** | atlassian (Jira + Confluence), linear, notion |
-| **Communication** | slack |
-| **Search & Web** | brave-search, fetch, puppeteer, google-maps |
-| **Databases** | postgres, sqlite, mongodb, redis, elasticsearch |
-| **Cloud & Infra** | aws, azure, cloudflare, firebase |
-| **Payments** | stripe |
-| **Monitoring** | sentry |
-| **Design** | figma, everart |
-| **Utilities** | time, memory, sequential-thinking, everything |
-
-A `full-pipeline-example/` shows how to compose multiple providers into a single agent toolkit with semantic overload generation enabled.
-
 ## Development
 
 ```bash
-npm test          # Run tests (110 specs)
+npm test          # Run tests (274 specs)
 npm run dev       # Watch mode TypeScript compilation
 npm run lint      # Type check
 ```
@@ -184,11 +299,8 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full design document.
 
 ## Current Limitations
 
-- **Hash-based embeddings**: Uses a deterministic hash embedder as placeholder. Real semantic embeddings (all-MiniLM-L6-v2 via ONNX) planned.
-- **No real transport**: Tool execution is stubbed. MCP/REST/gRPC transports in progress (serve command is the first step).
-- **In-memory vector index**: Brute-force cosine similarity. sqlite-vec/HNSW planned for production.
 - **No LLM disambiguation**: Multiple-candidate resolution takes the best match. LLM-assisted disambiguation planned for Phase 3.
-- **JSON output**: Compiled artifacts are JSON. SQLite format planned for Phase 4.
+- **JSON output**: Compiled artifacts are JSON. SQLite binary format planned for Phase 4.
 
 ## License
 

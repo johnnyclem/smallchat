@@ -7,6 +7,9 @@ import { inspectCommand } from './commands/inspect.js';
 import { resolveCommand } from './commands/resolve.js';
 import { serveCommand } from './commands/serve.js';
 import { doctorCommand } from './commands/doctor.js';
+import { initCommand } from './commands/init.js';
+import { docsCommand } from './commands/docs.js';
+import { replCommand } from './commands/repl.js';
 
 const program = new Command();
 
@@ -21,5 +24,7 @@ program.addCommand(inspectCommand);
 program.addCommand(resolveCommand);
 program.addCommand(serveCommand);
 program.addCommand(doctorCommand);
+program.addCommand(docsCommand);
+program.addCommand(replCommand);
 
 program.parse();

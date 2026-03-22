@@ -144,6 +144,31 @@ export class ToolRuntime {
     return new DispatchBuilder(this.context, intent);
   }
 
+  /**
+   * Fluent dispatch builder — chainable API for constructing dispatches.
+   *
+   * Usage:
+   *   const result = await runtime.intent('search documents')
+   *     .withArgs({ query: 'hello', limit: 10 })
+   *     .exec();
+   *
+   *   // With full TypeScript inference:
+   *   const result = await runtime.intent<{ query: string; limit?: number }>('search')
+   *     .withArgs({ query: 'hello' })
+   *     .exec();
+   *
+   *   // Streaming:
+   *   for await (const event of runtime.intent('search').stream()) { ... }
+   *
+   *   // Token-level streaming:
+   *   for await (const token of runtime.intent('summarise').tokens()) { ... }
+   */
+  intent<TArgs extends Record<string, unknown> = Record<string, unknown>>(
+    intentStr: string,
+  ): DispatchBuilder<TArgs> {
+    return new DispatchBuilder<TArgs>(this, intentStr);
+  }
+
   // ---------------------------------------------------------------------------
   // Version management — provider + model version tagging
   // ---------------------------------------------------------------------------

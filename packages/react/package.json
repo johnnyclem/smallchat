@@ -1,0 +1,32 @@
+{
+  "name": "@smallchat/react",
+  "version": "0.1.0",
+  "description": "React hooks for smallchat tool dispatch",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "peerDependencies": {
+    "react": ">=18.0.0",
+    "smallchat": ">=0.1.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.0.0",
+    "react": "^18.0.0",
+    "smallchat": "^0.1.0",
+    "typescript": "^5.7.0"
+  },
+  "keywords": ["smallchat", "react", "hooks", "tool-dispatch"],
+  "license": "MIT"
+}

@@ -1,0 +1,68 @@
+{
+  "id": "github-bot",
+  "name": "GitHub Bot",
+  "transportType": "rest",
+  "endpoint": "https://api.github.com",
+  "tools": [
+    {
+      "name": "create_issue",
+      "description": "Create a new issue in a GitHub repository",
+      "providerId": "github-bot",
+      "transportType": "rest",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "owner": { "type": "string", "description": "Repository owner" },
+          "repo": { "type": "string", "description": "Repository name" },
+          "title": { "type": "string", "description": "Issue title" },
+          "body": { "type": "string", "description": "Issue body (Markdown)" },
+          "labels": { "type": "array", "items": { "type": "string" }, "description": "Labels to apply" }
+        },
+        "required": ["owner", "repo", "title"]
+      }
+    },
+    {
+      "name": "list_pull_requests",
+      "description": "List open pull requests for a repository",
+      "providerId": "github-bot",
+      "transportType": "rest",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "owner": { "type": "string", "description": "Repository owner" },
+          "repo": { "type": "string", "description": "Repository name" },
+          "state": { "type": "string", "enum": ["open", "closed", "all"], "description": "PR state filter" }
+        },
+        "required": ["owner", "repo"]
+      }
+    },
+    {
+      "name": "search_code",
+      "description": "Search for code across GitHub repositories",
+      "providerId": "github-bot",
+      "transportType": "rest",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string", "description": "Search query" },
+          "language": { "type": "string", "description": "Filter by programming language" }
+        },
+        "required": ["query"]
+      }
+    },
+    {
+      "name": "get_repo_info",
+      "description": "Get metadata and stats for a GitHub repository",
+      "providerId": "github-bot",
+      "transportType": "rest",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "owner": { "type": "string", "description": "Repository owner" },
+          "repo": { "type": "string", "description": "Repository name" }
+        },
+        "required": ["owner", "repo"]
+      }
+    }
+  ]
+}
