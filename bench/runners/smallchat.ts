@@ -21,15 +21,15 @@ import type { BenchTool, Runner, RunnerResult, ResolvedResult } from './types.js
 
 /** Weights for the composite scoring algorithm */
 const WEIGHTS = {
-  semantic: 0.6,
-  descriptionOverlap: 0.25,
+  semantic: 0.30,
+  descriptionOverlap: 0.50,
   selectorExact: 0.20,
   selectorPartial: 0.10,
   argShapeMatch: 0.20,
   argShapePartial: 0.10,
   argShapeMismatch: -0.20,
   providerBias: 0.25,
-  tagBoost: 0.06,
+  tagBoost: 0.10,
   missingRequiredArg: -0.30,
 };
 
@@ -46,7 +46,7 @@ const PROVIDER_SIGNALS: Record<string, string[]> = {
   github: ['github'],
   postgres: ['postgres', 'postgresql', 'sql'],
   mongodb: ['mongo', 'mongodb', 'nosql', 'collection'],
-  coingecko: ['bitcoin', 'btc', 'eth', 'crypto', 'cryptocurrency', 'defi'],
+  coingecko: ['bitcoin', 'btc', 'eth', 'crypto', 'cryptocurrency', 'defi', 'dogecoin', 'solana', 'doge'],
   alphavantage: ['stock', 'ticker', 'equity', 'aapl', 'tsla', 'nasdaq', 'nyse'],
   firebase: ['push notification', 'push', 'mobile notification'],
   twilio: ['sms', 'text message', 'phone number', 'text the'],
@@ -99,25 +99,28 @@ export class SmallchatRunner implements Runner {
     const start = performance.now();
     const lowerQuery = query.toLowerCase();
 
-    // Step 1: Semantic similarity — get candidates
+    // Step 1: Semantic similarity — get scores for ALL tools
     const queryVector = await this.embedder.embed(query);
-    const matches = this.vectorIndex.search(queryVector, 10, 0.0);
+    const matches = this.vectorIndex.search(queryVector, this.tools.length, 0.0);
+    const semanticById = new Map<string, number>();
+    for (const match of matches) {
+      semanticById.set(match.id, 1 - match.distance);
+    }
 
-    // Step 2: Score each candidate with the composite algorithm
+    // Resolve selector once for the query (same for all tools)
+    const resolvedSelector = await this.selectorTable.resolve(query);
+
+    // Step 2: Score EVERY tool with the composite algorithm
     const scored: ResolvedResult[] = [];
 
-    for (const match of matches) {
-      const tool = this.toolById.get(match.id);
-      if (!tool) continue;
-
-      const semantic = 1 - match.distance;
+    for (const tool of this.tools) {
+      const semantic = semanticById.get(tool.id) ?? 0;
       let selectorBonus = 0;
       let argScore = 0;
       let providerScore = 0;
       let tagScore = 0;
 
       // --- Selector match bonus ---
-      const resolvedSelector = await this.selectorTable.resolve(query);
       if (resolvedSelector.canonical === tool.selector) {
         selectorBonus = WEIGHTS.selectorExact;
       } else if (tool.selector.split('.').some(part =>
@@ -146,19 +149,21 @@ export class SmallchatRunner implements Runner {
         }
       }
 
-      // --- Tag boost ---
+      // --- Tag boost (phrase-level: multi-word tags or exact substring matches) ---
+      const queryStems = new Set(tokenize(lowerQuery).map(stem));
       for (const tag of tool.tags) {
-        if (lowerQuery.includes(tag.toLowerCase())) {
+        const tagStem = stem(tag.toLowerCase());
+        if (queryStems.has(tagStem) || lowerQuery.includes(tag.toLowerCase())) {
           tagScore += WEIGHTS.tagBoost;
         }
       }
-      tagScore = Math.min(tagScore, 0.2); // Cap tag boost
+      tagScore = Math.min(tagScore, 0.25); // Cap tag boost
 
       // --- Quality hints ---
       const qualityScore = this.scoreQualityHints(lowerQuery, tool);
 
-      // --- Composite score ---
-      const totalScore = Math.min(1, Math.max(0,
+      // --- Composite score (unclamped for better ranking differentiation) ---
+      const totalScore = Math.max(0,
         (semantic * WEIGHTS.semantic) +
         (descOverlap * WEIGHTS.descriptionOverlap) +
         selectorBonus +
@@ -166,7 +171,7 @@ export class SmallchatRunner implements Runner {
         providerScore +
         tagScore +
         qualityScore
-      ));
+      );
 
       scored.push({
         toolId: tool.id,
@@ -193,18 +198,21 @@ export class SmallchatRunner implements Runner {
     };
   }
 
-  /** Score description keyword overlap — how many query words appear in the tool description */
+  /** Score keyword overlap — how many query words appear in description, tags, and ID */
   private scoreDescriptionOverlap(query: string, tool: BenchTool): number {
     const queryWords = tokenize(query);
     if (queryWords.length === 0) return 0;
 
-    const descWords = new Set(tokenize(tool.description));
-    const idWords = new Set(tool.id.toLowerCase().split('.').flatMap(p => p.split('_')));
+    const descStems = new Set(tokenize(tool.description).map(stem));
+    const tagStems = new Set(tool.tags.map(t => stem(t.toLowerCase())));
+    const idWords = new Set(tool.id.toLowerCase().split('.').flatMap(p => p.split('_')).map(stem));
 
     let hits = 0;
     for (const word of queryWords) {
-      if (descWords.has(word)) hits++;
-      if (idWords.has(word)) hits += 0.5;
+      const s = stem(word);
+      if (descStems.has(s)) hits += 1.0;
+      if (tagStems.has(s)) hits += 0.8;
+      if (idWords.has(s)) hits += 0.5;
     }
 
     return Math.min(1, hits / queryWords.length);
@@ -282,6 +290,16 @@ export class SmallchatRunner implements Runner {
   }
 }
 
+/** Simple stemming — strip common suffixes for matching */
+function stem(word: string): string {
+  if (word.endsWith('ies') && word.length > 4) return word.slice(0, -3) + 'y';
+  if (word.endsWith('es') && word.length > 4) return word.slice(0, -2);
+  if (word.endsWith('s') && !word.endsWith('ss') && word.length > 3) return word.slice(0, -1);
+  if (word.endsWith('ing') && word.length > 5) return word.slice(0, -3);
+  if (word.endsWith('ed') && word.length > 4) return word.slice(0, -2);
+  return word;
+}
+
 /** Tokenize into lowercase words, stripping punctuation and stopwords */
 function tokenize(text: string): string[] {
   const STOPWORDS = new Set([
@@ -295,7 +313,7 @@ function tokenize(text: string): string[] {
     'his', 'she', 'her', 'it', 'its', 'they', 'them', 'their', 'what',
     'which', 'who', 'whom', 'this', 'that', 'these', 'those', 'and',
     'but', 'or', 'nor', 'not', 'so', 'very', 'just', 'than', 'too',
-    'also', 'whats', "what's", 'get', 'using',
+    'also', 'whats', "what's",
   ]);
 
   return text

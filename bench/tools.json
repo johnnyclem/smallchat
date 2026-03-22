@@ -276,5 +276,223 @@
       "message": { "type": "string", "required": true, "description": "SMS message text" }
     },
     "tags": ["notification", "sms", "text", "twilio", "phone"]
+  },
+  {
+    "id": "email.send",
+    "selector": "email.send",
+    "description": "Send an email message to a recipient",
+    "provider": "default",
+    "args": {
+      "to": { "type": "string", "required": true, "description": "Recipient email address" },
+      "subject": { "type": "string", "required": false, "description": "Email subject line" },
+      "body": { "type": "string", "required": true, "description": "Email body content" }
+    },
+    "tags": ["email", "send", "message", "mail"]
+  },
+  {
+    "id": "email.draft",
+    "selector": "email.draft",
+    "description": "Draft an email message without sending it",
+    "provider": "default",
+    "args": {
+      "to": { "type": "string", "required": false, "description": "Recipient email address" },
+      "subject": { "type": "string", "required": false, "description": "Email subject line" },
+      "body": { "type": "string", "required": true, "description": "Draft body content" }
+    },
+    "tags": ["email", "draft", "compose", "write"]
+  },
+  {
+    "id": "email.search",
+    "selector": "email.search",
+    "description": "Search emails in your inbox by sender, keyword, or date",
+    "provider": "default",
+    "args": {
+      "query": { "type": "string", "required": true, "description": "Search query" },
+      "from": { "type": "string", "required": false, "description": "Filter by sender" },
+      "date_range": { "type": "string", "required": false, "description": "Date range filter" }
+    },
+    "tags": ["email", "search", "inbox", "find", "filter"]
+  },
+  {
+    "id": "email.reply",
+    "selector": "email.reply",
+    "description": "Reply to an existing email thread",
+    "provider": "default",
+    "args": {
+      "thread_id": { "type": "string", "required": true, "description": "Email thread ID to reply to" },
+      "body": { "type": "string", "required": true, "description": "Reply message body" }
+    },
+    "tags": ["email", "reply", "respond", "thread"]
+  },
+  {
+    "id": "docs.search",
+    "selector": "docs.search",
+    "description": "Search for documents by title, content, or keyword",
+    "provider": "default",
+    "args": {
+      "query": { "type": "string", "required": true, "description": "Search query" }
+    },
+    "tags": ["docs", "document", "search", "find", "notes"]
+  },
+  {
+    "id": "docs.create",
+    "selector": "docs.create",
+    "description": "Create a new document with a title and content",
+    "provider": "default",
+    "args": {
+      "title": { "type": "string", "required": true, "description": "Document title" },
+      "content": { "type": "string", "required": false, "description": "Initial document content" }
+    },
+    "tags": ["docs", "document", "create", "new", "write", "spec", "brief"]
+  },
+  {
+    "id": "docs.update",
+    "selector": "docs.update",
+    "description": "Update or edit an existing document",
+    "provider": "default",
+    "args": {
+      "doc_id": { "type": "string", "required": true, "description": "Document ID to update" },
+      "content": { "type": "string", "required": true, "description": "New or appended content" }
+    },
+    "tags": ["docs", "document", "update", "edit", "modify", "append"]
+  },
+  {
+    "id": "tasks.create",
+    "selector": "tasks.create",
+    "description": "Create a new task or to-do item",
+    "provider": "default",
+    "args": {
+      "title": { "type": "string", "required": true, "description": "Task title" },
+      "due": { "type": "datetime", "required": false, "description": "Due date" }
+    },
+    "tags": ["tasks", "todo", "create", "add", "reminder"]
+  },
+  {
+    "id": "tasks.complete",
+    "selector": "tasks.complete",
+    "description": "Mark a task as completed or done",
+    "provider": "default",
+    "args": {
+      "task_id": { "type": "string", "required": true, "description": "Task ID to complete" }
+    },
+    "tags": ["tasks", "complete", "done", "finish", "mark"]
+  },
+  {
+    "id": "tasks.list",
+    "selector": "tasks.list",
+    "description": "List tasks filtered by status, date, or project",
+    "provider": "default",
+    "args": {
+      "status": { "type": "string", "required": false, "description": "Filter by status (open, done, all)" },
+      "date_range": { "type": "string", "required": false, "description": "Date range filter" }
+    },
+    "tags": ["tasks", "list", "todo", "show", "due", "open"]
+  },
+  {
+    "id": "contacts.lookup",
+    "selector": "contacts.lookup",
+    "description": "Look up a contact by name, email, or phone number",
+    "provider": "default",
+    "args": {
+      "query": { "type": "string", "required": true, "description": "Name, email, or phone to search" }
+    },
+    "tags": ["contacts", "lookup", "find", "person", "address"]
+  },
+  {
+    "id": "contacts.create",
+    "selector": "contacts.create",
+    "description": "Add a new contact to your address book",
+    "provider": "default",
+    "args": {
+      "name": { "type": "string", "required": true, "description": "Contact name" },
+      "email": { "type": "string", "required": false, "description": "Email address" },
+      "phone": { "type": "string", "required": false, "description": "Phone number" }
+    },
+    "tags": ["contacts", "create", "add", "new", "save"]
+  },
+  {
+    "id": "contacts.update",
+    "selector": "contacts.update",
+    "description": "Update an existing contact's information",
+    "provider": "default",
+    "args": {
+      "contact_id": { "type": "string", "required": true, "description": "Contact to update" },
+      "fields": { "type": "object", "required": true, "description": "Fields to update" }
+    },
+    "tags": ["contacts", "update", "edit", "change", "modify"]
+  },
+  {
+    "id": "maps.route",
+    "selector": "maps.route",
+    "description": "Get directions and route between two locations",
+    "provider": "default",
+    "args": {
+      "origin": { "type": "string", "required": false, "description": "Starting location" },
+      "destination": { "type": "string", "required": true, "description": "Destination address or place" }
+    },
+    "tags": ["maps", "directions", "route", "navigate", "drive"]
+  },
+  {
+    "id": "maps.search_places",
+    "selector": "maps.search_places",
+    "description": "Search for places, businesses, or points of interest nearby",
+    "provider": "default",
+    "args": {
+      "query": { "type": "string", "required": true, "description": "Place or business to search for" },
+      "location": { "type": "string", "required": false, "description": "Center location for search" }
+    },
+    "tags": ["maps", "places", "search", "nearby", "find", "restaurants"]
+  },
+  {
+    "id": "files.upload",
+    "selector": "files.upload",
+    "description": "Upload a file to cloud storage or drive",
+    "provider": "default",
+    "args": {
+      "file": { "type": "binary", "required": true, "description": "File to upload" },
+      "name": { "type": "string", "required": false, "description": "File name" }
+    },
+    "tags": ["files", "upload", "cloud", "drive", "storage"]
+  },
+  {
+    "id": "files.download",
+    "selector": "files.download",
+    "description": "Download a file from cloud storage or drive",
+    "provider": "default",
+    "args": {
+      "file_id": { "type": "string", "required": true, "description": "File ID or name to download" }
+    },
+    "tags": ["files", "download", "get", "retrieve"]
+  },
+  {
+    "id": "files.search",
+    "selector": "files.search",
+    "description": "Search for files by name, type, or content",
+    "provider": "default",
+    "args": {
+      "query": { "type": "string", "required": true, "description": "Search query" }
+    },
+    "tags": ["files", "search", "find", "locate"]
+  },
+  {
+    "id": "slack.send",
+    "selector": "slack.send",
+    "description": "Send a message on Slack to a channel or person",
+    "provider": "slack",
+    "args": {
+      "channel": { "type": "string", "required": true, "description": "Channel or person" },
+      "text": { "type": "string", "required": true, "description": "Message text" }
+    },
+    "tags": ["slack", "message", "send", "chat", "channel"]
+  },
+  {
+    "id": "slack.search",
+    "selector": "slack.search",
+    "description": "Search Slack messages and threads",
+    "provider": "slack",
+    "args": {
+      "query": { "type": "string", "required": true, "description": "Search query" }
+    },
+    "tags": ["slack", "search", "find", "thread", "message"]
   }
 ]

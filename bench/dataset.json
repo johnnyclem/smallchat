@@ -270,6 +270,24 @@
     "notes": "Company name should resolve to stock."
   },
   {
+    "id": "finance_crypto_doge",
+    "query": "doge price",
+    "expected": "finance.crypto.price",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "finance",
+    "notes": "Crypto symbol DOGE should route to crypto price tool."
+  },
+  {
+    "id": "finance_crypto_ethereum_check",
+    "query": "check the ethereum price",
+    "expected": "finance.crypto.price",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "finance",
+    "notes": "Crypto name ethereum should route to crypto price tool."
+  },
+  {
     "id": "email_send_basic",
     "query": "send an email to Sarah saying I'll be five minutes late",
     "expected": "email.send",
@@ -853,5 +871,137 @@
     "difficulty": "medium",
     "category": "slack",
     "notes": "Verbified brand usage."
+  },
+
+  {
+    "id": "semantic_ambiguity_translate_formal",
+    "query": "translate this contract to German formally",
+    "expected": "translate.deepl",
+    "acceptable": ["translate.google"],
+    "difficulty": "medium",
+    "category": "semantic_ambiguity",
+    "notes": "Formality hint should prefer DeepL over Google Translate."
+  },
+  {
+    "id": "semantic_ambiguity_notify_person",
+    "query": "notify Sarah about the deployment",
+    "expected": null,
+    "acceptable": ["messaging.slack.send", "messaging.teams.send", "notifications.push.send", "notifications.sms.send"],
+    "difficulty": "hard",
+    "category": "semantic_ambiguity",
+    "notes": "Notify is ambiguous across messaging and notification tools."
+  },
+  {
+    "id": "semantic_ambiguity_search_code_vs_web",
+    "query": "find code examples for semantic routing",
+    "expected": "search.code",
+    "acceptable": ["search.google", "search.bing"],
+    "difficulty": "medium",
+    "category": "semantic_ambiguity",
+    "notes": "Code keyword should prefer code search over web search."
+  },
+
+  {
+    "id": "arg_shape_weather_coords",
+    "query": "what's the weather at latitude 37.77 longitude -122.42?",
+    "expected": "weather.darksky",
+    "acceptable": [],
+    "difficulty": "medium",
+    "category": "arg_shape",
+    "notes": "Lat/lon in query matches DarkSky's coordinate-based args."
+  },
+  {
+    "id": "arg_shape_sms_phone",
+    "query": "text 555-0123 that the meeting is at 3pm",
+    "expected": "notifications.sms.send",
+    "acceptable": [],
+    "difficulty": "medium",
+    "category": "arg_shape",
+    "notes": "Phone number in query matches SMS tool's phone arg."
+  },
+  {
+    "id": "arg_shape_forex_convert",
+    "query": "convert 500 USD to EUR",
+    "expected": "finance.forex.rate",
+    "acceptable": [],
+    "difficulty": "medium",
+    "category": "arg_shape",
+    "notes": "Currency pair in query matches forex from/to args."
+  },
+
+  {
+    "id": "domain_ambiguity_message_team",
+    "query": "tell the engineering team the deploy is done",
+    "expected": null,
+    "acceptable": ["messaging.slack.send", "messaging.teams.send", "email.gmail.send", "email.outlook.send"],
+    "difficulty": "hard",
+    "category": "domain_ambiguity",
+    "notes": "Could be messaging or email; no domain hint given."
+  },
+
+  {
+    "id": "provider_bias_bing_search",
+    "query": "search on Bing for React tutorials",
+    "expected": "search.bing",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "provider_bias",
+    "notes": "Explicit Bing provider mention."
+  },
+  {
+    "id": "provider_bias_s3_upload",
+    "query": "upload the backup to S3",
+    "expected": "storage.s3.upload",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "provider_bias",
+    "notes": "S3 provider mention maps to AWS storage."
+  },
+  {
+    "id": "provider_bias_google_translate",
+    "query": "use Google Translate for this paragraph",
+    "expected": "translate.google",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "provider_bias",
+    "notes": "Explicit Google Translate request."
+  },
+  {
+    "id": "provider_bias_postgres_query",
+    "query": "query the Postgres database for active users",
+    "expected": "db.postgres.query",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "provider_bias",
+    "notes": "Explicit Postgres provider mention."
+  },
+  {
+    "id": "provider_bias_gcs_upload",
+    "query": "store this file in Google Cloud Storage",
+    "expected": "storage.gcs.upload",
+    "acceptable": [],
+    "difficulty": "easy",
+    "category": "provider_bias",
+    "notes": "Google Cloud Storage signal maps to GCS."
+  },
+
+  {
+    "id": "quality_hints_deepl_professional",
+    "query": "I need a professional high-quality translation of this legal document to French",
+    "expected": "translate.deepl",
+    "acceptable": ["translate.google"],
+    "difficulty": "medium",
+    "category": "quality_hints",
+    "notes": "Professional and high-quality hints should favor DeepL."
+  },
+
+  {
+    "id": "underspecified_check_price",
+    "query": "check the current price",
+    "expected": null,
+    "acceptable": ["finance.stock.price", "finance.crypto.price", "finance.forex.rate"],
+    "difficulty": "hard",
+    "category": "underspecified",
+    "notes": "No asset specified; any price tool is acceptable."
   }
 ]
