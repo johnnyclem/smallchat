@@ -264,6 +264,19 @@ export interface ProviderManifest {
   endpoint?: string;
   /** Opaque version string — cache entries tagged with this expire on change */
   version?: string;
+  /** Channel metadata — present when this provider is a Claude Code channel */
+  channel?: {
+    /** Whether this provider is a channel */
+    isChannel: boolean;
+    /** Whether the channel is two-way (has reply tool) */
+    twoWay: boolean;
+    /** Whether permission relay is supported */
+    permissionRelay: boolean;
+    /** Name of the reply tool (if two-way) */
+    replyToolName?: string;
+    /** Channel-specific instructions text */
+    instructions?: string;
+  };
 }
 
 export interface CompilationResult {

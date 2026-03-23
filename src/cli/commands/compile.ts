@@ -190,7 +190,7 @@ async function runCompile(
     }
   }
 
-  const output = serializeResult(result, embedderType);
+  const output = serializeResult(result, embedderType, manifests);
   writeFileSync(outputPath, JSON.stringify(output, null, 2));
 
   console.log(`\nOutput: ${outputPath}`);
@@ -294,7 +294,11 @@ function findManifestFiles(dir: string): string[] {
   return files;
 }
 
-function serializeResult(result: import('../../core/types.js').CompilationResult, embedderType?: string): object {
+function serializeResult(
+  result: import('../../core/types.js').CompilationResult,
+  embedderType?: string,
+  manifests?: import('../../core/types.js').ProviderManifest[],
+): object {
   const selectors: Record<string, object> = {};
   for (const [key, sel] of result.selectors) {
     selectors[key] = {
@@ -318,6 +322,22 @@ function serializeResult(result: import('../../core/types.js').CompilationResult
     dispatchTables[providerId] = methods;
   }
 
+  // Build channel metadata from manifests
+  const channels: Record<string, object> = {};
+  if (manifests) {
+    for (const m of manifests) {
+      if (m.channel?.isChannel) {
+        channels[m.id] = {
+          isChannel: true,
+          twoWay: m.channel.twoWay,
+          permissionRelay: m.channel.permissionRelay,
+          replyToolName: m.channel.replyToolName,
+          instructions: m.channel.instructions,
+        };
+      }
+    }
+  }
+
   return {
     version: '0.1.0',
     timestamp: new Date().toISOString(),
@@ -332,10 +352,12 @@ function serializeResult(result: import('../../core/types.js').CompilationResult
       mergedCount: result.mergedCount,
       providerCount: result.dispatchTables.size,
       collisionCount: result.collisions.length,
+      channelCount: Object.keys(channels).length,
     },
     selectors,
     dispatchTables,
     collisions: result.collisions,
+    ...(Object.keys(channels).length > 0 ? { channels } : {}),
   };
 }
 

@@ -30,6 +30,10 @@ export interface IntrospectionResult {
   serverInfo?: { name: string; version: string };
   tools: McpToolResult[];
   error?: string;
+  /** Server capabilities from initialize response */
+  capabilities?: Record<string, unknown>;
+  /** Server instructions (if provided) */
+  instructions?: string;
 }
 
 export interface McpToolResult {
@@ -156,6 +160,8 @@ export async function introspectMcpServer(
     // State machine for the JSON-RPC conversation
     let phase: 'init' | 'tools' | 'done' = 'init';
     let serverInfo: { name: string; version: string } | undefined;
+    let serverCapabilities: Record<string, unknown> | undefined;
+    let serverInstructions: string | undefined;
 
     rl.on('line', (line) => {
       const trimmed = line.trim();
@@ -186,6 +192,8 @@ export async function introspectMcpServer(
         }
 
         serverInfo = msg.result?.serverInfo as { name: string; version: string } | undefined;
+        serverCapabilities = msg.result?.capabilities as Record<string, unknown> | undefined;
+        serverInstructions = msg.result?.instructions as string | undefined;
 
         // Send initialized notification
         child.stdin.write(
@@ -215,7 +223,13 @@ export async function introspectMcpServer(
         }
 
         const tools = ((msg.result as Record<string, unknown>)?.tools as McpToolResult[]) ?? [];
-        resolvePromise({ serverId, serverInfo, tools });
+        resolvePromise({
+          serverId,
+          serverInfo,
+          tools,
+          capabilities: serverCapabilities,
+          instructions: serverInstructions,
+        });
       }
     });
 
@@ -406,10 +420,34 @@ function introspectionToManifest(result: IntrospectionResult): ProviderManifest 
     transportType: 'mcp' as const,
   }));
 
-  return {
+  // Detect channel capabilities from experimental capabilities
+  const experimental = (result.capabilities?.experimental ?? {}) as Record<string, unknown>;
+  const isChannel = 'claude/channel' in experimental;
+  const permissionRelay = 'claude/channel/permission' in experimental;
+
+  // Detect two-way mode: has a reply tool
+  const hasReplyTool = result.tools.some(t => t.name === 'reply');
+  const replyToolName = result.tools.find(t =>
+    t.description?.toLowerCase().includes('reply') ||
+    t.description?.toLowerCase().includes('send a reply'),
+  )?.name;
+
+  const manifest: ProviderManifest = {
     id: result.serverId,
     name: result.serverInfo?.name ?? result.serverId,
     transportType: 'mcp',
     tools,
   };
+
+  if (isChannel) {
+    manifest.channel = {
+      isChannel: true,
+      twoWay: hasReplyTool || !!replyToolName,
+      permissionRelay,
+      replyToolName: replyToolName ?? (hasReplyTool ? 'reply' : undefined),
+      instructions: result.instructions,
+    };
+  }
+
+  return manifest;
 }

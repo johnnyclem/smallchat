@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "webhook-channel": {
+      "command": "npx",
+      "args": [
+        "smallchat",
+        "channel",
+        "--name", "webhook",
+        "--two-way",
+        "--permission-relay",
+        "--http-bridge",
+        "--http-bridge-port", "3002",
+        "--http-bridge-secret", "change-me-in-production",
+        "--sender-allowlist", "alice@example.com,bob@example.com"
+      ]
+    }
+  }
+}

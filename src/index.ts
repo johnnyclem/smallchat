@@ -124,6 +124,30 @@ export type { MCPResource, MCPResourceContent, MCPResourceTemplate, ResourceChan
 export { PromptRegistry, PromptNotFoundError } from './mcp/prompts.js';
 export type { MCPPrompt, MCPPromptArgument, MCPPromptMessage, MCPPromptContent, PromptHandler, StaticPrompt } from './mcp/prompts.js';
 
+// Channel — Claude Code channel protocol support
+export {
+  ClaudeCodeChannelAdapter,
+  ChannelServer,
+  SenderGate,
+  filterMetaKeys,
+  isValidMetaKey,
+  parsePermissionReply,
+  isValidPermissionId,
+  validatePayloadSize,
+  serializeChannelTag,
+} from './channel/index.js';
+export type {
+  ChannelCapabilities,
+  ChannelExperimentalCapabilities,
+  ChannelEvent,
+  ChannelNotificationParams,
+  PermissionRequest,
+  PermissionVerdict,
+  ChannelProviderMeta,
+  ChannelServerConfig,
+  ChannelMessage,
+} from './channel/index.js';
+
 // Transport Layer — ITransport interface and implementations
 export type {
   ITransport,

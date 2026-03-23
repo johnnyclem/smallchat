@@ -26,6 +26,10 @@
     "./embedding": {
       "types": "./dist/embedding/local-embedder.d.ts",
       "import": "./dist/embedding/local-embedder.js"
+    },
+    "./channel": {
+      "types": "./dist/channel/index.d.ts",
+      "import": "./dist/channel/index.js"
     }
   },
   "bin": {
