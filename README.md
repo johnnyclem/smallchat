@@ -1,10 +1,20 @@
-# smallchat — object oriented inference
+# smallchat
 
-> "The big idea is messaging." — Alan Kay
+> Object-oriented inference. A tool compiler for the age of agents.
 
 [smallchat.dev](https://smallchat.dev)
 
-A message-passing tool compiler inspired by the Smalltalk/Objective-C runtime. smallchat models LLM tool use as message dispatch: the LLM expresses intent, and the runtime resolves it to concrete implementations.
+---
+
+Your agent has 50 tools. The LLM sees all 50 in its context window every single turn, burning tokens and degrading selection accuracy. You write routing logic, maintain tool registries, and pray the model picks the right one.
+
+**smallchat compiles your tools into a dispatch table.** The LLM expresses intent. The runtime resolves it — semantically, deterministically, in microseconds. No prompt stuffing. No selection lottery.
+
+```bash
+npx smallchat compile --source ~/.mcp.json
+```
+
+One command. Point it at your MCP config, a directory of manifests, or any MCP server repo. Out comes a compiled artifact with embedded vectors, dispatch tables, and resolution caching — ready to serve.
 
 ## Install
 
@@ -14,141 +24,43 @@ npm install @smallchat/core
 
 Requires Node.js >= 20.
 
-## Quick Start
+## See It Work
 
 ```bash
-# Compile from a directory of manifest files
-npx smallchat compile --source ./manifests
-
-# Compile from an MCP config file (Claude Desktop, .mcp.json, etc.)
+# Compile tools from your MCP servers
 npx smallchat compile --source ~/.mcp.json
 
-# Auto-detect: run from inside any MCP server repo
-cd my-mcp-server && npx smallchat compile
-
-# Watch mode — auto-recompile on changes
-npx smallchat compile --source ./manifests --watch
-
-# Inspect the compiled artifact
-npx smallchat inspect tools.toolkit.json --providers --selectors
-
-# Test dispatch resolution
+# Ask it a question — see which tool it picks and why
 npx smallchat resolve tools.toolkit.json "search for code"
 
-# Start MCP-compatible server
+# Start an MCP-compatible server
 npx smallchat serve --source ./manifests --port 3001
-
-# Diagnostic checks
-npx smallchat doctor
 ```
 
-### Compile Sources
-
-The `compile` command accepts three types of input:
-
-| Source | Example | What it does |
-|--------|---------|--------------|
-| **Directory** | `--source ./manifests` | Reads all `.json` manifest files from the directory |
-| **MCP config file** | `--source ~/.mcp.json` | Parses `mcpServers`, spawns each server via stdio, and introspects tools via JSON-RPC |
-| **Auto-detect** | _(no --source)_ | Detects if cwd is an MCP server repo, builds & introspects it |
-
-**MCP config file format** (used by Claude Desktop, Claude Code `.mcp.json`, etc.):
-
-```json
-{
-  "mcpServers": {
-    "memory": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-memory"]
-    },
-    "filesystem": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
-    }
-  }
-}
-```
-
-When compiling from an MCP config or auto-detecting, smallchat spawns each server, sends `initialize` and `tools/list` over MCP's stdio transport, captures the tool schemas, and generates shareable manifest files alongside the compiled artifact.
-
-### Programmatic Usage
+## Use It in Code
 
 ```typescript
-import {
-  ToolRuntime,
-  ONNXEmbedder,
-  SqliteVectorIndex,
-  MemoryVectorIndex,
-  LocalEmbedder,
-} from 'smallchat';
+import { ToolRuntime, MemoryVectorIndex, LocalEmbedder } from 'smallchat';
 
-// Production: semantic embeddings + persistent vector index
 const runtime = new ToolRuntime(
-  new SqliteVectorIndex('tools.db'),
-  new ONNXEmbedder(),
-  { cacheSize: 1024, minConfidence: 0.85 }
-);
-
-// Development: fast hash embeddings + in-memory index
-const devRuntime = new ToolRuntime(
   new MemoryVectorIndex(),
   new LocalEmbedder(),
 );
 
-// Streaming dispatch — async generator with typed events
-for await (const event of runtime.dispatchStream("find flights", { to: "NYC" })) {
-  if (event.type === "inference-delta") process.stdout.write(event.content);
-}
+const result = await runtime.dispatch('find flights', { to: 'NYC' });
 
-// Convenience: token-only stream
-for await (const token of runtime.inferenceStream("find flights", { to: "NYC" })) {
+// Or stream token-by-token
+for await (const token of runtime.inferenceStream('find flights', { to: 'NYC' })) {
   process.stdout.write(token);
 }
 ```
 
-## v0.1.0
+## How It Works
 
-### Core Runtime
+smallchat borrows its architecture from the Smalltalk/Objective-C runtime. Tools are objects. Intents are messages. Dispatch is semantic.
 
-- **Selector Table** — semantic interning of tool intents (like `sel_registerName`)
-- **Resolution Cache** — LRU cache with version tagging and automatic staleness detection
-- **ToolClass** — provider grouping with dispatch tables, superclass chains, and overload support
-- **ToolProxy** — lazy schema loading (like `NSProxy`)
-- **smallchat_dispatch** — the hot path for intent → tool resolution
-- **smallchat_dispatchStream** — async generator streaming dispatch with real-time event feedback
-- **ToolRuntime** — top-level runtime with swizzling, header generation, and inference streaming
+The LLM says *what* it wants. The runtime figures out *which tool* handles it — using vector similarity, resolution caching, superclass traversal, and fallback chains. No routing code. No tool selection prompts.
 
-### Streaming & Async Dispatch
-
-smallchat supports three tiers of execution, with automatic fallback:
-
-| Tier | Interface | Granularity | Use case |
-|------|-----------|-------------|----------|
-| 1 | `executeInference` | Token-level deltas | OpenAI/Anthropic SSE streams |
-| 2 | `executeStream` | Chunk-level results | Paginated or batched responses |
-| 3 | `execute` | Single-shot | Simple tool calls |
-
-`smallchat_dispatchStream` yields a sequence of typed events:
-
-```
-resolving → tool-start → chunk* / inference-delta* → done
-```
-
-Cancellation is supported via standard `AbortController` semantics on the async generator.
-
-The runtime exposes a convenience `inferenceStream()` method that yields only token text, filtering out lifecycle events and falling back gracefully through the tiers.
-
-### SCObject Parameter Passing
-
-Inspired by NSObject, smallchat wraps structured data in a type hierarchy for safe tool-to-tool passing:
-
-```
-SCObject
-├── SCSelector       — tool intent as a passable value
-├── SCData           — arbitrary JSON/structured data
-├── SCToolReference  — a ToolIMP reference (tool-to-tool dispatch)
-├── SCArray          — ordered collection
-└── SCDictionary     — key-value collection
 ```
 
 Primitives (string, number, boolean, null) pass through unwrapped. Objects and arrays auto-wrap/unwrap at dispatch boundaries.
@@ -217,90 +129,33 @@ const original = runtime.swizzle(toolClass, selector, newImp);
 // Cache entries for that selector are automatically flushed
 ```
 
-### LLM Header Generation
-
-`runtime.generateHeader()` produces a token-efficient capability summary for LLM system prompts, including protocol groupings, overload signatures, and instruction text.
-
 ## CLI
 
 | Command | Description |
 |---------|-------------|
-| `smallchat compile` | Parse manifests, embed selectors, link dispatch tables → `.toolkit.json` |
-| `smallchat serve` | Start MCP-compatible HTTP server with SSE streaming |
-| `smallchat resolve` | Test dispatch resolution against a compiled artifact |
-| `smallchat inspect` | Examine providers, selectors, and protocols in a compiled artifact |
-| `smallchat doctor` | Check environment: Node version, ONNX model availability, dependencies |
+| `compile` | Compile manifests into a dispatch artifact |
+| `serve` | Start an MCP-compatible server |
+| `resolve` | Test intent-to-tool resolution |
+| `inspect` | Examine a compiled artifact |
+| `doctor` | Check your environment |
 
-## Example Manifests
+## Documentation
 
-The `examples/` directory contains 32 MCP server manifest files for popular services, ready to use with `smallchat compile`:
-
-| Category | Manifests |
-|----------|-----------|
-| **File & Storage** | filesystem, git, google-drive, dropbox |
-| **Code Hosting** | github, gitlab |
-| **Project Management** | atlassian (Jira + Confluence), linear, notion |
-| **Communication** | slack |
-| **Search & Web** | brave-search, fetch, puppeteer, google-maps |
-| **Databases** | postgres, sqlite, mongodb, redis, elasticsearch |
-| **Cloud & Infra** | aws, azure, cloudflare, firebase |
-| **Payments** | stripe |
-| **Monitoring** | sentry |
-| **Design** | figma, everart |
-| **Utilities** | time, memory, sequential-thinking, everything |
-
-A `full-pipeline-example/` shows how to compose multiple providers into a single agent toolkit with semantic overload generation enabled.
-
-## Benchmarks
-
-The `bench/` directory contains a benchmarking suite with 700+ intent-to-tool test cases across easy, medium, and hard difficulty tiers, evaluated against 100+ tool definitions.
-
-Four dispatch strategies are compared:
-
-| Strategy | Method |
-|----------|--------|
-| **Keyword** | Simple string matching baseline |
-| **Embedding-only** | Pure cosine similarity |
-| **LLM** | GPT-4 tool selection |
-| **smallchat** | Semantic dispatch with caching and fallback chains |
-
-Metrics include top-1 accuracy, top-5 accuracy, acceptable hit rate, and latency. Per-case breakdowns provide explainability for dispatch decisions.
-
-## Concept Mapping
-
-| Smalltalk / Obj-C | smallchat |
-|---|---|
-| Object | ToolProvider (MCP server, API, local function) |
-| Class | ToolClass (group of related tools) |
-| SEL | ToolSelector (semantic fingerprint of intent) |
-| IMP | ToolIMP (concrete implementation) |
-| Method = SEL + IMP | ToolMethod |
-| Message send | `smallchat_dispatch(context, intent, args)` |
-| Message stream | `smallchat_dispatchStream(context, intent, args)` |
-| Method cache | Resolution cache (intent → resolved tool, version-tagged) |
-| Protocol | ToolProtocol (capability interface) |
-| Category | ToolCategory (capability extension) |
-| `respondsToSelector:` | `canHandle(selector)` |
-| `forwardInvocation:` | Fallback chain (superclass → broadened → LLM) |
-| NSProxy | ToolProxy (lazy schema loading) |
-| NSObject | SCObject (typed parameter hierarchy) |
+| Doc | What's inside |
+|-----|---------------|
+| [Quickstart](./QUICKSTART.md) | Zero to dispatching in 5 minutes |
+| [Architecture](./ARCHITECTURE.md) | Full design document |
+| [Reference](./docs/REFERENCE.md) | Runtime, dispatch, streaming, MCP server, CLI details |
+| [Concept Mapping](./docs/REFERENCE.md#concept-mapping) | Smalltalk/Obj-C → smallchat translation table |
+| [Changelog](./CHANGELOG.md) | Release history |
 
 ## Development
 
 ```bash
-npm test          # Run tests (274 specs)
-npm run dev       # Watch mode TypeScript compilation
+npm test          # 274 specs
+npm run dev       # Watch mode
 npm run lint      # Type check
 ```
-
-## Architecture
-
-See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full design document.
-
-## Current Limitations
-
-- **No LLM disambiguation**: Multiple-candidate resolution takes the best match. LLM-assisted disambiguation planned for Phase 3.
-- **JSON output**: Compiled artifacts are JSON. SQLite binary format planned for Phase 4.
 
 ## License
 
