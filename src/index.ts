@@ -120,6 +120,11 @@ export { ResourceRegistry, ResourceNotFoundError } from './mcp/resources.js';
 export type { MCPResource, MCPResourceContent, MCPResourceTemplate, ResourceChangeEvent, ResourceHandler } from './mcp/resources.js';
 export { PromptRegistry, PromptNotFoundError } from './mcp/prompts.js';
 export type { MCPPrompt, MCPPromptArgument, MCPPromptMessage, MCPPromptContent, PromptHandler, StaticPrompt } from './mcp/prompts.js';
+export { RateLimiter } from './mcp/rate-limiter.js';
+export { AuditLog } from './mcp/audit-log.js';
+export type { AuditEntry } from './mcp/audit-log.js';
+export { loadRuntime, buildToolList, formatContent, findManifests, buildArtifact } from './mcp/artifact.js';
+export type { SerializedArtifact } from './mcp/artifact.js';
 
 // Transport Layer — ITransport interface and implementations
 export type {
