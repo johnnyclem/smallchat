@@ -1,5 +1,5 @@
 // ToolKit — A Message-Passing Tool Compiler
-// v0.0.2
+// v0.1.0
 
 // Core types
 export type {
@@ -89,9 +89,6 @@ export type { FallbackStep, FallbackChainResult } from './runtime/dispatch.js';
 export { ToolRuntime } from './runtime/runtime.js';
 export type { RuntimeOptions } from './runtime/runtime.js';
 export { DispatchBuilder } from './runtime/dispatch-builder.js';
-
-// Fluent dispatch builder
-export { DispatchBuilder } from './runtime/fluent.js';
 
 // Compiler
 export { ToolCompiler } from './compiler/compiler.js';

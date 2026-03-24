@@ -62,8 +62,71 @@ smallchat borrows its architecture from the Smalltalk/Objective-C runtime. Tools
 The LLM says *what* it wants. The runtime figures out *which tool* handles it — using vector similarity, resolution caching, superclass traversal, and fallback chains. No routing code. No tool selection prompts.
 
 ```
-Intent → Selector Table → Dispatch → Tool Execution
-         (semantic)        (cached)    (streaming)
+
+Primitives (string, number, boolean, null) pass through unwrapped. Objects and arrays auto-wrap/unwrap at dispatch boundaries.
+
+### Function Overloading
+
+Tools can register multiple signatures under the same selector. Resolution picks the best match by type specificity:
+
+1. **Exact** type match
+2. **Superclass** match (SCObject hierarchy)
+3. **Union** type match
+4. **Any** (`id`) — accepts anything
+5. Tiebreaker: higher arity preferred
+
+The compiler can also generate **semantic overloads** automatically by clustering tools with similar embeddings but different argument signatures (configurable threshold, default 0.82).
+
+### Fallback Chain
+
+When no exact dispatch match is found, the runtime attempts graceful degradation:
+
+1. **Superclass traversal** — walks ISA chains
+2. **Broadened search** — lowers similarity threshold (0.75 → 0.5)
+3. **LLM disambiguation** — (stub, planned for Phase 3)
+
+Results include `fallbackSteps` metadata so callers know the resolution path taken.
+
+### Embeddings & Vector Search
+
+smallchat provides two embedding strategies and two vector index backends:
+
+| Component | Implementation | Use case |
+|-----------|---------------|----------|
+| **LocalEmbedder** | Deterministic hash-based | Fast development, testing, CI |
+| **ONNXEmbedder** | all-MiniLM-L6-v2 via ONNX Runtime (384-dim) | Production semantic matching |
+| **MemoryVectorIndex** | In-memory brute-force cosine similarity | Development, small tool sets |
+| **SqliteVectorIndex** | sqlite-vec with persistent storage | Production, large tool sets |
+
+The ONNX model ships with the package in `models/` (quantized, ~22MB). This is a deliberate tradeoff: bundling the model means `npm install` gives you working semantic dispatch with zero extra setup, but it does add ~22MB to your `node_modules`. If install size is a concern, use `LocalEmbedder` + `MemoryVectorIndex` for a zero-model-dependency setup (hash-based embeddings, no ONNX download).
+
+### MCP Server
+
+`smallchat serve` starts an HTTP server implementing the MCP 2026 protocol:
+
+| Capability | Description |
+|------------|-------------|
+| **JSON-RPC** | `initialize`, `tools/list` (paginated), `tools/call` |
+| **Resources** | `resources/list`, `resources/read`, `resources/subscribe` with change notifications |
+| **Prompts** | `prompts/list`, `prompts/get` with template arguments |
+| **SSE** | Server-Sent Events stream with keep-alive |
+| **Streaming execution** | `tools/call` with `Accept: text/event-stream` |
+| **Sessions** | SQLite-backed session management |
+| **OAuth 2.1** | Token-based auth with scopes (`tools:read`, `tools:execute`, `resources:read`, `prompts:read`) |
+| **Rate limiting** | Per-session request throttling |
+| **Health** | `/health` endpoint with tool count |
+
+### Cache Versioning & Hot Reload
+
+Resolution cache entries are tagged with provider version, model version, and schema fingerprint (DJB2 hash). Entries are automatically evicted on version changes, enabling hot-reload workflows. Invalidation hooks allow subscribing to flush, provider, selector, and staleness events.
+
+### Method Swizzling
+
+Replace any tool implementation at runtime:
+
+```typescript
+const original = runtime.swizzle(toolClass, selector, newImp);
+// Cache entries for that selector are automatically flushed
 ```
 
 ## CLI

@@ -243,7 +243,26 @@ export class DispatchContext {
 }
 
 /**
- * toolkit_dispatch — the hot path. Equivalent to objc_msgSend.
+ * ResolutionOutcome — the result of the shared resolve phase.
+ *
+ * Either a resolved IMP ready for execution, or a forwarded ToolResult
+ * from the fallback chain (no IMP to execute).
+ */
+type ResolutionOutcome =
+  | {
+      kind: 'resolved';
+      imp: ToolIMP;
+      confidence: number;
+      selector: ToolSelector;
+      candidates: ToolCandidate[];
+    }
+  | {
+      kind: 'forwarded';
+      result: ToolResult;
+    };
+
+/**
+ * resolveToolIMP — shared resolution logic for both sync and streaming dispatch.
  *
  * Resolution order:
  * 1. Cache lookup (sub-millisecond)
@@ -251,13 +270,12 @@ export class DispatchContext {
  * 3. Dispatch table via vector similarity (milliseconds)
  * 4. ISA chain / protocol conformance
  * 5. Forwarding chain (expensive, self-healing)
- * 6. doesNotRecognizeSelector: (UnrecognizedIntent error)
  */
-export async function toolkit_dispatch(
+async function resolveToolIMP(
   context: DispatchContext,
   intent: string,
   args?: Record<string, unknown>,
-): Promise<ToolResult> {
+): Promise<ResolutionOutcome> {
   // 1. RESOLVE SELECTOR (embed + intern)
   const selector = await context.selectorTable.resolve(intent);
 
@@ -267,7 +285,7 @@ export async function toolkit_dispatch(
   if (!hasArgs) {
     const cached = context.cache.lookup(selector);
     if (cached) {
-      return cached.imp.execute(args ?? {});
+      return { kind: 'resolved', imp: cached.imp, confidence: cached.confidence, selector, candidates: [] };
     }
   }
 
@@ -288,7 +306,13 @@ export async function toolkit_dispatch(
         );
         if (overloadResult) {
           context.cache.store(selector, overloadResult.imp, 1 - match.distance);
-          return executeWithArgs(overloadResult.imp, args);
+          return {
+            kind: 'resolved',
+            imp: overloadResult.imp,
+            confidence: 1 - match.distance,
+            selector: matchSelector,
+            candidates: [],
+          };
         }
       }
 
@@ -307,7 +331,7 @@ export async function toolkit_dispatch(
   if (hasArgs) {
     const cached = context.cache.lookup(selector);
     if (cached) {
-      return executeWithArgs(cached.imp, args);
+      return { kind: 'resolved', imp: cached.imp, confidence: cached.confidence, selector, candidates: [] };
     }
   }
 
@@ -316,37 +340,65 @@ export async function toolkit_dispatch(
     const protocolMatch = context.resolveViaProtocol(selector);
     if (protocolMatch) {
       context.cache.store(selector, protocolMatch.imp, protocolMatch.confidence);
-      return executeWithArgs(protocolMatch.imp, args ?? {});
+      return {
+        kind: 'resolved',
+        imp: protocolMatch.imp,
+        confidence: protocolMatch.confidence,
+        selector: protocolMatch.selector,
+        candidates: [],
+      };
     }
 
     // 4b. FORWARDING — slow path
-    return context.forward(selector, intent, args);
+    const result = await context.forward(selector, intent, args);
+    return { kind: 'forwarded', result };
   }
 
   // Sort by confidence descending
   candidates.sort((a, b) => b.confidence - a.confidence);
-
-  if (candidates.length === 1 || candidates[0].confidence > 0.90) {
-    // Unambiguous match. Cache and execute.
-    const tool = candidates[0];
-    context.cache.store(selector, tool.imp, tool.confidence);
-    return executeWithArgs(tool.imp, args ?? {});
-  }
-
-  // Multiple ambiguous candidates — take the best match but annotate
-  // the result so callers know disambiguation may be needed (Phase 3).
   const best = candidates[0];
   context.cache.store(selector, best.imp, best.confidence);
-  const result = await executeWithArgs(best.imp, args ?? {});
-  result.metadata = {
-    ...result.metadata,
-    ambiguous: true,
-    candidateCount: candidates.length,
-    topCandidates: candidates.slice(0, 3).map(c => ({
-      tool: c.imp.toolName,
-      confidence: c.confidence,
-    })),
+
+  return {
+    kind: 'resolved',
+    imp: best.imp,
+    confidence: best.confidence,
+    selector: best.selector,
+    candidates,
   };
+}
+
+/**
+ * toolkit_dispatch — the hot path. Equivalent to objc_msgSend.
+ *
+ * Uses resolveToolIMP for resolution, then executes synchronously.
+ */
+export async function toolkit_dispatch(
+  context: DispatchContext,
+  intent: string,
+  args?: Record<string, unknown>,
+): Promise<ToolResult> {
+  const outcome = await resolveToolIMP(context, intent, args);
+
+  if (outcome.kind === 'forwarded') {
+    return outcome.result;
+  }
+
+  const result = await executeWithArgs(outcome.imp, args ?? {});
+
+  // Annotate ambiguous results so callers know disambiguation may be needed
+  if (outcome.candidates.length > 1 && outcome.confidence <= 0.90) {
+    result.metadata = {
+      ...result.metadata,
+      ambiguous: true,
+      candidateCount: outcome.candidates.length,
+      topCandidates: outcome.candidates.slice(0, 3).map(c => ({
+        tool: c.imp.toolName,
+        confidence: c.confidence,
+      })),
+    };
+  }
+
   return result;
 }
 
@@ -360,149 +412,18 @@ export async function toolkit_dispatch(
  *   4. "done" — final result with the complete ToolResult
  *   5. "error" — if anything goes wrong at any stage
  *
- * The resolution logic mirrors toolkit_dispatch exactly; only the execution
- * phase changes to support streaming.
+ * Uses resolveToolIMP for resolution, then streams execution.
  */
 export async function* smallchat_dispatchStream(
   context: DispatchContext,
   intent: string,
   args?: Record<string, unknown>,
 ): AsyncGenerator<DispatchEvent> {
-  // Yield resolving immediately so the caller gets instant feedback
   yield { type: 'resolving', intent };
 
-  let resolvedImp: ToolIMP;
-  let resolvedConfidence: number;
-  let resolvedSelector: ToolSelector;
-
+  let outcome: ResolutionOutcome;
   try {
-    // ---- Resolution (same logic as toolkit_dispatch) ----
-
-    const selector = await context.selectorTable.resolve(intent);
-    const hasArgs = args && Object.keys(args).length > 0;
-
-    // Cache lookup (no-args fast path)
-    if (!hasArgs) {
-      const cached = context.cache.lookup(selector);
-      if (cached) {
-        resolvedImp = cached.imp;
-        resolvedConfidence = cached.confidence;
-        resolvedSelector = selector;
-
-        yield {
-          type: 'tool-start',
-          toolName: resolvedImp.toolName,
-          providerId: resolvedImp.providerId,
-          confidence: resolvedConfidence,
-          selector: resolvedSelector.canonical,
-        };
-
-        yield* executeAndStream(resolvedImp, args ?? {});
-        return;
-      }
-    }
-
-    // Vector similarity search
-    const matches = context.vectorIndex.search(selector.vector, 5, 0.75);
-    const candidates: ToolCandidate[] = [];
-
-    for (const match of matches) {
-      const matchSelector = context.selectorTable.get(match.id);
-      if (!matchSelector) continue;
-
-      for (const toolClass of context.getClasses()) {
-        // Overload resolution
-        if (hasArgs && toolClass.hasOverloads(matchSelector)) {
-          const overloadResult = toolClass.resolveSelectorWithNamedArgs(
-            matchSelector,
-            args,
-          );
-          if (overloadResult) {
-            context.cache.store(selector, overloadResult.imp, 1 - match.distance);
-            resolvedImp = overloadResult.imp;
-            resolvedConfidence = 1 - match.distance;
-            resolvedSelector = matchSelector;
-
-            yield {
-              type: 'tool-start',
-              toolName: resolvedImp.toolName,
-              providerId: resolvedImp.providerId,
-              confidence: resolvedConfidence,
-              selector: resolvedSelector.canonical,
-            };
-
-            yield* executeAndStream(resolvedImp, args);
-            return;
-          }
-        }
-
-        const imp = toolClass.resolveSelector(matchSelector);
-        if (imp) {
-          candidates.push({
-            imp,
-            confidence: 1 - match.distance,
-            selector: matchSelector,
-          });
-        }
-      }
-    }
-
-    // Cache check for args case
-    if (hasArgs) {
-      const cached = context.cache.lookup(selector);
-      if (cached) {
-        resolvedImp = cached.imp;
-        resolvedConfidence = cached.confidence;
-        resolvedSelector = selector;
-
-        yield {
-          type: 'tool-start',
-          toolName: resolvedImp.toolName,
-          providerId: resolvedImp.providerId,
-          confidence: resolvedConfidence,
-          selector: resolvedSelector.canonical,
-        };
-
-        yield* executeAndStream(resolvedImp, args);
-        return;
-      }
-    }
-
-    if (candidates.length === 0) {
-      // ISA chain
-      const protocolMatch = context.resolveViaProtocol(selector);
-      if (protocolMatch) {
-        context.cache.store(selector, protocolMatch.imp, protocolMatch.confidence);
-        resolvedImp = protocolMatch.imp;
-        resolvedConfidence = protocolMatch.confidence;
-        resolvedSelector = protocolMatch.selector;
-
-        yield {
-          type: 'tool-start',
-          toolName: resolvedImp.toolName,
-          providerId: resolvedImp.providerId,
-          confidence: resolvedConfidence,
-          selector: resolvedSelector.canonical,
-        };
-
-        yield* executeAndStream(resolvedImp, args ?? {});
-        return;
-      }
-
-      // Forwarding — will throw UnrecognizedIntent
-      const forwardResult = await context.forward(selector, intent, args);
-      yield { type: 'done', result: forwardResult };
-      return;
-    }
-
-    // Pick best candidate
-    candidates.sort((a, b) => b.confidence - a.confidence);
-    const best = candidates[0];
-    context.cache.store(selector, best.imp, best.confidence);
-
-    resolvedImp = best.imp;
-    resolvedConfidence = best.confidence;
-    resolvedSelector = best.selector;
+    outcome = await resolveToolIMP(context, intent, args);
   } catch (err) {
     yield {
       type: 'error',
@@ -514,17 +435,20 @@ export async function* smallchat_dispatchStream(
     return;
   }
 
-  // ---- Execution phase ----
+  if (outcome.kind === 'forwarded') {
+    yield { type: 'done', result: outcome.result };
+    return;
+  }
 
   yield {
     type: 'tool-start',
-    toolName: resolvedImp.toolName,
-    providerId: resolvedImp.providerId,
-    confidence: resolvedConfidence,
-    selector: resolvedSelector.canonical,
+    toolName: outcome.imp.toolName,
+    providerId: outcome.imp.providerId,
+    confidence: outcome.confidence,
+    selector: outcome.selector.canonical,
   };
 
-  yield* executeAndStream(resolvedImp, args ?? {});
+  yield* executeAndStream(outcome.imp, args ?? {});
 }
 
 /**
