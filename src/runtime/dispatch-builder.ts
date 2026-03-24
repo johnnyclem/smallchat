@@ -16,7 +16,9 @@ import type { DispatchContext } from './dispatch.js';
 export class DispatchBuilder<TArgs extends Record<string, unknown> = Record<string, unknown>> {
   private readonly _context: DispatchContext;
   private readonly _intent: string;
-  private readonly _args: TArgs;
+  private _args: TArgs;
+  private _timeoutMs: number | undefined;
+  private _metadata: Record<string, unknown> | undefined;
 
   constructor(context: DispatchContext, intent: string, args: TArgs = {} as TArgs) {
     this._context = context;
@@ -38,12 +40,49 @@ export class DispatchBuilder<TArgs extends Record<string, unknown> = Record<stri
   }
 
   /**
+   * Set a timeout for the dispatch execution.
+   */
+  withTimeout(ms: number): this {
+    this._timeoutMs = ms;
+    return this;
+  }
+
+  /**
+   * Attach metadata to the dispatch (passed through to the result).
+   */
+  withMetadata(meta: Record<string, unknown>): this {
+    this._metadata = meta;
+    return this;
+  }
+
+  /**
    * Execute the dispatch and return a single ToolResult.
    *
    * Equivalent to the legacy `runtime.dispatch(intent, args)`.
    */
-  exec(): Promise<ToolResult> {
-    return toolkit_dispatch(this._context, this._intent, this._args);
+  async exec(): Promise<ToolResult> {
+    const dispatchPromise = toolkit_dispatch(this._context, this._intent, this._args);
+
+    let result: ToolResult;
+    if (this._timeoutMs !== undefined) {
+      result = await withTimeout(dispatchPromise, this._timeoutMs);
+    } else {
+      result = await dispatchPromise;
+    }
+
+    if (this._metadata) {
+      result.metadata = { ...result.metadata, ...this._metadata };
+    }
+
+    return result;
+  }
+
+  /**
+   * Execute and return only the content field of the result.
+   */
+  async execContent<T = unknown>(): Promise<T> {
+    const result = await this.exec();
+    return result.content as T;
   }
 
   /**
@@ -83,4 +122,41 @@ export class DispatchBuilder<TArgs extends Record<string, unknown> = Record<stri
       }
     }
   }
+
+  /**
+   * Stream only inference tokens (text deltas).
+   * Alias for inferStream() for API compatibility.
+   */
+  tokens(): AsyncGenerator<string> {
+    return this.inferStream();
+  }
+
+  /**
+   * Execute the dispatch and collect all streamed chunks into an array.
+   */
+  async collect(): Promise<unknown[]> {
+    const chunks: unknown[] = [];
+    for await (const event of this.stream()) {
+      if (event.type === 'chunk') {
+        chunks.push(event.content);
+      }
+    }
+    return chunks;
+  }
+}
+
+/**
+ * Helper to wrap a promise with a timeout.
+ */
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`Dispatch timed out after ${ms}ms`));
+    }, ms);
+
+    promise.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (err) => { clearTimeout(timer); reject(err); },
+    );
+  });
 }

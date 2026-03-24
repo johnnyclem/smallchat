@@ -90,9 +90,6 @@ export { ToolRuntime } from './runtime/runtime.js';
 export type { RuntimeOptions } from './runtime/runtime.js';
 export { DispatchBuilder } from './runtime/dispatch-builder.js';
 
-// Fluent dispatch builder
-export { DispatchBuilder } from './runtime/fluent.js';
-
 // Compiler
 export { ToolCompiler } from './compiler/compiler.js';
 export type { CompilerOptions } from './compiler/compiler.js';

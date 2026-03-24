@@ -166,7 +166,7 @@ export class ToolRuntime {
   intent<TArgs extends Record<string, unknown> = Record<string, unknown>>(
     intentStr: string,
   ): DispatchBuilder<TArgs> {
-    return new DispatchBuilder<TArgs>(this, intentStr);
+    return new DispatchBuilder<TArgs>(this.context, intentStr);
   }
 
   // ---------------------------------------------------------------------------
