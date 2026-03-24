@@ -13,6 +13,8 @@ import {
   introspectMcpConfigFile,
   introspectLocalMcpServer,
 } from '../../mcp/client.js';
+import { SqliteArtifactStore } from '../../mcp/sqlite-artifact.js';
+import type { SerializedArtifact } from '../../mcp/artifact.js';
 
 // ---------------------------------------------------------------------------
 // Source type detection
@@ -145,12 +147,15 @@ function createVectorIndex(type: string, dbPath: string): VectorIndex {
 // Core compile
 // ---------------------------------------------------------------------------
 
+type OutputFormat = 'json' | 'sqlite';
+
 async function runCompile(
   manifests: ProviderManifest[],
   outputPath: string,
   embedderType: string,
   dbPath: string,
   sourceType?: SourceType,
+  format: OutputFormat = 'json',
 ): Promise<boolean> {
   if (manifests.length === 0) {
     console.error('No valid manifests found.');
@@ -191,9 +196,18 @@ async function runCompile(
   }
 
   const output = serializeResult(result, embedderType, manifests);
-  writeFileSync(outputPath, JSON.stringify(output, null, 2));
 
-  console.log(`\nOutput: ${outputPath}`);
+  if (format === 'sqlite') {
+    const sqlitePath = outputPath.replace(/\.json$/, '.db');
+    const store = new SqliteArtifactStore(sqlitePath);
+    store.save(output as unknown as SerializedArtifact);
+    store.close();
+    console.log(`\nOutput (SQLite): ${sqlitePath}`);
+  } else {
+    writeFileSync(outputPath, JSON.stringify(output, null, 2));
+    console.log(`\nOutput: ${outputPath}`);
+  }
+
   console.log(`  - ${result.uniqueSelectorCount} selectors`);
   console.log(`  - ${result.toolCount} tools`);
   console.log(`  - ${result.dispatchTables.size} providers`);
@@ -233,6 +247,7 @@ export const compileCommand = new Command('compile')
   .option('-o, --output <path>', 'Output file path', 'tools.toolkit.json')
   .option('-w, --watch', 'Watch source and recompile on changes')
   .option('-e, --embedder <type>', 'Embedder to use: onnx (default) or local', 'onnx')
+  .option('-f, --format <type>', 'Output format: json (default) or sqlite', 'json')
   .option('--db-path <path>', 'Path to sqlite-vec database', 'smallchat.db')
   .option('--timeout <ms>', 'Timeout for MCP server introspection (ms)', '30000')
   .action(async (options) => {
@@ -241,9 +256,10 @@ export const compileCommand = new Command('compile')
     const embedderType = options.embedder;
     const dbPath = resolve(options.dbPath);
     const timeoutMs = parseInt(options.timeout, 10);
+    const format = (options.format === 'sqlite' ? 'sqlite' : 'json') as OutputFormat;
 
     const manifests = await resolveManifests(source, { timeoutMs });
-    const ok = await runCompile(manifests, outputPath, embedderType, dbPath, source.type);
+    const ok = await runCompile(manifests, outputPath, embedderType, dbPath, source.type, format);
 
     if (!options.watch) {
       if (!ok) process.exit(1);
@@ -266,7 +282,7 @@ export const compileCommand = new Command('compile')
       debounceTimer = setTimeout(async () => {
         console.log(`\n--- Recompiling (${filename} changed) ---\n`);
         const newManifests = await resolveManifests(source, { timeoutMs });
-        await runCompile(newManifests, outputPath, embedderType, dbPath, source.type);
+        await runCompile(newManifests, outputPath, embedderType, dbPath, source.type, format);
         console.log(`\nWatching ${watchPath} for changes...`);
       }, 200);
     });
