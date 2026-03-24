@@ -60,14 +60,14 @@ export const resolveCommand = new Command('resolve')
     for (const [, sel] of Object.entries(data.selectors)) {
       const s = sel as { canonical: string; vector: number[] };
       const vector = new Float32Array(s.vector);
-      selectorTable.intern(vector, s.canonical);
+      await selectorTable.intern(vector, s.canonical);
     }
 
     // Resolve the intent
     const selector = await selectorTable.resolve(intent);
 
     // Find nearest selectors
-    const matches = vectorIndex.search(selector.vector, 5, 0.5);
+    const matches = await vectorIndex.search(selector.vector, 5, 0.5);
 
     console.log(`Intent: "${intent}"`);
     console.log(`Resolved selector: ${selector.canonical}`);

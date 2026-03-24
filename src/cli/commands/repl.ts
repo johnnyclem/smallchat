@@ -66,7 +66,7 @@ export const replCommand = new Command('repl')
     for (const [, sel] of Object.entries(data.selectors)) {
       const s = sel as { canonical: string; vector: number[] };
       const vector = new Float32Array(s.vector);
-      selectorTable.intern(vector, s.canonical);
+      await selectorTable.intern(vector, s.canonical);
     }
 
     const selectorCount = Object.keys(data.selectors).length;
@@ -102,7 +102,7 @@ export const replCommand = new Command('repl')
       // Resolve intent
       try {
         const selector = await selectorTable.resolve(input);
-        const matches = vectorIndex.search(selector.vector, topK, threshold);
+        const matches = await vectorIndex.search(selector.vector, topK, threshold);
 
         console.log(`\n  Intent:    "${input}"`);
         console.log(`  Selector:  ${selector.canonical}`);

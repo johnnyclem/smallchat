@@ -91,7 +91,7 @@ export class SmallchatRunner implements Runner {
 
       // Also intern the selector
       const selectorVector = await this.embedder.embed(tool.selector.replace(/\./g, ' '));
-      this.selectorTable.intern(selectorVector, tool.selector);
+      await this.selectorTable.intern(selectorVector, tool.selector);
     }
   }
 
@@ -101,7 +101,7 @@ export class SmallchatRunner implements Runner {
 
     // Step 1: Semantic similarity — get scores for ALL tools
     const queryVector = await this.embedder.embed(query);
-    const matches = this.vectorIndex.search(queryVector, this.tools.length, 0.0);
+    const matches = await this.vectorIndex.search(queryVector, this.tools.length, 0.0);
     const semanticById = new Map<string, number>();
     for (const match of matches) {
       semanticById.set(match.id, 1 - match.distance);

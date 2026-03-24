@@ -102,6 +102,8 @@ export { MemoryVectorIndex } from './embedding/memory-vector-index.js';
 export { ONNXEmbedder } from './embedding/onnx-embedder.js';
 export type { ONNXEmbedderOptions } from './embedding/onnx-embedder.js';
 export { SqliteVectorIndex } from './embedding/sqlite-vector-index.js';
+export { EmbeddingWorkerBridge, WorkerEmbedder, createWorkerEmbedder } from './embedding/worker-embedder.js';
+export { WorkerVectorIndex } from './embedding/worker-vector-index.js';
 
 // MCP Client — stdio introspection
 export { introspectMcpServer, introspectMcpConfigFile, introspectLocalMcpServer, isMcpConfigFile, isMcpServerProject } from './mcp/client.js';

@@ -23,13 +23,13 @@ export class SelectorTable {
    * Intern a selector. If a semantically equivalent one exists
    * (cosine similarity > threshold), return the existing one.
    */
-  intern(embedding: Float32Array, canonical: string): ToolSelector {
+  async intern(embedding: Float32Array, canonical: string): Promise<ToolSelector> {
     // Check for exact canonical match first (fast path)
     const exactMatch = this.selectors.get(canonical);
     if (exactMatch) return exactMatch;
 
     // Check for semantic match via vector index
-    const existing = this.index.search(embedding, 1, this.threshold);
+    const existing = await this.index.search(embedding, 1, this.threshold);
     if (existing.length > 0) {
       const match = this.selectors.get(existing[0].id);
       if (match) return match;
@@ -65,7 +65,7 @@ export class SelectorTable {
   }
 
   /** Find the nearest selectors to a vector */
-  nearest(vector: Float32Array, topK: number, threshold: number): SelectorMatch[] {
+  nearest(vector: Float32Array, topK: number, threshold: number): SelectorMatch[] | Promise<SelectorMatch[]> {
     return this.index.search(vector, topK, threshold);
   }
 

@@ -76,7 +76,7 @@ export class ToolCompiler {
       const canonical = `${tool.providerId}.${tool.name}`;
 
       toolEmbeddings.set(tool, embedding);
-      const selector = this.selectorTable.intern(embedding, canonical);
+      const selector = await this.selectorTable.intern(embedding, canonical);
 
       // If the selector already existed, this tool was merged (deduplicated)
       if (this.selectorTable.size === selectorsBefore + toolSelectors.size) {

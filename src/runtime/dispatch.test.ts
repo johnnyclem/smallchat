@@ -34,7 +34,7 @@ describe('DispatchContext', () => {
     const cls = new ToolClass('github');
 
     const embedding = await context.embedder.embed('search code');
-    const selector = context.selectorTable.intern(embedding, 'github.search_code');
+    const selector = await context.selectorTable.intern(embedding, 'github.search_code');
     cls.addMethod(selector, makeIMP('github', 'search_code'));
 
     context.registerClass(cls);
@@ -49,7 +49,7 @@ describe('toolkit_dispatch', () => {
 
     // Register a tool
     const embedding = await context.embedder.embed('search code repositories');
-    const selector = context.selectorTable.intern(embedding, 'github.search_code');
+    const selector = await context.selectorTable.intern(embedding, 'github.search_code');
     cls.addMethod(selector, makeIMP('github', 'search_code'));
     context.registerClass(cls);
 
@@ -72,7 +72,7 @@ describe('toolkit_dispatch', () => {
     };
 
     const embedding = await context.embedder.embed('search code');
-    const selector = context.selectorTable.intern(embedding, 'github.search_code');
+    const selector = await context.selectorTable.intern(embedding, 'github.search_code');
     cls.addMethod(selector, imp);
     context.registerClass(cls);
 
@@ -109,7 +109,7 @@ describe('toolkit_dispatch', () => {
     // Create a superclass with a tool
     const superclass = new ToolClass('base-tools');
     const embedding = await context.embedder.embed('deploy application');
-    const selector = context.selectorTable.intern(embedding, 'base.deploy');
+    const selector = await context.selectorTable.intern(embedding, 'base.deploy');
     superclass.addMethod(selector, makeIMP('base', 'deploy', 'deployed!'));
     context.registerClass(superclass);
 
@@ -130,8 +130,8 @@ describe('toolkit_dispatch', () => {
 
     // Register two tools with the same embedding to force ambiguity
     const embedding = await context.embedder.embed('search items');
-    const sel1 = context.selectorTable.intern(embedding, 'multi.search_a');
-    const sel2 = context.selectorTable.intern(
+    const sel1 = await context.selectorTable.intern(embedding, 'multi.search_a');
+    const sel2 = await context.selectorTable.intern(
       await context.embedder.embed('search items'),
       'multi.search_b',
     );
@@ -163,7 +163,7 @@ describe('toolkit_dispatch', () => {
     const cls = new ToolClass('slack');
 
     const embedding = await context.embedder.embed('send message to channel');
-    const selector = context.selectorTable.intern(embedding, 'slack.send_message');
+    const selector = await context.selectorTable.intern(embedding, 'slack.send_message');
     cls.addMethod(selector, makeIMP('slack', 'send_message'));
     context.registerClass(cls);
 
@@ -184,14 +184,14 @@ describe('toolkit_dispatch', () => {
     // Provider A: github — handles "search code repositories"
     const github = new ToolClass('github');
     const ghEmbed = await context.embedder.embed('search code repositories');
-    const ghSel = context.selectorTable.intern(ghEmbed, 'github.search_code');
+    const ghSel = await context.selectorTable.intern(ghEmbed, 'github.search_code');
     github.addMethod(ghSel, makeIMP('github', 'search_code'));
     context.registerClass(github);
 
     // Provider B: jira — handles "create bug report"
     const jira = new ToolClass('jira');
     const jiraEmbed = await context.embedder.embed('create bug report');
-    const jiraSel = context.selectorTable.intern(jiraEmbed, 'jira.create_issue');
+    const jiraSel = await context.selectorTable.intern(jiraEmbed, 'jira.create_issue');
     jira.addMethod(jiraSel, makeIMP('jira', 'create_issue'));
     context.registerClass(jira);
 
@@ -215,7 +215,7 @@ describe('toolkit_dispatch', () => {
     };
 
     const embedding = await context.embedder.embed('summarize document');
-    const selector = context.selectorTable.intern(embedding, 'ai.summarize');
+    const selector = await context.selectorTable.intern(embedding, 'ai.summarize');
     cls.addMethod(selector, mockIMP);
     context.registerClass(cls);
 
@@ -237,7 +237,7 @@ describe('toolkit_dispatch', () => {
     // Register one tool so vector index is non-empty
     const cls = new ToolClass('fs');
     const embedding = await context.embedder.embed('read file contents');
-    const selector = context.selectorTable.intern(embedding, 'fs.read_file');
+    const selector = await context.selectorTable.intern(embedding, 'fs.read_file');
     cls.addMethod(selector, makeIMP('fs', 'read_file'));
     context.registerClass(cls);
 
@@ -253,7 +253,7 @@ describe('toolkit_dispatch', () => {
 
     // Create a selector for the protocol's required method
     const embedding = await context.embedder.embed('list items');
-    const selector = context.selectorTable.intern(embedding, 'proto.list_items');
+    const selector = await context.selectorTable.intern(embedding, 'proto.list_items');
 
     // Create a protocol that requires this selector
     const protocol: ToolProtocol = {
@@ -292,7 +292,7 @@ describe('smallchat_dispatchStream', () => {
     const cls = new ToolClass('github');
 
     const embedding = await context.embedder.embed('search code repositories');
-    const selector = context.selectorTable.intern(embedding, 'github.search_code');
+    const selector = await context.selectorTable.intern(embedding, 'github.search_code');
     cls.addMethod(selector, makeIMP('github', 'search_code'));
     context.registerClass(cls);
 
@@ -317,7 +317,7 @@ describe('smallchat_dispatchStream', () => {
     const cls = new ToolClass('github');
 
     const embedding = await context.embedder.embed('search code');
-    const selector = context.selectorTable.intern(embedding, 'github.search_code');
+    const selector = await context.selectorTable.intern(embedding, 'github.search_code');
     cls.addMethod(selector, makeIMP('github', 'search_code'));
     context.registerClass(cls);
 
@@ -360,7 +360,7 @@ describe('smallchat_dispatchStream', () => {
     };
 
     const embedding = await context.embedder.embed('chat completion');
-    const selector = context.selectorTable.intern(embedding, 'openai.chat_completion');
+    const selector = await context.selectorTable.intern(embedding, 'openai.chat_completion');
     cls.addMethod(selector, streamingImp);
     context.registerClass(cls);
 
@@ -388,7 +388,7 @@ describe('smallchat_dispatchStream', () => {
     const cls = new ToolClass('github');
 
     const embedding = await context.embedder.embed('search code');
-    const selector = context.selectorTable.intern(embedding, 'github.search_code');
+    const selector = await context.selectorTable.intern(embedding, 'github.search_code');
     cls.addMethod(selector, makeIMP('github', 'search_code'));
     context.registerClass(cls);
 
@@ -418,7 +418,7 @@ describe('smallchat_dispatchStream', () => {
     };
 
     const embedding = await context.embedder.embed('create message completion');
-    const selector = context.selectorTable.intern(embedding, 'anthropic.messages_create');
+    const selector = await context.selectorTable.intern(embedding, 'anthropic.messages_create');
     cls.addMethod(selector, inferenceImp);
     context.registerClass(cls);
 
@@ -471,7 +471,7 @@ describe('smallchat_dispatchStream', () => {
     };
 
     const embedding = await context.embedder.embed('openai chat');
-    const selector = context.selectorTable.intern(embedding, 'openai.chat_completion');
+    const selector = await context.selectorTable.intern(embedding, 'openai.chat_completion');
     cls.addMethod(selector, dualImp);
     context.registerClass(cls);
 
@@ -501,7 +501,7 @@ describe('smallchat_dispatchStream', () => {
     };
 
     const embedding = await context.embedder.embed('openai completion');
-    const selector = context.selectorTable.intern(embedding, 'openai.completion');
+    const selector = await context.selectorTable.intern(embedding, 'openai.completion');
     cls.addMethod(selector, imp);
     context.registerClass(cls);
 
@@ -527,7 +527,7 @@ describe('smallchat_dispatchStream', () => {
     };
 
     const embedding = await context.embedder.embed('anthropic messages');
-    const selector = context.selectorTable.intern(embedding, 'anthropic.messages');
+    const selector = await context.selectorTable.intern(embedding, 'anthropic.messages');
     cls.addMethod(selector, failImp);
     context.registerClass(cls);
 
