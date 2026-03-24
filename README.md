@@ -186,7 +186,7 @@ smallchat provides two embedding strategies and two vector index backends:
 | **MemoryVectorIndex** | In-memory brute-force cosine similarity | Development, small tool sets |
 | **SqliteVectorIndex** | sqlite-vec with persistent storage | Production, large tool sets |
 
-The ONNX model ships with the package in `models/` (quantized, ~30MB).
+The ONNX model ships with the package in `models/` (quantized, ~22MB). This is a deliberate tradeoff: bundling the model means `npm install` gives you working semantic dispatch with zero extra setup, but it does add ~22MB to your `node_modules`. If install size is a concern, use `LocalEmbedder` + `MemoryVectorIndex` for a zero-model-dependency setup (hash-based embeddings, no ONNX download).
 
 ### MCP Server
 
