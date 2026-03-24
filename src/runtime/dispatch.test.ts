@@ -14,7 +14,7 @@ function createContext(intentPins?: IntentPinRegistry) {
   const vectorIndex = new MemoryVectorIndex();
   const selectorTable = new SelectorTable(vectorIndex, embedder);
   const cache = new ResolutionCache();
-  return new DispatchContext(selectorTable, cache, vectorIndex, embedder, intentPins);
+  return new DispatchContext(selectorTable, cache, vectorIndex, embedder, undefined, intentPins);
 }
 
 function makeIMP(providerId: string, toolName: string, result: unknown = null): ToolIMP {

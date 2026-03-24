@@ -6,6 +6,8 @@ import type {
   InvalidationEvent,
   InvalidationHook,
 } from './types.js';
+import { SemanticRateLimiter } from './semantic-rate-limiter.js';
+import type { SemanticRateLimiterOptions, FloodingMetrics } from './semantic-rate-limiter.js';
 
 /**
  * ResolutionCache — the method cache for toolkit_dispatch.
@@ -32,7 +34,15 @@ export class ResolutionCache {
   /** Registered invalidation hooks — fire on any cache mutation */
   private hooks: InvalidationHook[] = [];
 
-  constructor(maxSize = 1024, minConfidence = 0.85, versionContext?: CacheVersionContext) {
+  /** Semantic rate limiter — prevents vector flooding DoS */
+  readonly rateLimiter: SemanticRateLimiter;
+
+  constructor(
+    maxSize = 1024,
+    minConfidence = 0.85,
+    versionContext?: CacheVersionContext,
+    rateLimiterOptions?: SemanticRateLimiterOptions,
+  ) {
     this.maxSize = maxSize;
     this.minConfidence = minConfidence;
     this.versionContext = versionContext ?? {
@@ -40,6 +50,7 @@ export class ResolutionCache {
       modelVersion: '',
       schemaFingerprints: new Map(),
     };
+    this.rateLimiter = new SemanticRateLimiter(rateLimiterOptions);
   }
 
   /**
@@ -191,6 +202,42 @@ export class ResolutionCache {
       const idx = this.hooks.indexOf(hook);
       if (idx >= 0) this.hooks.splice(idx, 1);
     };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Semantic rate limiting — vector flooding prevention
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Pre-embedding check: should this intent be allowed through to the embedder?
+   *
+   * Call before invoking the embedder. Returns true if the intent is safe to
+   * embed; false if the system is under vector flood and the embedder should
+   * be throttled. When false, callers should reject the request immediately.
+   */
+  checkFloodGate(canonical: string): boolean {
+    return this.rateLimiter.check(canonical);
+  }
+
+  /**
+   * Post-embedding record: log a successfully-embedded intent for flood analysis.
+   *
+   * Call after the embedder returns a vector and before (or after) caching.
+   * The vector is added to the sliding window so future `checkFloodGate`
+   * calls can detect flooding patterns via cross-similarity analysis.
+   *
+   * Returns true if the traffic pattern still looks healthy (similarity above
+   * floor); false if similarity has dropped below the floor — callers may
+   * choose to start rejecting subsequent intents pre-emptively.
+   */
+  recordIntent(canonical: string, vector: Float32Array): boolean {
+    this.rateLimiter.record(canonical, vector);
+    return this.rateLimiter.checkSimilarity();
+  }
+
+  /** Get current flooding metrics for monitoring/debugging */
+  getFloodingMetrics(): FloodingMetrics {
+    return this.rateLimiter.getMetrics();
   }
 
   get size(): number {

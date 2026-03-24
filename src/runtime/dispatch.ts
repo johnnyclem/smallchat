@@ -1,6 +1,6 @@
 import type { Embedder, ToolCandidate, ToolIMP, ToolProtocol, ToolResult, ToolSelector, VectorIndex, DispatchEvent, InferenceDelta } from '../core/types.js';
 import { ResolutionCache } from '../core/resolution-cache.js';
-import { SelectorTable, canonicalize } from '../core/selector-table.js';
+import { SelectorTable, canonicalize, VectorFloodError } from '../core/selector-table.js';
 import { ToolClass } from '../core/tool-class.js';
 import { SCObject, wrapValue, unwrapValue } from '../core/sc-object.js';
 import type { OverloadResolutionResult } from '../core/overload-table.js';
@@ -502,6 +502,10 @@ export async function* smallchat_dispatchStream(
       metadata.typeConfusionGuard = true;
       metadata.violations = err.violations;
       metadata.signature = err.signature.signatureKey;
+    }
+    if (err instanceof VectorFloodError) {
+      metadata.throttled = true;
+      metadata.reason = 'vector-flooding';
     }
     yield {
       type: 'error',

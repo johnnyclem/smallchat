@@ -1,4 +1,5 @@
 import type { Embedder, ToolSelector, VectorIndex, SelectorMatch } from './types.js';
+import type { SemanticRateLimiter } from './semantic-rate-limiter.js';
 
 /**
  * SelectorTable — the interning table for semantic selectors.
@@ -7,16 +8,33 @@ import type { Embedder, ToolSelector, VectorIndex, SelectorMatch } from './types
  * equivalent intents resolve to the same cached ToolSelector object.
  * "Pointer equality" becomes "embedding similarity above threshold."
  */
+/**
+ * VectorFloodError — thrown when the semantic rate limiter detects
+ * a vector flooding attack and throttles the embedder.
+ */
+export class VectorFloodError extends Error {
+  constructor(canonical: string) {
+    super(
+      `Semantic rate limit exceeded: too many high-entropy, low-similarity intents. ` +
+      `Intent "${canonical}" was throttled to protect the embedder from DoS. ` +
+      `Wait for the current window to drain before retrying.`,
+    );
+    this.name = 'VectorFloodError';
+  }
+}
+
 export class SelectorTable {
   private selectors: Map<string, ToolSelector> = new Map();
   private index: VectorIndex;
   private embedder: Embedder;
   private threshold: number;
+  private rateLimiter: SemanticRateLimiter | null;
 
-  constructor(index: VectorIndex, embedder: Embedder, threshold = 0.95) {
+  constructor(index: VectorIndex, embedder: Embedder, threshold = 0.95, rateLimiter?: SemanticRateLimiter) {
     this.index = index;
     this.embedder = embedder;
     this.threshold = threshold;
+    this.rateLimiter = rateLimiter ?? null;
   }
 
   /**
@@ -52,10 +70,37 @@ export class SelectorTable {
   /**
    * Resolve a natural language intent to an interned selector.
    * Equivalent to sel_getName() + sel_registerName().
+   *
+   * Checks the semantic rate limiter before embedding. If the system
+   * is under vector flood, throws VectorFloodError without touching
+   * the embedder.
    */
   async resolve(intent: string): Promise<ToolSelector> {
-    const embedding = await this.embedder.embed(intent);
     const canonical = canonicalize(intent);
+
+    // Fast path: if we already have this selector, skip embedding + rate check
+    const existing = this.selectors.get(canonical);
+    if (existing) return existing;
+
+    // Pre-embedding flood gate
+    if (this.rateLimiter && !this.rateLimiter.check(canonical)) {
+      throw new VectorFloodError(canonical);
+    }
+
+    const embedding = await this.embedder.embed(intent);
+
+    // Post-embedding: record for similarity tracking
+    if (this.rateLimiter) {
+      this.rateLimiter.record(canonical, embedding);
+      // Check if similarity has dropped below floor — throttle future requests
+      if (!this.rateLimiter.checkSimilarity()) {
+        // We already embedded this one, so let it through but log the warning.
+        // The NEXT request will be caught by the pre-embedding check once
+        // the volume threshold is also hit, or by checkSimilarity on the
+        // next cycle.
+      }
+    }
+
     return this.intern(embedding, canonical);
   }
 
