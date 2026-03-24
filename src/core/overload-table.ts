@@ -1,6 +1,6 @@
 import type { ToolIMP } from './types.js';
-import type { SCMethodSignature, MatchQuality } from './sc-types.js';
-import { scoreSignatureMatch } from './sc-types.js';
+import type { SCMethodSignature, MatchQuality, SignatureViolation, SignatureValidationResult } from './sc-types.js';
+import { scoreSignatureMatch, validateArgumentTypes, validateNamedArgumentTypes } from './sc-types.js';
 
 /**
  * OverloadTable — maps a selector to multiple method signatures.
@@ -59,6 +59,46 @@ export class OverloadAmbiguityError extends Error {
     );
     this.name = 'OverloadAmbiguityError';
     this.candidates = candidates;
+    this.args = args;
+  }
+}
+
+/**
+ * SignatureValidationError — thrown when arguments fail strict type validation.
+ *
+ * This is the primary defence against Type Confusion attacks: an LLM may
+ * suggest arguments that score well enough for overload *resolution* (e.g.
+ * via 'any' slots) but violate the strict type contract of the winning
+ * signature. This error fires AFTER resolution but BEFORE dispatch.
+ */
+export class SignatureValidationError extends Error {
+  violations: SignatureViolation[];
+  signature: SCMethodSignature;
+  args: unknown[];
+
+  constructor(
+    selectorCanonical: string,
+    signature: SCMethodSignature,
+    violations: SignatureViolation[],
+    args: unknown[],
+  ) {
+    const details = violations
+      .map(v => `  - ${v.parameterName} (position ${v.position}): expected ${v.expected}, received ${v.received} [${v.kind}]`)
+      .join('\n');
+
+    super(
+      `Signature validation failed for "${selectorCanonical}" ` +
+      `(signature: ${signature.signatureKey}):\n${details}\n` +
+      `\nThis may indicate a Type Confusion attack. ` +
+      `The LLM-suggested arguments do not conform to the SCObject type hierarchy.\n` +
+      `To fix this:\n` +
+      `  1. Ensure arguments match the expected types exactly\n` +
+      `  2. Use SCObject subclasses where object types are expected\n` +
+      `  3. Do not pass primitives where SCObject instances are required`,
+    );
+    this.name = 'SignatureValidationError';
+    this.violations = violations;
+    this.signature = signature;
     this.args = args;
   }
 }
@@ -176,6 +216,63 @@ export class OverloadTable {
 
     const positional = namedToPositional(namedArgs, signature);
     return this.resolve(positional);
+  }
+
+  /**
+   * Resolve AND strictly validate — the hardened dispatch path.
+   *
+   * 1. Resolves the best-matching overload (same as `resolve`)
+   * 2. Re-validates every argument against the winning signature's
+   *    type descriptors using strict `validateArgumentTypes`
+   * 3. Throws `SignatureValidationError` if any argument violates the
+   *    SCObject type hierarchy
+   *
+   * This two-phase approach catches Type Confusion attacks: an attacker
+   * might craft arguments that score > 0 in overload ranking (e.g.
+   * through 'any' or 'union' slots) but should be rejected on closer
+   * inspection.
+   */
+  validateAndResolve(args: unknown[]): OverloadResolutionResult | null {
+    const result = this.resolve(args);
+    if (!result) return null;
+
+    const validation = validateArgumentTypes(result.signature, args);
+    if (!validation.valid) {
+      throw new SignatureValidationError(
+        this.selectorCanonical,
+        result.signature,
+        validation.violations,
+        args,
+      );
+    }
+
+    return result;
+  }
+
+  /**
+   * Named-argument variant of validateAndResolve.
+   *
+   * Resolves overloads via named args, then strictly validates every
+   * argument against the winning signature's type hierarchy.
+   */
+  validateAndResolveNamed(
+    namedArgs: Record<string, unknown>,
+    signature?: SCMethodSignature,
+  ): OverloadResolutionResult | null {
+    const result = this.resolveNamed(namedArgs, signature);
+    if (!result) return null;
+
+    const validation = validateNamedArgumentTypes(result.signature, namedArgs);
+    if (!validation.valid) {
+      throw new SignatureValidationError(
+        this.selectorCanonical,
+        result.signature,
+        validation.violations,
+        Object.values(namedArgs),
+      );
+    }
+
+    return result;
   }
 
   /** Get all registered overloads */

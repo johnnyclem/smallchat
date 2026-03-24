@@ -4,6 +4,8 @@ import { SelectorTable } from '../core/selector-table.js';
 import { ToolClass } from '../core/tool-class.js';
 import { SCObject, wrapValue, unwrapValue } from '../core/sc-object.js';
 import type { OverloadResolutionResult } from '../core/overload-table.js';
+import { SignatureValidationError } from '../core/overload-table.js';
+import { validateNamedArgumentTypes } from '../core/sc-types.js';
 
 /**
  * UnrecognizedIntent — doesNotRecognizeSelector: equivalent.
@@ -299,8 +301,12 @@ async function resolveToolIMP(
 
     for (const toolClass of context.getClasses()) {
       // 3a. OVERLOAD RESOLUTION — if args exist and overloads are registered
+      //     Uses the hardened path that validates arguments against the
+      //     SCObject type hierarchy BEFORE allowing dispatch. This prevents
+      //     Type Confusion attacks where an LLM suggests arguments of the
+      //     wrong type to trick an IMP.
       if (hasArgs && toolClass.hasOverloads(matchSelector)) {
-        const overloadResult = toolClass.resolveSelectorWithNamedArgs(
+        const overloadResult = toolClass.validateAndResolveSelectorWithNamedArgs(
           matchSelector,
           args,
         );
@@ -425,12 +431,20 @@ export async function* smallchat_dispatchStream(
   try {
     outcome = await resolveToolIMP(context, intent, args);
   } catch (err) {
+    const metadata: Record<string, unknown> = {};
+    if (err instanceof UnrecognizedIntent) {
+      metadata.nearestSelectors = err.nearestSelectors;
+      metadata.suggestion = err.suggestion;
+    }
+    if (err instanceof SignatureValidationError) {
+      metadata.typeConfusionGuard = true;
+      metadata.violations = err.violations;
+      metadata.signature = err.signature.signatureKey;
+    }
     yield {
       type: 'error',
       error: err instanceof Error ? err.message : String(err),
-      metadata: err instanceof UnrecognizedIntent
-        ? { nearestSelectors: err.nearestSelectors, suggestion: err.suggestion }
-        : undefined,
+      metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
     };
     return;
   }
@@ -485,6 +499,17 @@ async function* executeAndStream(
   imp: ToolIMP,
   args: Record<string, unknown>,
 ): AsyncGenerator<DispatchEvent> {
+  // Run constraint validation before streaming — prevents type confusion
+  const validation = imp.constraints.validate(args);
+  if (!validation.valid) {
+    yield {
+      type: 'error',
+      error: `Argument validation failed: ${validation.errors.map(e => e.message).join('; ')}`,
+      metadata: { validationErrors: validation.errors, typeConfusionGuard: true },
+    };
+    return;
+  }
+
   const unwrapped: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(args)) {
     unwrapped[key] = unwrapValue(value);
@@ -547,11 +572,30 @@ async function* executeAndStream(
 /**
  * Execute an IMP with arguments, unwrapping any SCObject values
  * back to their underlying representations.
+ *
+ * Runs the IMP's own constraint validation before execution as
+ * a final safety net against type confusion.
  */
 function executeWithArgs(
   imp: ToolIMP,
   args: Record<string, unknown>,
 ): Promise<ToolResult> {
+  // Run constraint validation as a final safety net
+  const validation = imp.constraints.validate(args);
+  if (!validation.valid) {
+    return Promise.resolve({
+      content: {
+        error: 'Argument validation failed',
+        violations: validation.errors,
+      },
+      isError: true,
+      metadata: {
+        validationErrors: validation.errors,
+        typeConfusionGuard: true,
+      },
+    });
+  }
+
   const unwrapped: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(args)) {
     unwrapped[key] = unwrapValue(value);

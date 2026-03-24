@@ -182,6 +182,173 @@ export function scoreSignatureMatch(
   return totalScore;
 }
 
+// ---------------------------------------------------------------------------
+// Strict argument validation — prevents Type Confusion attacks
+// ---------------------------------------------------------------------------
+
+/**
+ * A single type violation found during strict signature validation.
+ */
+export interface SignatureViolation {
+  /** Parameter slot that was violated */
+  parameterName: string;
+  /** 0-based position */
+  position: number;
+  /** Human-readable description of the expected type */
+  expected: string;
+  /** Human-readable description of the received type */
+  received: string;
+  /** The kind of violation */
+  kind: 'type_mismatch' | 'missing_required' | 'excess_argument' | 'isa_violation';
+}
+
+/**
+ * Result of strict signature validation.
+ */
+export interface SignatureValidationResult {
+  valid: boolean;
+  violations: SignatureViolation[];
+}
+
+/**
+ * Describe a type descriptor in human-readable form.
+ */
+function describeType(type: SCTypeDescriptor): string {
+  switch (type.kind) {
+    case 'primitive': return type.type;
+    case 'object': return type.className;
+    case 'union': return type.types.map(describeType).join(' | ');
+    case 'any': return 'any';
+  }
+}
+
+/**
+ * Describe the runtime type of a value in human-readable form.
+ */
+function describeValueType(value: unknown): string {
+  if (value === null) return 'null';
+  if (value === undefined) return 'undefined';
+  if (value instanceof SCObject) return value.isa;
+  return typeof value;
+}
+
+/**
+ * Strictly validate an argument list against a method signature.
+ *
+ * Unlike `scoreSignatureMatch` (which returns a score for ranking overloads),
+ * this function produces detailed violation reports suitable for blocking
+ * dispatch and informing the caller exactly what went wrong.
+ *
+ * This is the core defence against "Type Confusion" attacks where an LLM
+ * suggests arguments of the wrong type to trick an IMP into operating on
+ * data it wasn't designed for.
+ */
+export function validateArgumentTypes(
+  signature: SCMethodSignature,
+  args: unknown[],
+): SignatureValidationResult {
+  const violations: SignatureViolation[] = [];
+
+  // Check for excess arguments beyond the signature's arity
+  if (args.length > signature.arity) {
+    for (let i = signature.arity; i < args.length; i++) {
+      violations.push({
+        parameterName: `arg[${i}]`,
+        position: i,
+        expected: '(no parameter)',
+        received: describeValueType(args[i]),
+        kind: 'excess_argument',
+      });
+    }
+  }
+
+  for (let i = 0; i < signature.arity; i++) {
+    const slot = signature.parameters[i];
+
+    // Missing required argument
+    if (i >= args.length || args[i] === undefined) {
+      if (slot.required && slot.defaultValue === undefined) {
+        violations.push({
+          parameterName: slot.name,
+          position: i,
+          expected: describeType(slot.type),
+          received: 'undefined',
+          kind: 'missing_required',
+        });
+      }
+      continue;
+    }
+
+    const value = args[i];
+    const quality = matchType(value, slot.type);
+
+    if (quality === 'none') {
+      // Determine if this is specifically an isa hierarchy violation
+      const isIsaViolation =
+        slot.type.kind === 'object' && value instanceof SCObject;
+
+      violations.push({
+        parameterName: slot.name,
+        position: i,
+        expected: describeType(slot.type),
+        received: describeValueType(value),
+        kind: isIsaViolation ? 'isa_violation' : 'type_mismatch',
+      });
+    }
+  }
+
+  return {
+    valid: violations.length === 0,
+    violations,
+  };
+}
+
+/**
+ * Strictly validate named arguments against a method signature.
+ *
+ * Converts named args to positional form and validates, also checking
+ * for unknown argument names that don't map to any parameter slot.
+ */
+export function validateNamedArgumentTypes(
+  signature: SCMethodSignature,
+  namedArgs: Record<string, unknown>,
+): SignatureValidationResult {
+  const violations: SignatureViolation[] = [];
+  const knownNames = new Set(signature.parameters.map(p => p.name));
+
+  // Check for unknown argument names (potential injection/confusion vector)
+  for (const name of Object.keys(namedArgs)) {
+    if (!knownNames.has(name)) {
+      violations.push({
+        parameterName: name,
+        position: -1,
+        expected: '(not a parameter)',
+        received: describeValueType(namedArgs[name]),
+        kind: 'excess_argument',
+      });
+    }
+  }
+
+  // Build positional array and validate types
+  const positional: unknown[] = new Array(signature.arity);
+  for (const slot of signature.parameters) {
+    if (slot.name in namedArgs) {
+      positional[slot.position] = namedArgs[slot.name];
+    } else if (slot.defaultValue !== undefined) {
+      positional[slot.position] = slot.defaultValue;
+    }
+    // else: leave undefined — validateArgumentTypes will catch missing required
+  }
+
+  const positionalResult = validateArgumentTypes(signature, positional);
+  violations.push(...positionalResult.violations);
+
+  return {
+    valid: violations.length === 0,
+    violations,
+  };
+}
+
 /**
  * Infer an SCTypeDescriptor from a runtime value.
  */
