@@ -6,6 +6,7 @@ import { OverloadTable } from '../core/overload-table.js';
 import { DispatchContext, toolkit_dispatch, smallchat_dispatchStream } from './dispatch.js';
 import type { SCMethodSignature } from '../core/sc-types.js';
 import { DispatchBuilder } from './dispatch-builder.js';
+import { SelectorNamespace } from '../core/selector-namespace.js';
 
 /**
  * ToolRuntime — the top-level runtime that manages everything.
@@ -18,6 +19,7 @@ export class ToolRuntime {
   readonly selectorTable: SelectorTable;
   readonly cache: ResolutionCache;
   readonly context: DispatchContext;
+  readonly selectorNamespace: SelectorNamespace;
 
   private vectorIndex: VectorIndex;
   private embedder: Embedder;
@@ -44,17 +46,43 @@ export class ToolRuntime {
       versionContext,
     );
 
+    this.selectorNamespace = options?.selectorNamespace ?? new SelectorNamespace();
+
     this.context = new DispatchContext(
       this.selectorTable,
       this.cache,
       vectorIndex,
       embedder,
+      this.selectorNamespace,
     );
   }
 
-  /** Register a tool class (provider) */
+  /**
+   * Register a tool class (provider).
+   *
+   * Throws SelectorShadowingError if the class contains selectors that
+   * would shadow protected core selectors.
+   */
   registerClass(toolClass: ToolClass): void {
     this.context.registerClass(toolClass);
+  }
+
+  /**
+   * Register a tool class as a core system provider.
+   *
+   * All of its current selectors are marked as core (protected by default).
+   * Future ToolClasses cannot shadow these selectors unless they are
+   * explicitly marked as swizzlable.
+   */
+  registerCoreClass(toolClass: ToolClass, options?: { swizzlable?: boolean }): void {
+    this.context.registerClass(toolClass);
+
+    const swizzlable = options?.swizzlable ?? false;
+    const selectors = Array.from(toolClass.dispatchTable.keys()).map(canonical => ({
+      canonical,
+      swizzlable,
+    }));
+    this.selectorNamespace.registerCoreSelectors(toolClass.name, selectors);
   }
 
   /** Register a protocol */
@@ -70,11 +98,17 @@ export class ToolRuntime {
    * to all conforming classes and flushes the cache.
    */
   loadCategory(category: ToolCategory): void {
+    // Guard: check that category methods don't shadow protected core selectors
+    const categorySelectors = category.methods.map(m => m.selector.canonical);
+
     for (const toolClass of this.context.getClasses()) {
       const conforming = toolClass.protocols.some(
         p => p.name === category.extendsProtocol,
       );
       if (!conforming) continue;
+
+      // Only check shadowing for selectors being added to this class
+      this.selectorNamespace.assertNoShadowing(toolClass.name, categorySelectors);
 
       for (const method of category.methods) {
         toolClass.addMethod(method.selector, method.imp);
@@ -95,6 +129,9 @@ export class ToolRuntime {
     imp: ToolIMP,
     options?: { originalToolName?: string; isSemanticOverload?: boolean },
   ): void {
+    // Guard: check that the overload doesn't shadow a protected core selector
+    this.selectorNamespace.assertNoShadowing(toolClass.name, [selector.canonical]);
+
     toolClass.addOverload(selector, signature, imp, options);
     // Flush cache — overloads change resolution behavior
     this.cache.flush();
@@ -112,6 +149,10 @@ export class ToolRuntime {
     selector: ToolSelector,
     newImp: ToolIMP,
   ): ToolIMP | null {
+    // Guard: core selectors can only be swizzled if marked swizzlable.
+    // The owning class is always allowed to swizzle its own selectors.
+    this.selectorNamespace.assertNoShadowing(toolClass.name, [selector.canonical]);
+
     const original = toolClass.dispatchTable.get(selector.canonical) ?? null;
     toolClass.dispatchTable.set(selector.canonical, newImp);
 
@@ -326,4 +367,6 @@ export interface RuntimeOptions {
   minConfidence?: number;
   /** Model/embedder version — cache entries tagged with a different version auto-expire */
   modelVersion?: string;
+  /** Selector namespace for core selector protection. A new empty one is created if not provided. */
+  selectorNamespace?: SelectorNamespace;
 }

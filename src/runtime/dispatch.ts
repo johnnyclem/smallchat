@@ -4,6 +4,7 @@ import { SelectorTable } from '../core/selector-table.js';
 import { ToolClass } from '../core/tool-class.js';
 import { SCObject, wrapValue, unwrapValue } from '../core/sc-object.js';
 import type { OverloadResolutionResult } from '../core/overload-table.js';
+import { SelectorNamespace } from '../core/selector-namespace.js';
 
 /**
  * UnrecognizedIntent — doesNotRecognizeSelector: equivalent.
@@ -75,6 +76,7 @@ export class DispatchContext {
   readonly cache: ResolutionCache;
   readonly vectorIndex: VectorIndex;
   readonly embedder: Embedder;
+  readonly selectorNamespace: SelectorNamespace;
 
   private toolClasses: Map<string, ToolClass> = new Map();
   private protocols: Map<string, ToolProtocol> = new Map();
@@ -86,15 +88,26 @@ export class DispatchContext {
     cache: ResolutionCache,
     vectorIndex: VectorIndex,
     embedder: Embedder,
+    selectorNamespace?: SelectorNamespace,
   ) {
     this.selectorTable = selectorTable;
     this.cache = cache;
     this.vectorIndex = vectorIndex;
     this.embedder = embedder;
+    this.selectorNamespace = selectorNamespace ?? new SelectorNamespace();
   }
 
-  /** Register a provider (ToolClass) */
+  /**
+   * Register a provider (ToolClass).
+   *
+   * Throws SelectorShadowingError if the class contains selectors that
+   * would shadow protected core selectors.
+   */
   registerClass(toolClass: ToolClass): void {
+    // Guard: check all selectors in this class against the namespace
+    const ownSelectors = Array.from(toolClass.dispatchTable.keys());
+    this.selectorNamespace.assertNoShadowing(toolClass.name, ownSelectors);
+
     this.toolClasses.set(toolClass.name, toolClass);
 
     // Index all methods for vector search
