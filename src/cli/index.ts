@@ -10,6 +10,7 @@ import { doctorCommand } from './commands/doctor.js';
 import { initCommand } from './commands/init.js';
 import { docsCommand } from './commands/docs.js';
 import { replCommand } from './commands/repl.js';
+import { channelCommand } from './commands/channel.js';
 
 const program = new Command();
 
@@ -26,5 +27,6 @@ program.addCommand(serveCommand);
 program.addCommand(doctorCommand);
 program.addCommand(docsCommand);
 program.addCommand(replCommand);
+program.addCommand(channelCommand);
 
 program.parse();

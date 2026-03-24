@@ -126,6 +126,30 @@ export type { AuditEntry } from './mcp/audit-log.js';
 export { loadRuntime, buildToolList, formatContent, findManifests, buildArtifact } from './mcp/artifact.js';
 export type { SerializedArtifact } from './mcp/artifact.js';
 
+// Channel — Claude Code channel protocol support
+export {
+  ClaudeCodeChannelAdapter,
+  ChannelServer,
+  SenderGate,
+  filterMetaKeys,
+  isValidMetaKey,
+  parsePermissionReply,
+  isValidPermissionId,
+  validatePayloadSize,
+  serializeChannelTag,
+} from './channel/index.js';
+export type {
+  ChannelCapabilities,
+  ChannelExperimentalCapabilities,
+  ChannelEvent,
+  ChannelNotificationParams,
+  PermissionRequest,
+  PermissionVerdict,
+  ChannelProviderMeta,
+  ChannelServerConfig,
+  ChannelMessage,
+} from './channel/index.js';
+
 // Transport Layer — ITransport interface and implementations
 export type {
   ITransport,
