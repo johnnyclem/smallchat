@@ -194,6 +194,8 @@ export interface McpStdioTransportConfig {
   cwd?: string;
   /** Timeout for initialization in ms (default: 10000) */
   initTimeoutMs?: number;
+  /** Optional container sandbox for process isolation */
+  containerSandbox?: ContainerSandboxConfig;
 }
 
 export interface McpSseTransportConfig {
@@ -230,6 +232,27 @@ export interface SandboxConfig {
   memoryLimitMb?: number;
   /** Allowed built-in modules (default: none) */
   allowedModules?: string[];
+}
+
+// ---------------------------------------------------------------------------
+// Container sandbox config — for MCP subprocess isolation via Docker
+// ---------------------------------------------------------------------------
+
+export interface ContainerSandboxConfig {
+  /** Enable container isolation */
+  enabled: boolean;
+  /** Docker image to use (must have the MCP server's runtime installed) */
+  image: string;
+  /** Memory limit in Docker format, e.g. "256m" */
+  memoryLimit?: string;
+  /** CPU quota, e.g. "0.5" for half a core */
+  cpuLimit?: string;
+  /** Network mode: "none" (default, fully isolated), "host", or a custom network name */
+  network?: string;
+  /** Filesystem paths to bind-mount as read-only */
+  readOnlyMounts?: string[];
+  /** Additional docker run flags (escape hatch) */
+  extraArgs?: string[];
 }
 
 // ---------------------------------------------------------------------------

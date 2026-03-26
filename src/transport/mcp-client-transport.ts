@@ -6,7 +6,7 @@
  *   - SSE: Connects to an HTTP SSE endpoint for streaming MCP communication
  */
 
-import { spawn, type ChildProcess } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
 import type {
   ITransport,
   TransportInput,
@@ -15,6 +15,7 @@ import type {
   McpSseTransportConfig,
   TransportKind,
 } from './types.js';
+import { spawnMcpProcess } from './container-sandbox.js';
 import {
   buildInitializeRequest,
   buildInitializedNotification,
@@ -130,16 +131,14 @@ export class McpStdioTransport implements ITransport {
   }
 
   private async initialize(): Promise<void> {
-    // Spawn the MCP server process
-    this.process = spawn(
-      this.config.command,
-      this.config.args ?? [],
-      {
-        cwd: this.config.cwd,
-        env: { ...process.env, ...this.config.env },
-        stdio: ['pipe', 'pipe', 'pipe'],
-      },
-    );
+    // Spawn the MCP server process (optionally inside a container sandbox)
+    this.process = spawnMcpProcess({
+      command: this.config.command,
+      args: this.config.args,
+      env: this.config.env,
+      cwd: this.config.cwd,
+      containerSandbox: this.config.containerSandbox,
+    });
 
     // Handle stdout data
     this.process.stdout?.on('data', (data: Buffer) => {
