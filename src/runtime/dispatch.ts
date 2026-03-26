@@ -1,11 +1,13 @@
 import type { Embedder, ToolCandidate, ToolIMP, ToolProtocol, ToolResult, ToolSelector, VectorIndex, DispatchEvent, InferenceDelta } from '../core/types.js';
 import { ResolutionCache } from '../core/resolution-cache.js';
-import { SelectorTable } from '../core/selector-table.js';
+import { SelectorTable, canonicalize } from '../core/selector-table.js';
 import { ToolClass } from '../core/tool-class.js';
 import { SCObject, wrapValue, unwrapValue } from '../core/sc-object.js';
 import type { OverloadResolutionResult } from '../core/overload-table.js';
 import { SignatureValidationError } from '../core/overload-table.js';
 import { validateNamedArgumentTypes } from '../core/sc-types.js';
+import { IntentPinRegistry } from '../core/intent-pin.js';
+import type { IntentPinMatch } from '../core/intent-pin.js';
 
 /**
  * UnrecognizedIntent — doesNotRecognizeSelector: equivalent.
@@ -77,6 +79,7 @@ export class DispatchContext {
   readonly cache: ResolutionCache;
   readonly vectorIndex: VectorIndex;
   readonly embedder: Embedder;
+  readonly intentPins: IntentPinRegistry;
 
   private toolClasses: Map<string, ToolClass> = new Map();
   private protocols: Map<string, ToolProtocol> = new Map();
@@ -88,11 +91,13 @@ export class DispatchContext {
     cache: ResolutionCache,
     vectorIndex: VectorIndex,
     embedder: Embedder,
+    intentPins?: IntentPinRegistry,
   ) {
     this.selectorTable = selectorTable;
     this.cache = cache;
     this.vectorIndex = vectorIndex;
     this.embedder = embedder;
+    this.intentPins = intentPins ?? new IntentPinRegistry();
   }
 
   /** Register a provider (ToolClass) */
@@ -280,6 +285,31 @@ async function resolveToolIMP(
 ): Promise<ResolutionOutcome> {
   // 1. RESOLVE SELECTOR (embed + intern)
   const selector = await context.selectorTable.resolve(intent);
+  const intentCanonical = canonicalize(intent);
+
+  // 1a. INTENT PIN — exact match fast path
+  // If the intent canonicalizes to a pinned selector, accept immediately
+  if (context.intentPins.size > 0) {
+    const exactPinMatch = context.intentPins.checkExact(intentCanonical);
+    if (exactPinMatch && exactPinMatch.verdict === 'accept') {
+      const pinnedSelector = context.selectorTable.get(exactPinMatch.canonical);
+      if (pinnedSelector) {
+        for (const toolClass of context.getClasses()) {
+          const imp = toolClass.resolveSelector(pinnedSelector);
+          if (imp) {
+            context.cache.store(selector, imp, 1.0);
+            return {
+              kind: 'resolved',
+              imp,
+              confidence: 1.0,
+              selector: pinnedSelector,
+              candidates: [],
+            };
+          }
+        }
+      }
+    }
+  }
 
   // 2. CHECK CACHE (the inline cache / method cache)
   // Skip cache when args are provided and overloads may exist — type matters
@@ -298,6 +328,25 @@ async function resolveToolIMP(
   for (const match of matches) {
     const matchSelector = context.selectorTable.get(match.id);
     if (!matchSelector) continue;
+
+    // 3.PIN: INTENT PIN — guard pinned candidates against semantic collision
+    // If this candidate is pinned, check whether the similarity meets the pin's policy
+    if (context.intentPins.size > 0) {
+      const pinCheck = context.intentPins.checkSimilarity(
+        match.id,
+        1 - match.distance,
+        intentCanonical,
+      );
+      if (pinCheck) {
+        if (pinCheck.verdict === 'reject') {
+          // This candidate is pinned and the intent doesn't meet the policy —
+          // skip it entirely so it cannot be dispatched via semantic bridging
+          continue;
+        }
+        // verdict === 'accept' — the intent meets the pin's requirements,
+        // proceed with normal dispatch for this candidate
+      }
+    }
 
     for (const toolClass of context.getClasses()) {
       // 3a. OVERLOAD RESOLUTION — if args exist and overloads are registered
