@@ -359,6 +359,12 @@ export interface CompilerOptions {
   generateSemanticOverloads?: boolean;
   /** Similarity threshold for grouping tools as overloads (default 0.82) */
   semanticOverloadThreshold?: number;
+  /** Priority hints from dream analysis — tools to boost, demote, or exclude. */
+  priorityHints?: {
+    boosted: Map<string, number>;
+    demoted: Map<string, number>;
+    excluded: Set<string>;
+  };
 }
 
 /** Internal representation of a semantic group during compilation */

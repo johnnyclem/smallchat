@@ -157,6 +157,34 @@ export type {
   ChannelMessage,
 } from './channel/index.js';
 
+// Dream — memory-driven tool re-compilation
+export { compileLatest, dream } from './dream/dream-compiler.js';
+export type { CompileLatestOptions } from './dream/dream-compiler.js';
+export { readMemoryFiles, extractToolMentions } from './dream/memory-reader.js';
+export { discoverLogFiles, analyzeSessionLog, aggregateUsageStats } from './dream/log-analyzer.js';
+export { prioritizeTools, generateReport } from './dream/tool-prioritizer.js';
+export { loadDreamConfig, saveDreamConfig, DEFAULT_DREAM_CONFIG } from './dream/config.js';
+export {
+  loadManifest as loadArtifactManifest,
+  archiveCurrentArtifact,
+  promoteArtifact,
+  rollbackToFallback,
+  pruneOldVersions,
+  listVersions,
+} from './dream/artifact-versioning.js';
+export type {
+  ToolUsageRecord,
+  ToolUsageStats,
+  MemoryFileContent,
+  MemoryToolMention,
+  ToolPriorityHints,
+  DreamAnalysis,
+  DreamResult,
+  DreamConfig,
+  ArtifactVersion,
+  ArtifactManifest,
+} from './dream/types.js';
+
 // Transport Layer — ITransport interface and implementations
 export type {
   ITransport,
