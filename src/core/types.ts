@@ -340,9 +340,9 @@ export interface Embedder {
 
 export interface VectorIndex {
   insert(id: string, vector: Float32Array): void;
-  search(vector: Float32Array, topK: number, threshold: number): SelectorMatch[];
+  search(vector: Float32Array, topK: number, threshold: number): SelectorMatch[] | Promise<SelectorMatch[]>;
   remove(id: string): void;
-  size(): number;
+  size(): number | Promise<number>;
 }
 
 // ---------------------------------------------------------------------------

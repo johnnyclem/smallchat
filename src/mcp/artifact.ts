@@ -119,7 +119,7 @@ function hydrateRuntime(runtime: ToolRuntime, artifact: SerializedArtifact): voi
       if (!selectorData) continue;
 
       const vector = new Float32Array(selectorData.vector);
-      const selector = runtime.selectorTable.intern(vector, canonical);
+      const selector = await runtime.selectorTable.intern(vector, canonical);
 
       const inputSchema = imp.inputSchema ?? { type: 'object' };
 

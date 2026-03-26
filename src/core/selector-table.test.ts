@@ -28,10 +28,10 @@ describe('SelectorTable', () => {
     return new SelectorTable(index, embedder, threshold);
   }
 
-  it('interns a new selector', () => {
+  it('interns a new selector', async () => {
     const table = createTable();
     const embedding = new Float32Array(64).fill(0.1);
-    const sel = table.intern(embedding, 'search:documents');
+    const sel = await table.intern(embedding, 'search:documents');
 
     expect(sel.canonical).toBe('search:documents');
     expect(sel.parts).toEqual(['search', 'documents']);
@@ -39,12 +39,12 @@ describe('SelectorTable', () => {
     expect(table.size).toBe(1);
   });
 
-  it('returns existing selector for same canonical name', () => {
+  it('returns existing selector for same canonical name', async () => {
     const table = createTable();
     const embedding = new Float32Array(64).fill(0.1);
 
-    const sel1 = table.intern(embedding, 'search:documents');
-    const sel2 = table.intern(embedding, 'search:documents');
+    const sel1 = await table.intern(embedding, 'search:documents');
+    const sel2 = await table.intern(embedding, 'search:documents');
 
     expect(sel1).toBe(sel2); // Same reference
     expect(table.size).toBe(1);
@@ -58,7 +58,7 @@ describe('SelectorTable', () => {
     expect(sel.vector).toBeInstanceOf(Float32Array);
   });
 
-  it('returns all interned selectors', () => {
+  it('returns all interned selectors', async () => {
     const table = createTable();
 
     // Use vectors that are far apart so they won't be deduplicated
@@ -67,8 +67,8 @@ describe('SelectorTable', () => {
     const v2 = new Float32Array(64);
     v2[32] = 1.0;
 
-    table.intern(v1, 'search:docs');
-    table.intern(v2, 'create:issue');
+    await table.intern(v1, 'search:docs');
+    await table.intern(v2, 'create:issue');
 
     const all = table.all();
     expect(all).toHaveLength(2);

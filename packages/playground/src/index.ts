@@ -35,7 +35,7 @@ export async function startPlayground(config: PlaygroundConfig): Promise<void> {
   // Load selectors
   for (const [, sel] of Object.entries(data.selectors)) {
     const s = sel as { canonical: string; vector: number[] };
-    selectorTable.intern(new Float32Array(s.vector), s.canonical);
+    await selectorTable.intern(new Float32Array(s.vector), s.canonical);
   }
 
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
@@ -52,7 +52,7 @@ export async function startPlayground(config: PlaygroundConfig): Promise<void> {
       try {
         const { intent } = JSON.parse(body) as { intent: string };
         const selector = await selectorTable.resolve(intent);
-        const matches = vectorIndex.search(selector.vector, 10, 0.3);
+        const matches = await vectorIndex.search(selector.vector, 10, 0.3);
 
         const results = matches.map((m) => {
           let provider = 'unknown';

@@ -194,7 +194,7 @@ export class DispatchContext {
     }
 
     // Step 2: BROADENED SEARCH — lower threshold to find near-misses
-    const broadMatches = this.vectorIndex.search(selector.vector, 5, 0.5);
+    const broadMatches = await this.vectorIndex.search(selector.vector, 5, 0.5);
     if (broadMatches.length > 0) {
       // Try to resolve the best broad match
       for (const match of broadMatches) {
@@ -233,7 +233,7 @@ export class DispatchContext {
     });
 
     // Step 4: Return a stub instead of throwing
-    const nearest = this.vectorIndex.search(selector.vector, 3, 0.5);
+    const nearest = await this.vectorIndex.search(selector.vector, 3, 0.5);
 
     const fallbackResult: FallbackChainResult = {
       tool: 'unknown',
@@ -335,7 +335,7 @@ async function resolveToolIMP(
   }
 
   // 3. SEARCH DISPATCH TABLE (vector similarity)
-  const matches = context.vectorIndex.search(selector.vector, 5, 0.75);
+  const matches = await context.vectorIndex.search(selector.vector, 5, 0.75);
   const candidates: ToolCandidate[] = [];
 
   for (const match of matches) {
