@@ -144,6 +144,42 @@ const original = runtime.swizzle(toolClass, selector, newImp);
 
 `runtime.generateHeader()` produces a token-efficient capability summary for LLM system prompts, including protocol groupings, overload signatures, and instruction text.
 
+## Security
+
+0.2.0 introduces multiple layers of security hardening:
+
+| Feature | Module | Purpose |
+|---------|--------|---------|
+| **Intent Pinning** | `src/core/intent-pin.ts` | Lock sensitive selectors against semantic collision |
+| **Selector Namespacing** | `src/core/selector-namespace.ts` | Prevent cross-provider selector shadowing |
+| **Semantic Rate Limiting** | `src/core/semantic-rate-limiter.ts` | Throttle vector embedding operations to prevent DoS |
+| **Container Sandboxing** | `src/transport/container-sandbox.ts` | Docker isolation for untrusted MCP subprocesses |
+| **Type Confusion Prevention** | `src/core/overload-table.ts` | Strict signature validation on overloaded dispatch |
+
+## Claude Code Channel Protocol
+
+The `channel` module provides bidirectional integration with Claude Code:
+
+- **ClaudeCodeChannelAdapter** — Bridges the ToolRuntime to the Claude Code channel protocol
+- **ChannelServer** — Hosts a channel endpoint for Claude Code to connect to
+- **SenderGate** — Permission-based message filtering for channel events
+
+```typescript
+import { ClaudeCodeChannelAdapter, ChannelServer } from 'smallchat/channel';
+```
+
+## Worker Thread Offloading
+
+For production workloads, `ONNXEmbedder` and `SqliteVectorIndex` can run in dedicated worker threads via `WorkerEmbedder` and `WorkerVectorIndex`, keeping the main thread free for dispatch:
+
+```typescript
+import { createWorkerEmbedder, WorkerVectorIndex } from 'smallchat';
+
+const embedder = await createWorkerEmbedder();
+const index = new WorkerVectorIndex();
+const runtime = new ToolRuntime(index, embedder);
+```
+
 ## CLI Reference
 
 | Command | Description |
@@ -153,6 +189,9 @@ const original = runtime.swizzle(toolClass, selector, newImp);
 | `smallchat resolve` | Test dispatch resolution against a compiled artifact |
 | `smallchat inspect` | Examine providers, selectors, and protocols in a compiled artifact |
 | `smallchat doctor` | Check environment: Node version, ONNX model availability, dependencies |
+| `smallchat init` | Scaffold a new project from `basic`, `mcp-server`, or `agent` templates |
+| `smallchat docs` | Generate Markdown documentation from a compiled artifact |
+| `smallchat repl` | Interactive shell for testing resolution with `:help`, `:tools`, `:stats` |
 
 ## Example Manifests
 
