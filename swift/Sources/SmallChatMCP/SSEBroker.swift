@@ -3,6 +3,7 @@
 import Foundation
 import NIOCore
 import NIOHTTP1
+import SmallChatCore
 
 // MARK: - SSE Connection
 
