@@ -127,6 +127,7 @@ export { AuditLog } from './mcp/audit-log.js';
 export type { AuditEntry } from './mcp/audit-log.js';
 export { loadRuntime, buildToolList, formatContent, findManifests, buildArtifact } from './mcp/artifact.js';
 export type { SerializedArtifact } from './mcp/artifact.js';
+export { SqliteArtifactStore } from './mcp/sqlite-artifact.js';
 
 // Channel — Claude Code channel protocol support
 export {

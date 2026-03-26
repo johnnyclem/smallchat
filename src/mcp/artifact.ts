@@ -13,6 +13,8 @@ import { ToolCompiler } from '../compiler/compiler.js';
 import { ToolRuntime } from '../runtime/runtime.js';
 import { LocalEmbedder } from '../embedding/local-embedder.js';
 import { MemoryVectorIndex } from '../embedding/memory-vector-index.js';
+import { SqliteVectorIndex } from '../embedding/sqlite-vector-index.js';
+import { SqliteArtifactStore } from './sqlite-artifact.js';
 
 // ---------------------------------------------------------------------------
 // Serialized artifact shape
@@ -52,8 +54,23 @@ export async function loadRuntime(
   sourcePath: string,
 ): Promise<{ runtime: ToolRuntime; artifact: SerializedArtifact }> {
   const embedder = new LocalEmbedder();
-  const vectorIndex = new MemoryVectorIndex();
 
+  // SQLite artifact path — use SqliteVectorIndex for pre-indexed vectors
+  if (sourcePath.endsWith('.db') && !isDirectory(sourcePath)) {
+    const store = new SqliteArtifactStore(sourcePath);
+    const artifact = store.load();
+
+    // Use a SqliteVectorIndex backed by the same database so vectors
+    // are already indexed — no re-embedding or index-build needed.
+    const vectorIndex = new SqliteVectorIndex(sourcePath);
+    const runtime = new ToolRuntime(vectorIndex, embedder);
+
+    hydrateRuntime(runtime, artifact);
+    store.close();
+    return { runtime, artifact };
+  }
+
+  const vectorIndex = new MemoryVectorIndex();
   let artifact: SerializedArtifact;
 
   if (sourcePath.endsWith('.json') && !isDirectory(sourcePath)) {
@@ -75,7 +92,15 @@ export async function loadRuntime(
   }
 
   const runtime = new ToolRuntime(vectorIndex, embedder);
+  hydrateRuntime(runtime, artifact);
+  return { runtime, artifact };
+}
 
+/**
+ * Hydrate a ToolRuntime from a SerializedArtifact — shared between
+ * JSON and SQLite load paths.
+ */
+function hydrateRuntime(runtime: ToolRuntime, artifact: SerializedArtifact): void {
   for (const [providerId, methods] of Object.entries(artifact.dispatchTables)) {
     const toolClass = new ToolClass(providerId);
 
@@ -120,8 +145,6 @@ export async function loadRuntime(
 
     runtime.registerClass(toolClass);
   }
-
-  return { runtime, artifact };
 }
 
 // ---------------------------------------------------------------------------
