@@ -28,12 +28,6 @@ export class ToolRuntime {
     this.vectorIndex = vectorIndex;
     this.embedder = embedder;
 
-    this.selectorTable = new SelectorTable(
-      vectorIndex,
-      embedder,
-      options?.selectorThreshold ?? 0.95,
-    );
-
     const versionContext: CacheVersionContext = {
       providerVersions: new Map(),
       modelVersion: options?.modelVersion ?? '',
@@ -44,6 +38,14 @@ export class ToolRuntime {
       options?.cacheSize ?? 1024,
       options?.minConfidence ?? 0.85,
       versionContext,
+      options?.rateLimiter,
+    );
+
+    this.selectorTable = new SelectorTable(
+      vectorIndex,
+      embedder,
+      options?.selectorThreshold ?? 0.95,
+      this.cache.rateLimiter,
     );
 
     this.selectorNamespace = options?.selectorNamespace ?? new SelectorNamespace();
@@ -369,4 +371,6 @@ export interface RuntimeOptions {
   modelVersion?: string;
   /** Selector namespace for core selector protection. A new empty one is created if not provided. */
   selectorNamespace?: SelectorNamespace;
+  /** Semantic rate limiter options — prevents vector flooding DoS */
+  rateLimiter?: import('../core/semantic-rate-limiter.js').SemanticRateLimiterOptions;
 }
