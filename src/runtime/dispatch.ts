@@ -1,10 +1,14 @@
 import type { Embedder, ToolCandidate, ToolIMP, ToolProtocol, ToolResult, ToolSelector, VectorIndex, DispatchEvent, InferenceDelta } from '../core/types.js';
 import { ResolutionCache } from '../core/resolution-cache.js';
-import { SelectorTable } from '../core/selector-table.js';
+import { SelectorTable, canonicalize } from '../core/selector-table.js';
 import { ToolClass } from '../core/tool-class.js';
 import { SCObject, wrapValue, unwrapValue } from '../core/sc-object.js';
 import type { OverloadResolutionResult } from '../core/overload-table.js';
 import { SelectorNamespace } from '../core/selector-namespace.js';
+import { SignatureValidationError } from '../core/overload-table.js';
+import { validateNamedArgumentTypes } from '../core/sc-types.js';
+import { IntentPinRegistry } from '../core/intent-pin.js';
+import type { IntentPinMatch } from '../core/intent-pin.js';
 
 /**
  * UnrecognizedIntent — doesNotRecognizeSelector: equivalent.
@@ -77,6 +81,7 @@ export class DispatchContext {
   readonly vectorIndex: VectorIndex;
   readonly embedder: Embedder;
   readonly selectorNamespace: SelectorNamespace;
+  readonly intentPins: IntentPinRegistry;
 
   private toolClasses: Map<string, ToolClass> = new Map();
   private protocols: Map<string, ToolProtocol> = new Map();
@@ -89,12 +94,14 @@ export class DispatchContext {
     vectorIndex: VectorIndex,
     embedder: Embedder,
     selectorNamespace?: SelectorNamespace,
+    intentPins?: IntentPinRegistry,
   ) {
     this.selectorTable = selectorTable;
     this.cache = cache;
     this.vectorIndex = vectorIndex;
     this.embedder = embedder;
     this.selectorNamespace = selectorNamespace ?? new SelectorNamespace();
+    this.intentPins = intentPins ?? new IntentPinRegistry();
   }
 
   /**
@@ -291,6 +298,31 @@ async function resolveToolIMP(
 ): Promise<ResolutionOutcome> {
   // 1. RESOLVE SELECTOR (embed + intern)
   const selector = await context.selectorTable.resolve(intent);
+  const intentCanonical = canonicalize(intent);
+
+  // 1a. INTENT PIN — exact match fast path
+  // If the intent canonicalizes to a pinned selector, accept immediately
+  if (context.intentPins.size > 0) {
+    const exactPinMatch = context.intentPins.checkExact(intentCanonical);
+    if (exactPinMatch && exactPinMatch.verdict === 'accept') {
+      const pinnedSelector = context.selectorTable.get(exactPinMatch.canonical);
+      if (pinnedSelector) {
+        for (const toolClass of context.getClasses()) {
+          const imp = toolClass.resolveSelector(pinnedSelector);
+          if (imp) {
+            context.cache.store(selector, imp, 1.0);
+            return {
+              kind: 'resolved',
+              imp,
+              confidence: 1.0,
+              selector: pinnedSelector,
+              candidates: [],
+            };
+          }
+        }
+      }
+    }
+  }
 
   // 2. CHECK CACHE (the inline cache / method cache)
   // Skip cache when args are provided and overloads may exist — type matters
@@ -310,10 +342,33 @@ async function resolveToolIMP(
     const matchSelector = context.selectorTable.get(match.id);
     if (!matchSelector) continue;
 
+    // 3.PIN: INTENT PIN — guard pinned candidates against semantic collision
+    // If this candidate is pinned, check whether the similarity meets the pin's policy
+    if (context.intentPins.size > 0) {
+      const pinCheck = context.intentPins.checkSimilarity(
+        match.id,
+        1 - match.distance,
+        intentCanonical,
+      );
+      if (pinCheck) {
+        if (pinCheck.verdict === 'reject') {
+          // This candidate is pinned and the intent doesn't meet the policy —
+          // skip it entirely so it cannot be dispatched via semantic bridging
+          continue;
+        }
+        // verdict === 'accept' — the intent meets the pin's requirements,
+        // proceed with normal dispatch for this candidate
+      }
+    }
+
     for (const toolClass of context.getClasses()) {
       // 3a. OVERLOAD RESOLUTION — if args exist and overloads are registered
+      //     Uses the hardened path that validates arguments against the
+      //     SCObject type hierarchy BEFORE allowing dispatch. This prevents
+      //     Type Confusion attacks where an LLM suggests arguments of the
+      //     wrong type to trick an IMP.
       if (hasArgs && toolClass.hasOverloads(matchSelector)) {
-        const overloadResult = toolClass.resolveSelectorWithNamedArgs(
+        const overloadResult = toolClass.validateAndResolveSelectorWithNamedArgs(
           matchSelector,
           args,
         );
@@ -438,12 +493,20 @@ export async function* smallchat_dispatchStream(
   try {
     outcome = await resolveToolIMP(context, intent, args);
   } catch (err) {
+    const metadata: Record<string, unknown> = {};
+    if (err instanceof UnrecognizedIntent) {
+      metadata.nearestSelectors = err.nearestSelectors;
+      metadata.suggestion = err.suggestion;
+    }
+    if (err instanceof SignatureValidationError) {
+      metadata.typeConfusionGuard = true;
+      metadata.violations = err.violations;
+      metadata.signature = err.signature.signatureKey;
+    }
     yield {
       type: 'error',
       error: err instanceof Error ? err.message : String(err),
-      metadata: err instanceof UnrecognizedIntent
-        ? { nearestSelectors: err.nearestSelectors, suggestion: err.suggestion }
-        : undefined,
+      metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
     };
     return;
   }
@@ -498,6 +561,17 @@ async function* executeAndStream(
   imp: ToolIMP,
   args: Record<string, unknown>,
 ): AsyncGenerator<DispatchEvent> {
+  // Run constraint validation before streaming — prevents type confusion
+  const validation = imp.constraints.validate(args);
+  if (!validation.valid) {
+    yield {
+      type: 'error',
+      error: `Argument validation failed: ${validation.errors.map(e => e.message).join('; ')}`,
+      metadata: { validationErrors: validation.errors, typeConfusionGuard: true },
+    };
+    return;
+  }
+
   const unwrapped: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(args)) {
     unwrapped[key] = unwrapValue(value);
@@ -560,11 +634,30 @@ async function* executeAndStream(
 /**
  * Execute an IMP with arguments, unwrapping any SCObject values
  * back to their underlying representations.
+ *
+ * Runs the IMP's own constraint validation before execution as
+ * a final safety net against type confusion.
  */
 function executeWithArgs(
   imp: ToolIMP,
   args: Record<string, unknown>,
 ): Promise<ToolResult> {
+  // Run constraint validation as a final safety net
+  const validation = imp.constraints.validate(args);
+  if (!validation.valid) {
+    return Promise.resolve({
+      content: {
+        error: 'Argument validation failed',
+        violations: validation.errors,
+      },
+      isError: true,
+      metadata: {
+        validationErrors: validation.errors,
+        typeConfusionGuard: true,
+      },
+    });
+  }
+
   const unwrapped: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(args)) {
     unwrapped[key] = unwrapValue(value);

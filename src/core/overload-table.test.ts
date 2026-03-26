@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { OverloadTable, OverloadAmbiguityError } from './overload-table.js';
-import { createSignature, param, SCType } from './sc-types.js';
-import { SCData, SCSelector } from './sc-object.js';
+import { OverloadTable, OverloadAmbiguityError, SignatureValidationError } from './overload-table.js';
+import { createSignature, param, SCType, validateArgumentTypes, validateNamedArgumentTypes } from './sc-types.js';
+import { SCData, SCSelector, SCArray, SCObject, registerClass } from './sc-object.js';
 import type { ToolIMP, ToolSelector as ToolSelectorType } from './types.js';
 
 function mockIMP(name: string): ToolIMP {
@@ -224,5 +224,263 @@ describe('OverloadTable', () => {
     // Too many args
     const r3 = table.resolve(['url', new SCData({}), 'extra']);
     expect(r3).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Strict signature validation — Type Confusion prevention
+// ---------------------------------------------------------------------------
+
+describe('validateArgumentTypes', () => {
+  it('passes for exact type matches', () => {
+    const sig = createSignature([
+      param('query', 0, SCType.string()),
+      param('limit', 1, SCType.number()),
+    ]);
+    const result = validateArgumentTypes(sig, ['hello', 42]);
+    expect(result.valid).toBe(true);
+    expect(result.violations).toHaveLength(0);
+  });
+
+  it('rejects primitive type mismatch (Type Confusion vector)', () => {
+    const sig = createSignature([
+      param('query', 0, SCType.string()),
+    ]);
+    const result = validateArgumentTypes(sig, [42]);
+    expect(result.valid).toBe(false);
+    expect(result.violations).toHaveLength(1);
+    expect(result.violations[0].kind).toBe('type_mismatch');
+    expect(result.violations[0].expected).toBe('string');
+    expect(result.violations[0].received).toBe('number');
+  });
+
+  it('rejects SCObject class mismatch (isa violation)', () => {
+    const sig = createSignature([
+      param('data', 0, SCType.object('SCSelector')),
+    ]);
+    // Pass an SCData where SCSelector is expected — classic type confusion
+    const result = validateArgumentTypes(sig, [new SCData({ evil: true })]);
+    expect(result.valid).toBe(false);
+    expect(result.violations).toHaveLength(1);
+    expect(result.violations[0].kind).toBe('isa_violation');
+    expect(result.violations[0].expected).toBe('SCSelector');
+    expect(result.violations[0].received).toBe('SCData');
+  });
+
+  it('accepts superclass matches (SCData is-a SCObject)', () => {
+    const sig = createSignature([
+      param('input', 0, SCType.object('SCObject')),
+    ]);
+    const result = validateArgumentTypes(sig, [new SCData({ x: 1 })]);
+    expect(result.valid).toBe(true);
+  });
+
+  it('rejects excess arguments', () => {
+    const sig = createSignature([
+      param('query', 0, SCType.string()),
+    ]);
+    const result = validateArgumentTypes(sig, ['hello', 'extra', 'args']);
+    expect(result.valid).toBe(false);
+    expect(result.violations).toHaveLength(2);
+    expect(result.violations[0].kind).toBe('excess_argument');
+    expect(result.violations[1].kind).toBe('excess_argument');
+  });
+
+  it('reports missing required arguments', () => {
+    const sig = createSignature([
+      param('query', 0, SCType.string()),
+      param('scope', 1, SCType.string()),
+    ]);
+    const result = validateArgumentTypes(sig, ['hello']);
+    expect(result.valid).toBe(false);
+    expect(result.violations).toHaveLength(1);
+    expect(result.violations[0].kind).toBe('missing_required');
+    expect(result.violations[0].parameterName).toBe('scope');
+  });
+
+  it('allows missing optional arguments', () => {
+    const sig = createSignature([
+      param('query', 0, SCType.string()),
+      param('limit', 1, SCType.number(), false, 10),
+    ]);
+    const result = validateArgumentTypes(sig, ['hello']);
+    expect(result.valid).toBe(true);
+  });
+
+  it('accepts union type matches', () => {
+    const sig = createSignature([
+      param('input', 0, SCType.union(SCType.string(), SCType.number())),
+    ]);
+    expect(validateArgumentTypes(sig, ['hello']).valid).toBe(true);
+    expect(validateArgumentTypes(sig, [42]).valid).toBe(true);
+    expect(validateArgumentTypes(sig, [true]).valid).toBe(false);
+  });
+
+  it('rejects primitive where SCObject is expected', () => {
+    const sig = createSignature([
+      param('data', 0, SCType.object('SCData')),
+    ]);
+    // Passing a plain string where SCData is expected
+    const result = validateArgumentTypes(sig, ['not-an-object']);
+    expect(result.valid).toBe(false);
+    expect(result.violations[0].kind).toBe('type_mismatch');
+  });
+
+  it('catches multiple violations in a single call', () => {
+    const sig = createSignature([
+      param('name', 0, SCType.string()),
+      param('count', 1, SCType.number()),
+      param('data', 2, SCType.object('SCData')),
+    ]);
+    // All wrong: number for string, string for number, string for SCData
+    const result = validateArgumentTypes(sig, [42, 'not-a-number', 'not-an-object']);
+    expect(result.valid).toBe(false);
+    expect(result.violations).toHaveLength(3);
+  });
+});
+
+describe('validateNamedArgumentTypes', () => {
+  it('validates named arguments correctly', () => {
+    const sig = createSignature([
+      param('title', 0, SCType.string()),
+      param('count', 1, SCType.number()),
+    ]);
+    const result = validateNamedArgumentTypes(sig, { title: 'hello', count: 5 });
+    expect(result.valid).toBe(true);
+  });
+
+  it('rejects unknown argument names as excess', () => {
+    const sig = createSignature([
+      param('query', 0, SCType.string()),
+    ]);
+    const result = validateNamedArgumentTypes(sig, {
+      query: 'hello',
+      __proto__: 'attack',   // Prototype pollution attempt
+      evil_param: 'injected',
+    });
+    expect(result.valid).toBe(false);
+    const excessViolations = result.violations.filter(v => v.kind === 'excess_argument');
+    expect(excessViolations.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('detects type mismatch in named arguments', () => {
+    const sig = createSignature([
+      param('query', 0, SCType.string()),
+      param('limit', 1, SCType.number()),
+    ]);
+    const result = validateNamedArgumentTypes(sig, { query: 42, limit: 'not-number' });
+    expect(result.valid).toBe(false);
+    expect(result.violations.length).toBe(2);
+  });
+});
+
+describe('OverloadTable.validateAndResolve', () => {
+  it('resolves and validates correct arguments', () => {
+    const table = new OverloadTable('search');
+    const sig = createSignature([
+      param('query', 0, SCType.string()),
+    ]);
+    table.register(sig, mockIMP('search_text'));
+
+    const result = table.validateAndResolve(['hello']);
+    expect(result).not.toBeNull();
+    expect(result!.imp.toolName).toBe('search_text');
+  });
+
+  it('throws SignatureValidationError on type mismatch', () => {
+    const table = new OverloadTable('search');
+
+    // Register two overloads
+    const sig1 = createSignature([param('query', 0, SCType.string())]);
+    table.register(sig1, mockIMP('search_text'));
+
+    const sig2 = createSignature([param('data', 0, SCType.object('SCData'))]);
+    table.register(sig2, mockIMP('search_data'));
+
+    // Number matches neither overload → resolve returns null
+    const result = table.validateAndResolve([42]);
+    expect(result).toBeNull();
+  });
+
+  it('blocks Type Confusion: SCData passed where SCSelector expected', () => {
+    const table = new OverloadTable('execute');
+
+    // Only accepts SCSelector
+    const sig = createSignature([
+      param('selector', 0, SCType.object('SCSelector')),
+    ]);
+    table.register(sig, mockIMP('execute_selector'));
+
+    // Attacker sends SCData (wrong SCObject subclass) — resolve returns null
+    // because matchType returns 'none' for non-related classes
+    const result = table.validateAndResolve([new SCData({ attack: true })]);
+    expect(result).toBeNull();
+  });
+
+  it('blocks Type Confusion via any-typed slot with validateAndResolveNamed', () => {
+    const table = new OverloadTable('process');
+
+    // Has an 'any' typed slot + a typed slot — resolve will succeed via 'any',
+    // but the typed slot must still be validated strictly
+    const sig = createSignature([
+      param('input', 0, SCType.any()),
+      param('config', 1, SCType.object('SCData')),
+    ]);
+    table.register(sig, mockIMP('process_any'));
+
+    // Correct: any + SCData → passes
+    const good = table.validateAndResolveNamed({
+      input: 'anything',
+      config: new SCData({ key: 'value' }),
+    });
+    expect(good).not.toBeNull();
+
+    // Attack: any + string (not SCData) — resolve returns null because
+    // scoreSignatureMatch returns -1 for a non-matching typed slot.
+    // validateAndResolveNamed returns null (no valid overload).
+    const result = table.validateAndResolveNamed({
+      input: 'anything',
+      config: 'not-an-scdata' as unknown,
+    });
+    expect(result).toBeNull();
+  });
+
+  it('throws SignatureValidationError with detailed violation info on excess args', () => {
+    const table = new OverloadTable('send');
+    const sig = createSignature([
+      param('message', 0, SCType.string()),
+    ]);
+    table.register(sig, mockIMP('send_message'));
+
+    // Resolve succeeds (message is string), but there's an extra injected field
+    try {
+      table.validateAndResolveNamed({
+        message: 'valid',
+        injected: 'attack-payload',
+      });
+      expect.unreachable('Should have thrown');
+    } catch (err) {
+      expect(err).toBeInstanceOf(SignatureValidationError);
+      const validationErr = err as SignatureValidationError;
+      expect(validationErr.violations.length).toBeGreaterThanOrEqual(1);
+      expect(validationErr.violations[0].kind).toBe('excess_argument');
+      expect(validationErr.violations[0].parameterName).toBe('injected');
+      expect(validationErr.message).toContain('Type Confusion');
+    }
+  });
+
+  it('rejects unknown named arguments as excess', () => {
+    const table = new OverloadTable('create');
+    const sig = createSignature([
+      param('title', 0, SCType.string()),
+    ]);
+    table.register(sig, mockIMP('create_item'));
+
+    expect(() => {
+      table.validateAndResolveNamed({
+        title: 'valid',
+        injected_field: 'attack',
+      });
+    }).toThrow(SignatureValidationError);
   });
 });

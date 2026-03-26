@@ -6,14 +6,15 @@ import { SelectorTable } from '../core/selector-table.js';
 import { ToolClass } from '../core/tool-class.js';
 import { LocalEmbedder } from '../embedding/local-embedder.js';
 import { MemoryVectorIndex } from '../embedding/memory-vector-index.js';
+import { IntentPinRegistry } from '../core/intent-pin.js';
 import type { ToolIMP, ToolProtocol, ToolSelector, ToolResult, DispatchEvent, InferenceDelta, DispatchEventInferenceDelta } from '../core/types.js';
 
-function createContext() {
+function createContext(intentPins?: IntentPinRegistry) {
   const embedder = new LocalEmbedder(64);
   const vectorIndex = new MemoryVectorIndex();
   const selectorTable = new SelectorTable(vectorIndex, embedder);
   const cache = new ResolutionCache();
-  return new DispatchContext(selectorTable, cache, vectorIndex, embedder);
+  return new DispatchContext(selectorTable, cache, vectorIndex, embedder, intentPins);
 }
 
 function makeIMP(providerId: string, toolName: string, result: unknown = null): ToolIMP {
@@ -542,5 +543,123 @@ describe('smallchat_dispatchStream', () => {
     const errorEvent = events.find(e => e.type === 'error');
     expect(errorEvent).toBeDefined();
     expect((errorEvent as { type: 'error'; error: string }).error).toBe('stream interrupted');
+  });
+});
+
+describe('Intent Pinning — semantic collision mitigation', () => {
+  it('exact-pinned tool dispatches when intent matches exactly', async () => {
+    const pins = new IntentPinRegistry();
+    pins.pin({ canonical: 'db.delete_record', policy: 'exact' });
+    const context = createContext(pins);
+    const cls = new ToolClass('db');
+
+    const embedding = await context.embedder.embed('delete record');
+    const selector = context.selectorTable.intern(embedding, 'db.delete_record');
+    cls.addMethod(selector, makeIMP('db', 'delete_record', 'deleted'));
+    context.registerClass(cls);
+
+    // Exact intent should work
+    const result = await toolkit_dispatch(context, 'delete record');
+    expect(result.content).toBe('deleted');
+  });
+
+  it('exact-pinned tool blocks semantically similar but non-exact intents', async () => {
+    const pins = new IntentPinRegistry();
+    pins.pin({ canonical: 'db.delete_record', policy: 'exact' });
+    const context = createContext(pins);
+    const cls = new ToolClass('db');
+
+    // Register delete_record (pinned exact) and archive_record (not pinned)
+    const delEmbed = await context.embedder.embed('delete record permanently');
+    const delSelector = context.selectorTable.intern(delEmbed, 'db.delete_record');
+    cls.addMethod(delSelector, makeIMP('db', 'delete_record', 'deleted'));
+
+    const archEmbed = await context.embedder.embed('archive record safely');
+    const archSelector = context.selectorTable.intern(archEmbed, 'db.archive_record');
+    cls.addMethod(archSelector, makeIMP('db', 'archive_record', 'archived'));
+
+    context.registerClass(cls);
+
+    // A crafted intent that might semantically bridge to delete_record
+    // should NOT dispatch to the pinned delete_record; it should either
+    // dispatch to archive_record or fall through to fallback
+    const result = await toolkit_dispatch(context, 'archive record safely');
+    // Should not accidentally hit delete_record
+    expect(result.content).not.toBe('deleted');
+  });
+
+  it('elevated-pinned tool blocks low-similarity matches', async () => {
+    const pins = new IntentPinRegistry();
+    pins.pin({ canonical: 'bank.transfer_funds', policy: 'elevated', threshold: 0.95 });
+    const context = createContext(pins);
+    const cls = new ToolClass('bank');
+
+    const transferEmbed = await context.embedder.embed('transfer funds between accounts');
+    const transferSel = context.selectorTable.intern(transferEmbed, 'bank.transfer_funds');
+    cls.addMethod(transferSel, makeIMP('bank', 'transfer_funds', 'transferred'));
+
+    const checkEmbed = await context.embedder.embed('check account balance');
+    const checkSel = context.selectorTable.intern(checkEmbed, 'bank.check_balance');
+    cls.addMethod(checkSel, makeIMP('bank', 'check_balance', 'balance-checked'));
+
+    context.registerClass(cls);
+
+    // Direct intent should work
+    const directResult = await toolkit_dispatch(context, 'transfer funds between accounts');
+    expect(directResult.content).toBe('transferred');
+  });
+
+  it('non-pinned tools still dispatch normally alongside pinned tools', async () => {
+    const pins = new IntentPinRegistry();
+    pins.pin({ canonical: 'db.delete_record', policy: 'exact' });
+    const context = createContext(pins);
+    const cls = new ToolClass('db');
+
+    const delEmbed = await context.embedder.embed('delete record');
+    const delSelector = context.selectorTable.intern(delEmbed, 'db.delete_record');
+    cls.addMethod(delSelector, makeIMP('db', 'delete_record', 'deleted'));
+
+    const readEmbed = await context.embedder.embed('read record');
+    const readSelector = context.selectorTable.intern(readEmbed, 'db.read_record');
+    cls.addMethod(readSelector, makeIMP('db', 'read_record', 'record-data'));
+
+    context.registerClass(cls);
+
+    // Non-pinned tool dispatches normally
+    const result = await toolkit_dispatch(context, 'read record');
+    expect(result.content).toBe('record-data');
+  });
+
+  it('dispatch works normally when no pins are registered', async () => {
+    const context = createContext(); // no pins
+    const cls = new ToolClass('github');
+
+    const embedding = await context.embedder.embed('search code repositories');
+    const selector = context.selectorTable.intern(embedding, 'github.search_code');
+    cls.addMethod(selector, makeIMP('github', 'search_code'));
+    context.registerClass(cls);
+
+    const result = await toolkit_dispatch(context, 'search code repositories', { query: 'auth' });
+    expect(result.content).toBe('search_code:executed');
+  });
+
+  it('exact-pinned tool accepts via alias', async () => {
+    const pins = new IntentPinRegistry();
+    pins.pin({
+      canonical: 'db.delete_record',
+      policy: 'exact',
+      aliases: ['remove record permanently'],
+    });
+    const context = createContext(pins);
+    const cls = new ToolClass('db');
+
+    const embedding = await context.embedder.embed('delete record');
+    const selector = context.selectorTable.intern(embedding, 'db.delete_record');
+    cls.addMethod(selector, makeIMP('db', 'delete_record', 'deleted'));
+    context.registerClass(cls);
+
+    // Intent that canonicalizes to an alias should still work
+    const result = await toolkit_dispatch(context, 'remove record permanently');
+    expect(result.content).toBe('deleted');
   });
 });

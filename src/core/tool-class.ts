@@ -122,6 +122,52 @@ export class ToolClass {
     return null;
   }
 
+  /**
+   * Resolve a selector with strict signature validation (hardened path).
+   *
+   * Like resolveSelectorWithNamedArgs, but after resolving the overload,
+   * strictly validates every argument against the winning signature's
+   * SCObject type hierarchy. Throws SignatureValidationError on mismatch.
+   *
+   * Use this to prevent Type Confusion attacks from LLM-suggested arguments.
+   */
+  validateAndResolveSelectorWithNamedArgs(
+    selector: ToolSelector,
+    namedArgs: Record<string, unknown>,
+  ): OverloadResolutionResult | null {
+    const table = this.overloadTables.get(selector.canonical);
+    if (table && table.size > 0) {
+      return table.validateAndResolveNamed(namedArgs);
+    }
+
+    if (this.superclass) {
+      return this.superclass.validateAndResolveSelectorWithNamedArgs(selector, namedArgs);
+    }
+
+    return null;
+  }
+
+  /**
+   * Resolve a selector with strict positional argument validation (hardened path).
+   *
+   * Throws SignatureValidationError if arguments violate the type hierarchy.
+   */
+  validateAndResolveSelectorWithArgs(
+    selector: ToolSelector,
+    args: unknown[],
+  ): OverloadResolutionResult | null {
+    const table = this.overloadTables.get(selector.canonical);
+    if (table && table.size > 0) {
+      return table.validateAndResolve(args);
+    }
+
+    if (this.superclass) {
+      return this.superclass.validateAndResolveSelectorWithArgs(selector, args);
+    }
+
+    return null;
+  }
+
   /** Check if a selector has overloads */
   hasOverloads(selector: ToolSelector): boolean {
     const table = this.overloadTables.get(selector.canonical);
