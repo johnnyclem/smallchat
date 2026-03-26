@@ -7,7 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-03-26
+
 ### Added
+- **Claude Code channel protocol** — Full bidirectional channel support for Claude Code integration with `ClaudeCodeChannelAdapter`, `ChannelServer`, and `SenderGate` (#24)
+- **Container sandbox** — Docker-based isolation for MCP subprocess execution with `spawnMcpProcess` and `buildDockerArgs` (#39)
+- **Worker thread embeddings** — `ONNXEmbedder` and `SqliteVectorIndex` now run in dedicated worker threads for non-blocking dispatch (#38)
+- **SQLite artifact persistence** — `SqliteArtifactStore` for durable compiled artifact storage (#37)
+- **Selector namespacing** — `SelectorNamespace` prevents selector shadowing across providers (#34)
+- **Intent pinning** — Guard sensitive selectors against semantic collision attacks (#33)
+- **Semantic rate limiting** — `SemanticRateLimiter` prevents vector flooding DoS with configurable thresholds (#35)
+- **Strict signature validation** — Prevents type confusion attacks on overloaded selectors (#36)
 - **CLI `init` command** — Scaffold new projects with `smallchat init` supporting `basic`, `mcp-server`, and `agent` templates
 - **Fluent SDK API** — Chainable dispatch builder: `runtime.intent('search').withArgs({}).exec()`
 - **TypeScript inference** — Full generic type inference for tool arguments through `DispatchBuilder<TArgs>`
@@ -19,10 +29,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`@smallchat/testing` package** — `MockEmbedder`, `MockVectorIndex`, `MockToolIMP`, `createMockSelector`, and assertion helpers
 - **Playground web UI** — Browser-based resolution chain visualizer at `@smallchat/playground`
 - **Improved error messages** — `UnrecognizedIntent` and `OverloadAmbiguityError` now include actionable fix suggestions and nearest-match hints
-- **Examples** — Three complete use-case examples: GitHub Bot, Weather Agent, SQL Assistant
+- **Examples** — Five complete use-case examples: GitHub Bot, Weather Agent, SQL Assistant, Channel Webhook, Full Pipeline
 - **Tree-shaking support** — `sideEffects: false` and proper ESM exports for optimal bundling
 - **TypeDoc configuration** — API reference generation via `npm run docs:api`
-- **Migration guide** — Step-by-step guide for migrating from 0.1.0 to 1.0.0
+- **Comprehensive test suite** — 274+ Gherkin-style specs across 41 test files covering all modules (#31)
+
+### Security
+- **Intent pinning** — Immutable selectors for sensitive operations prevent adversarial re-binding
+- **Selector namespacing** — Prevents cross-provider selector shadowing
+- **Semantic rate limiting** — Configurable flood protection on vector embedding operations
+- **Container sandboxing** — Docker isolation for untrusted MCP server processes
+- **Type confusion prevention** — Strict signature validation on overloaded dispatch
 
 ## [0.1.0] - 2025-03-01
 

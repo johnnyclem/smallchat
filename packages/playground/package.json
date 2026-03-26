@@ -1,6 +1,6 @@
 {
   "name": "@smallchat/playground",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Web UI playground for testing smallchat tool dispatch and resolution chains",
   "type": "module",
   "main": "dist/index.js",
