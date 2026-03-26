@@ -4,6 +4,7 @@ import { SelectorTable, canonicalize } from '../core/selector-table.js';
 import { ToolClass } from '../core/tool-class.js';
 import { SCObject, wrapValue, unwrapValue } from '../core/sc-object.js';
 import type { OverloadResolutionResult } from '../core/overload-table.js';
+import { SelectorNamespace } from '../core/selector-namespace.js';
 import { SignatureValidationError } from '../core/overload-table.js';
 import { validateNamedArgumentTypes } from '../core/sc-types.js';
 import { IntentPinRegistry } from '../core/intent-pin.js';
@@ -79,6 +80,7 @@ export class DispatchContext {
   readonly cache: ResolutionCache;
   readonly vectorIndex: VectorIndex;
   readonly embedder: Embedder;
+  readonly selectorNamespace: SelectorNamespace;
   readonly intentPins: IntentPinRegistry;
 
   private toolClasses: Map<string, ToolClass> = new Map();
@@ -91,17 +93,28 @@ export class DispatchContext {
     cache: ResolutionCache,
     vectorIndex: VectorIndex,
     embedder: Embedder,
+    selectorNamespace?: SelectorNamespace,
     intentPins?: IntentPinRegistry,
   ) {
     this.selectorTable = selectorTable;
     this.cache = cache;
     this.vectorIndex = vectorIndex;
     this.embedder = embedder;
+    this.selectorNamespace = selectorNamespace ?? new SelectorNamespace();
     this.intentPins = intentPins ?? new IntentPinRegistry();
   }
 
-  /** Register a provider (ToolClass) */
+  /**
+   * Register a provider (ToolClass).
+   *
+   * Throws SelectorShadowingError if the class contains selectors that
+   * would shadow protected core selectors.
+   */
   registerClass(toolClass: ToolClass): void {
+    // Guard: check all selectors in this class against the namespace
+    const ownSelectors = Array.from(toolClass.dispatchTable.keys());
+    this.selectorNamespace.assertNoShadowing(toolClass.name, ownSelectors);
+
     this.toolClasses.set(toolClass.name, toolClass);
 
     // Index all methods for vector search

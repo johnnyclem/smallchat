@@ -9,6 +9,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ToolRuntime } from './runtime.js';
 import { ToolClass, ToolProxy } from '../core/tool-class.js';
 import type { Embedder, VectorIndex, ToolSelector, ToolIMP, ToolProtocol } from '../core/types.js';
+import { SelectorNamespace, SelectorShadowingError } from '../core/selector-namespace.js';
 
 /** Minimal mock embedder */
 function createMockEmbedder(): Embedder {
@@ -327,6 +328,174 @@ describe('Feature: Invalidation Hook', () => {
 
       // Should not throw
       unsubscribe();
+    });
+  });
+});
+
+describe('Feature: Selector Shadowing Prevention', () => {
+  let runtime: ToolRuntime;
+
+  function makeSelector(canonical: string): ToolSelector {
+    return {
+      canonical,
+      parts: canonical.split(':'),
+      arity: canonical.split(':').length - 1,
+      vector: new Float32Array(384),
+    };
+  }
+
+  function makeIMP(providerId: string, toolName: string): ToolIMP {
+    return {
+      providerId,
+      toolName,
+      transportType: 'local',
+    } as ToolIMP;
+  }
+
+  beforeEach(() => {
+    runtime = new ToolRuntime(createMockVectorIndex(), createMockEmbedder());
+  });
+
+  describe('Scenario: Register a core class and block shadowing', () => {
+    it('Given a core class with protected selectors, When a new class tries to shadow them, Then it throws SelectorShadowingError', () => {
+      const coreClass = new ToolClass('system');
+      const sel = makeSelector('dispatch:intent');
+      coreClass.addMethod(sel, makeIMP('system', 'dispatch'));
+      runtime.registerCoreClass(coreClass);
+
+      // A new class with the same selector should be blocked
+      const evilClass = new ToolClass('evil-plugin');
+      evilClass.addMethod(sel, makeIMP('evil-plugin', 'evil-dispatch'));
+
+      expect(() => runtime.registerClass(evilClass)).toThrow(SelectorShadowingError);
+    });
+  });
+
+  describe('Scenario: Core class with swizzlable selectors allows shadowing', () => {
+    it('Given a core class with swizzlable selectors, When a new class uses the same selector, Then it succeeds', () => {
+      const coreClass = new ToolClass('system');
+      const sel = makeSelector('dispatch:intent');
+      coreClass.addMethod(sel, makeIMP('system', 'dispatch'));
+      runtime.registerCoreClass(coreClass, { swizzlable: true });
+
+      const pluginClass = new ToolClass('plugin');
+      pluginClass.addMethod(sel, makeIMP('plugin', 'custom-dispatch'));
+
+      expect(() => runtime.registerClass(pluginClass)).not.toThrow();
+    });
+  });
+
+  describe('Scenario: Non-core selectors are not protected', () => {
+    it('Given a regular (non-core) class, When another class uses the same selector, Then it succeeds', () => {
+      const classA = new ToolClass('provider-a');
+      const sel = makeSelector('search:code');
+      classA.addMethod(sel, makeIMP('provider-a', 'search'));
+      runtime.registerClass(classA); // Not registerCoreClass
+
+      const classB = new ToolClass('provider-b');
+      classB.addMethod(sel, makeIMP('provider-b', 'search'));
+
+      expect(() => runtime.registerClass(classB)).not.toThrow();
+    });
+  });
+
+  describe('Scenario: Swizzle respects namespace protection', () => {
+    it('Given a core class with protected selectors, When swizzle is called from a different class, Then it throws', () => {
+      const coreClass = new ToolClass('system');
+      const sel = makeSelector('dispatch:intent');
+      coreClass.addMethod(sel, makeIMP('system', 'dispatch'));
+      runtime.registerCoreClass(coreClass);
+
+      const otherClass = new ToolClass('attacker');
+      runtime.registerClass(otherClass);
+
+      expect(() => runtime.swizzle(otherClass, sel, makeIMP('attacker', 'evil'))).toThrow(
+        SelectorShadowingError,
+      );
+    });
+
+    it('Given a core class, When the owner swizzles its own selector, Then it succeeds', () => {
+      const coreClass = new ToolClass('system');
+      const sel = makeSelector('dispatch:intent');
+      coreClass.addMethod(sel, makeIMP('system', 'dispatch-v1'));
+      runtime.registerCoreClass(coreClass);
+
+      const newImp = makeIMP('system', 'dispatch-v2');
+      expect(() => runtime.swizzle(coreClass, sel, newImp)).not.toThrow();
+      expect(coreClass.dispatchTable.get('dispatch:intent')).toBe(newImp);
+    });
+  });
+
+  describe('Scenario: markSwizzlable unlocks a protected selector', () => {
+    it('Given a protected selector, When markSwizzlable is called, Then other classes can shadow it', () => {
+      const coreClass = new ToolClass('system');
+      const sel = makeSelector('dispatch:intent');
+      coreClass.addMethod(sel, makeIMP('system', 'dispatch'));
+      runtime.registerCoreClass(coreClass);
+
+      // Initially blocked
+      const pluginClass = new ToolClass('plugin');
+      pluginClass.addMethod(sel, makeIMP('plugin', 'custom'));
+      expect(() => runtime.registerClass(pluginClass)).toThrow(SelectorShadowingError);
+
+      // Unlock it
+      runtime.selectorNamespace.markSwizzlable('dispatch:intent');
+
+      // Now it should work
+      const pluginClass2 = new ToolClass('plugin2');
+      pluginClass2.addMethod(sel, makeIMP('plugin2', 'custom'));
+      expect(() => runtime.registerClass(pluginClass2)).not.toThrow();
+    });
+  });
+
+  describe('Scenario: Category loading respects namespace', () => {
+    it('Given a core selector, When a category tries to shadow it on a different class, Then it throws', () => {
+      const coreClass = new ToolClass('system');
+      const sel = makeSelector('dispatch:intent');
+      coreClass.addMethod(sel, makeIMP('system', 'dispatch'));
+      runtime.registerCoreClass(coreClass);
+
+      const protocol: ToolProtocol = {
+        name: 'Dispatchable',
+        requiredSelectors: [],
+        optionalSelectors: [],
+      };
+
+      const otherClass = new ToolClass('other');
+      otherClass.protocols.push(protocol);
+      runtime.registerClass(otherClass);
+
+      expect(() =>
+        runtime.loadCategory({
+          name: 'EvilCategory',
+          extendsProtocol: 'Dispatchable',
+          methods: [{ selector: sel, imp: makeIMP('other', 'evil-dispatch') }],
+        }),
+      ).toThrow(SelectorShadowingError);
+    });
+  });
+
+  describe('Scenario: Runtime exposes selectorNamespace', () => {
+    it('Given a runtime, Then selectorNamespace is accessible for configuration', () => {
+      expect(runtime.selectorNamespace).toBeDefined();
+      expect(runtime.selectorNamespace).toBeInstanceOf(SelectorNamespace);
+    });
+  });
+
+  describe('Scenario: Custom namespace passed via options', () => {
+    it('Given a pre-configured namespace, When used in RuntimeOptions, Then it is respected', () => {
+      const ns = new SelectorNamespace();
+      ns.registerCore('protected:method', 'system');
+
+      const customRuntime = new ToolRuntime(createMockVectorIndex(), createMockEmbedder(), {
+        selectorNamespace: ns,
+      });
+
+      const cls = new ToolClass('plugin');
+      const sel = makeSelector('protected:method');
+      cls.addMethod(sel, makeIMP('plugin', 'override'));
+
+      expect(() => customRuntime.registerClass(cls)).toThrow(SelectorShadowingError);
     });
   });
 });

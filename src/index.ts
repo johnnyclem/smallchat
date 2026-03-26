@@ -80,6 +80,8 @@ export type { OverloadEntry, OverloadResolutionResult } from './core/overload-ta
 
 // Core classes
 export { SelectorTable, canonicalize } from './core/selector-table.js';
+export { SelectorNamespace, SelectorShadowingError } from './core/selector-namespace.js';
+export type { CoreSelectorEntry } from './core/selector-namespace.js';
 export { ResolutionCache, computeSchemaFingerprint } from './core/resolution-cache.js';
 export { ToolClass, ToolProxy } from './core/tool-class.js';
 
