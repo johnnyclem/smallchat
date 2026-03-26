@@ -7,7 +7,6 @@ import { inspectCommand } from './commands/inspect.js';
 import { resolveCommand } from './commands/resolve.js';
 import { serveCommand } from './commands/serve.js';
 import { doctorCommand } from './commands/doctor.js';
-import { initCommand } from './commands/init.js';
 import { docsCommand } from './commands/docs.js';
 import { replCommand } from './commands/repl.js';
 import { channelCommand } from './commands/channel.js';
