@@ -11,7 +11,7 @@ Your agent has 50 tools. The LLM sees all 50 in its context window every single 
 **smallchat compiles your tools into a dispatch table.** The LLM expresses intent. The runtime resolves it — semantically, deterministically, in microseconds. No prompt stuffing. No selection lottery.
 
 ```bash
-npx smallchat compile --source ~/.mcp.json
+npx @smallchat/core compile --source ~/.mcp.json
 ```
 
 One command. Point it at your MCP config, a directory of manifests, or any MCP server repo. Out comes a compiled artifact with embedded vectors, dispatch tables, and resolution caching — ready to serve.
@@ -19,7 +19,7 @@ One command. Point it at your MCP config, a directory of manifests, or any MCP s
 ## Install
 
 ```bash
-npm install smallchat
+npm install @smallchat/core
 ```
 
 Requires Node.js >= 20.
@@ -28,25 +28,25 @@ Requires Node.js >= 20.
 
 ```bash
 # Compile tools from your MCP servers
-npx smallchat compile --source ~/.mcp.json
+npx @smallchat/core compile --source ~/.mcp.json
 
 # Ask it a question — see which tool it picks and why
-npx smallchat resolve tools.toolkit.json "search for code"
+npx @smallchat/core resolve tools.toolkit.json "search for code"
 
 # Start an MCP-compatible server
-npx smallchat serve --source ./manifests --port 3001
+npx @smallchat/core serve --source ./manifests --port 3001
 
 # Scaffold a new project
-npx smallchat init my-app --template agent
+npx @smallchat/core init my-app --template agent
 
 # Interactive REPL
-npx smallchat repl tools.toolkit.json
+npx @smallchat/core repl tools.toolkit.json
 ```
 
 ## Use It in Code
 
 ```typescript
-import { ToolRuntime, MemoryVectorIndex, LocalEmbedder } from 'smallchat';
+import { ToolRuntime, MemoryVectorIndex, LocalEmbedder } from '@smallchat/core';
 
 const runtime = new ToolRuntime(
   new MemoryVectorIndex(),
@@ -105,7 +105,7 @@ See the [Architecture doc](./ARCHITECTURE.md) for the full design and the [Refer
 
 | Package | Description |
 |---------|-------------|
-| `smallchat` | Core runtime, compiler, MCP server, CLI |
+| `@smallchat/core` | Core runtime, compiler, MCP server, CLI |
 | `@smallchat/react` | React hooks: `useToolDispatch`, `useToolStream`, `SmallchatProvider` |
 | `@smallchat/nextjs` | Next.js App Router helpers |
 | `@smallchat/testing` | `MockEmbedder`, `MockVectorIndex`, assertion helpers |

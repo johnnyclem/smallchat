@@ -113,7 +113,7 @@ When compiling from an MCP config or auto-detecting, smallchat spawns each serve
 
 ## MCP Server
 
-`smallchat serve` starts an HTTP server implementing the MCP 2026 protocol:
+`npx @smallchat/core serve` starts an HTTP server implementing the MCP 2026 protocol:
 
 | Capability | Description |
 |------------|-------------|
@@ -165,7 +165,7 @@ The `channel` module provides bidirectional integration with Claude Code:
 - **SenderGate** — Permission-based message filtering for channel events
 
 ```typescript
-import { ClaudeCodeChannelAdapter, ChannelServer } from 'smallchat/channel';
+import { ClaudeCodeChannelAdapter, ChannelServer } from '@smallchat/core/channel';
 ```
 
 ## Worker Thread Offloading
@@ -173,7 +173,7 @@ import { ClaudeCodeChannelAdapter, ChannelServer } from 'smallchat/channel';
 For production workloads, `ONNXEmbedder` and `SqliteVectorIndex` can run in dedicated worker threads via `WorkerEmbedder` and `WorkerVectorIndex`, keeping the main thread free for dispatch:
 
 ```typescript
-import { createWorkerEmbedder, WorkerVectorIndex } from 'smallchat';
+import { createWorkerEmbedder, WorkerVectorIndex } from '@smallchat/core';
 
 const embedder = await createWorkerEmbedder();
 const index = new WorkerVectorIndex();
@@ -184,18 +184,18 @@ const runtime = new ToolRuntime(index, embedder);
 
 | Command | Description |
 |---------|-------------|
-| `smallchat compile` | Parse manifests, embed selectors, link dispatch tables → `.toolkit.json` |
-| `smallchat serve` | Start MCP-compatible HTTP server with SSE streaming |
-| `smallchat resolve` | Test dispatch resolution against a compiled artifact |
-| `smallchat inspect` | Examine providers, selectors, and protocols in a compiled artifact |
-| `smallchat doctor` | Check environment: Node version, ONNX model availability, dependencies |
-| `smallchat init` | Scaffold a new project from `basic`, `mcp-server`, or `agent` templates |
-| `smallchat docs` | Generate Markdown documentation from a compiled artifact |
-| `smallchat repl` | Interactive shell for testing resolution with `:help`, `:tools`, `:stats` |
+| `npx @smallchat/core compile` | Parse manifests, embed selectors, link dispatch tables → `.toolkit.json` |
+| `npx @smallchat/core serve` | Start MCP-compatible HTTP server with SSE streaming |
+| `npx @smallchat/core resolve` | Test dispatch resolution against a compiled artifact |
+| `npx @smallchat/core inspect` | Examine providers, selectors, and protocols in a compiled artifact |
+| `npx @smallchat/core doctor` | Check environment: Node version, ONNX model availability, dependencies |
+| `npx @smallchat/core init` | Scaffold a new project from `basic`, `mcp-server`, or `agent` templates |
+| `npx @smallchat/core docs` | Generate Markdown documentation from a compiled artifact |
+| `npx @smallchat/core repl` | Interactive shell for testing resolution with `:help`, `:tools`, `:stats` |
 
 ## Example Manifests
 
-The `examples/` directory contains 32 MCP server manifest files for popular services, ready to use with `smallchat compile`:
+The `examples/` directory contains 32 MCP server manifest files for popular services, ready to use with `npx @smallchat/core compile`:
 
 | Category | Manifests |
 |----------|-----------|

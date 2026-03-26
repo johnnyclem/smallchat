@@ -61,7 +61,7 @@ smallchat now opens the actual provider stream. Dispatch resolves the intent onc
 ### The `dispatchStream` generator
 
 ```typescript
-import { ToolRuntime } from "smallchat";
+import { ToolRuntime } from "@smallchat/core";
 
 const runtime = new ToolRuntime(/* config with provider and model */);
 
