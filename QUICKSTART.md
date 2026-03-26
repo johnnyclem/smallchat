@@ -5,7 +5,7 @@ Get from zero to dispatching your first tool intent in under 5 minutes.
 ## 1. Create a New Project
 
 ```bash
-npx smallchat init my-app
+npx @smallchat/core init my-app
 cd my-app
 npm install
 ```
@@ -18,7 +18,7 @@ This scaffolds a project with:
 ## 2. Compile Your Tools
 
 ```bash
-npx smallchat compile --source ./manifests
+npx @smallchat/core compile --source ./manifests
 ```
 
 This reads your manifest files, generates embedding vectors for each tool, and produces a `tools.toolkit.json` artifact.
@@ -26,7 +26,7 @@ This reads your manifest files, generates embedding vectors for each tool, and p
 ## 3. Test Resolution
 
 ```bash
-npx smallchat resolve tools.toolkit.json "say hello to someone"
+npx @smallchat/core resolve tools.toolkit.json "say hello to someone"
 ```
 
 You should see the intent resolve to the `greet` tool with high confidence.
@@ -36,7 +36,7 @@ You should see the intent resolve to the `greet` tool with high confidence.
 Edit `src/index.ts`:
 
 ```typescript
-import { ToolRuntime, MemoryVectorIndex, LocalEmbedder } from 'smallchat';
+import { ToolRuntime, MemoryVectorIndex, LocalEmbedder } from '@smallchat/core';
 
 async function main() {
   const runtime = new ToolRuntime(
@@ -62,7 +62,7 @@ main();
 ## 5. Explore Interactively
 
 ```bash
-npx smallchat repl tools.toolkit.json
+npx @smallchat/core repl tools.toolkit.json
 ```
 
 Type natural language intents and see which tools they resolve to. Try:
@@ -75,9 +75,9 @@ Type natural language intents and see which tools they resolve to. Try:
 
 - **Add more tools**: Create manifest JSON files in `manifests/`
 - **Use streaming**: `for await (const event of runtime.dispatchStream('intent')) { ... }`
-- **Start an MCP server**: `npx smallchat serve --source ./manifests`
-- **Generate docs**: `npx smallchat docs tools.toolkit.json`
-- **Check health**: `npx smallchat doctor`
+- **Start an MCP server**: `npx @smallchat/core serve --source ./manifests`
+- **Generate docs**: `npx @smallchat/core docs tools.toolkit.json`
+- **Check health**: `npx @smallchat/core doctor`
 
 ## Templates
 
@@ -90,8 +90,8 @@ Type natural language intents and see which tools they resolve to. Try:
 | `agent` | Streaming agent with dispatch loop |
 
 ```bash
-npx smallchat init my-server --template mcp-server
-npx smallchat init my-agent --template agent
+npx @smallchat/core init my-server --template mcp-server
+npx @smallchat/core init my-agent --template agent
 ```
 
 ## Example Projects

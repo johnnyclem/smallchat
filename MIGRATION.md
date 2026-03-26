@@ -48,7 +48,7 @@ for await (const event of runtime.intent('search').stream()) { ... }
 
 **Selector Namespacing** — Prevent providers from shadowing each other's selectors:
 ```typescript
-import { SelectorNamespace } from 'smallchat';
+import { SelectorNamespace } from '@smallchat/core';
 
 const ns = new SelectorNamespace();
 ns.register('search', 'provider-a');
@@ -57,20 +57,20 @@ ns.register('search', 'provider-b'); // throws SelectorShadowingError
 
 **Intent Pinning** — Lock sensitive selectors against semantic collision:
 ```typescript
-import { IntentPin } from 'smallchat';
+import { IntentPin } from '@smallchat/core';
 // Pin critical selectors so adversarial intents can't re-bind them
 ```
 
 **Semantic Rate Limiting** — Prevent vector flooding DoS:
 ```typescript
-import { SemanticRateLimiter } from 'smallchat';
+import { SemanticRateLimiter } from '@smallchat/core';
 
 const limiter = new SemanticRateLimiter({ maxRequestsPerWindow: 100 });
 ```
 
 **Container Sandboxing** — Run untrusted MCP servers in Docker isolation:
 ```typescript
-import { spawnMcpProcess } from 'smallchat';
+import { spawnMcpProcess } from '@smallchat/core';
 
 const proc = await spawnMcpProcess({ command: 'node', args: ['server.js'], sandbox: { type: 'container' } });
 ```
@@ -80,7 +80,7 @@ const proc = await spawnMcpProcess({ command: 'node', args: ['server.js'], sandb
 For production workloads, move embedding and vector search off the main thread:
 
 ```typescript
-import { createWorkerEmbedder, WorkerVectorIndex } from 'smallchat';
+import { createWorkerEmbedder, WorkerVectorIndex } from '@smallchat/core';
 
 const embedder = await createWorkerEmbedder();
 const index = new WorkerVectorIndex();
@@ -93,7 +93,7 @@ This is a drop-in replacement for `ONNXEmbedder` and `SqliteVectorIndex`.
 Integrate smallchat with Claude Code's bidirectional channel:
 
 ```typescript
-import { ClaudeCodeChannelAdapter, ChannelServer } from 'smallchat/channel';
+import { ClaudeCodeChannelAdapter, ChannelServer } from '@smallchat/core/channel';
 
 const adapter = new ClaudeCodeChannelAdapter(runtime);
 const server = new ChannelServer(adapter, { port: 3002 });
@@ -124,18 +124,18 @@ npm install --save-dev @smallchat/testing
 
 ```bash
 # Scaffold a new project
-smallchat init [directory] --template basic|mcp-server|agent
+npx @smallchat/core init [directory] --template basic|mcp-server|agent
 
 # Generate tool documentation
-smallchat docs <artifact.json> -o TOOLS.md
+npx @smallchat/core docs <artifact.json> -o TOOLS.md
 
 # Interactive REPL
-smallchat repl <artifact.json>
+npx @smallchat/core repl <artifact.json>
 ```
 
 ### 8. Package.json Exports (Tree-Shaking)
 
-The main `smallchat` package now declares `"sideEffects": false` and uses proper ESM `exports` map with a `./channel` subpath export. This enables tree-shaking in bundlers like webpack, Rollup, and esbuild.
+The main `@smallchat/core` package now declares `"sideEffects": false` and uses proper ESM `exports` map with a `./channel` subpath export. This enables tree-shaking in bundlers like webpack, Rollup, and esbuild.
 
 No code changes needed — your imports continue to work. Bundle sizes will decrease automatically.
 
@@ -144,7 +144,7 @@ No code changes needed — your imports continue to work. Bundle sizes will decr
 Store compiled artifacts durably instead of as JSON files:
 
 ```typescript
-import { SqliteArtifactStore } from 'smallchat';
+import { SqliteArtifactStore } from '@smallchat/core';
 
 const store = new SqliteArtifactStore('artifacts.db');
 await store.save('my-toolkit', artifact);
@@ -153,6 +153,6 @@ const loaded = await store.load('my-toolkit');
 
 ## Need Help?
 
-- Run `smallchat doctor` to check your setup
+- Run `npx @smallchat/core doctor` to check your setup
 - Check the [examples/](./examples/) directory for working reference implementations
 - File an issue at https://github.com/johnnyclem/smallchat/issues
