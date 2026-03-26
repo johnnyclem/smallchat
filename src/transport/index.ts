@@ -24,6 +24,7 @@ export type {
   LocalTransportConfig,
   LocalHandler,
   SandboxConfig,
+  ContainerSandboxConfig,
   RetryConfig,
   CircuitBreakerConfig,
   PostmanCollection,
@@ -37,6 +38,7 @@ export {
   TransportTimeoutError,
   CircuitOpenError,
   SandboxError,
+  ContainerSandboxError,
   httpStatusToError,
   jsonRpcErrorToError,
   errorToOutput,
@@ -93,6 +95,9 @@ export { buildMultipartBody, requiresMultipart } from './file-upload.js';
 // Connection pooling
 export { ConnectionPool } from './connection-pool.js';
 export type { ConnectionPoolConfig } from './connection-pool.js';
+
+// Container sandbox
+export { spawnMcpProcess, buildDockerArgs, isDockerAvailable } from './container-sandbox.js';
 
 // Generators
 export { generateFromOpenAPI, openAPIToToolDefinitions, fetchOpenAPISpec } from './openapi-generator.js';

@@ -81,6 +81,20 @@ export class SandboxError extends ToolExecutionError {
   }
 }
 
+/**
+ * Container sandbox error — Docker container spawning or execution failed.
+ */
+export class ContainerSandboxError extends ToolExecutionError {
+  constructor(message: string, options?: { cause?: Error }) {
+    super(message, {
+      code: 'CONTAINER_SANDBOX_ERROR',
+      retryable: false,
+      cause: options?.cause,
+    });
+    this.name = 'ContainerSandboxError';
+  }
+}
+
 // ---------------------------------------------------------------------------
 // HTTP status → error mapping
 // ---------------------------------------------------------------------------

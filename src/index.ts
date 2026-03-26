@@ -170,6 +170,7 @@ export type {
   LocalTransportConfig,
   LocalHandler,
   SandboxConfig,
+  ContainerSandboxConfig,
   RetryConfig,
   CircuitBreakerConfig,
 } from './transport/index.js';
@@ -180,6 +181,7 @@ export {
   TransportTimeoutError,
   CircuitOpenError,
   SandboxError,
+  ContainerSandboxError,
   httpStatusToError,
   jsonRpcErrorToError,
   errorToOutput,
@@ -216,4 +218,8 @@ export {
   importPostmanCollection,
   postmanToToolDefinitions,
   parsePostmanCollection,
+  // Container sandbox
+  spawnMcpProcess,
+  buildDockerArgs,
+  isDockerAvailable,
 } from './transport/index.js';

@@ -5,11 +5,13 @@
  * over stdin/stdout, and extracts the tool list for manifest generation.
  */
 
-import { spawn, execSync } from 'node:child_process';
+import { execSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { readFileSync, existsSync, statSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import type { ProviderManifest, ToolDefinition, JSONSchemaType } from '../core/types.js';
+import type { ContainerSandboxConfig } from '../transport/types.js';
+import { spawnMcpProcess } from '../transport/container-sandbox.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -19,6 +21,8 @@ export interface McpServerConfig {
   command: string;
   args?: string[];
   env?: Record<string, string>;
+  /** Optional container sandbox for process isolation */
+  containerSandbox?: ContainerSandboxConfig;
 }
 
 export interface McpConfigFile {
@@ -109,9 +113,11 @@ export async function introspectMcpServer(
     let settled = false;
     let stderrBuf = '';
 
-    const child = spawn(config.command, config.args ?? [], {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env, ...config.env },
+    const child = spawnMcpProcess({
+      command: config.command,
+      args: config.args,
+      env: config.env,
+      containerSandbox: config.containerSandbox,
     });
 
     const rl = createInterface({ input: child.stdout, terminal: false });
