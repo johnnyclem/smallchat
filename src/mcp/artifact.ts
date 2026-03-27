@@ -41,9 +41,12 @@ export interface SerializedArtifact {
         toolName: string;
         transportType: string;
         inputSchema?: Record<string, unknown>;
+        compilerHints?: Record<string, unknown>;
       }
     >
   >;
+  /** Provider-level compiler hints baked into this artifact */
+  providerHints?: Record<string, Record<string, unknown>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -187,12 +190,16 @@ export function buildArtifact(
   manifests: ProviderManifest[],
 ): SerializedArtifact {
   const schemaIndex = new Map<string, Record<string, unknown>>();
+  const hintIndex = new Map<string, Record<string, unknown>>();
   for (const manifest of manifests) {
     for (const tool of manifest.tools) {
       schemaIndex.set(
         tool.name,
         tool.inputSchema as unknown as Record<string, unknown>,
       );
+      if (tool.compilerHints) {
+        hintIndex.set(tool.name, tool.compilerHints as unknown as Record<string, unknown>);
+      }
     }
   }
 
@@ -215,6 +222,7 @@ export function buildArtifact(
         toolName: string;
         transportType: string;
         inputSchema?: Record<string, unknown>;
+        compilerHints?: Record<string, unknown>;
       }
     > = {};
     for (const [canonical, imp] of table) {
@@ -223,9 +231,18 @@ export function buildArtifact(
         toolName: imp.toolName,
         transportType: imp.transportType,
         inputSchema: schemaIndex.get(imp.toolName),
+        compilerHints: hintIndex.get(imp.toolName),
       };
     }
     dispatchTables[providerId] = methods;
+  }
+
+  // Collect provider-level hints
+  const providerHints: Record<string, Record<string, unknown>> = {};
+  for (const manifest of manifests) {
+    if (manifest.compilerHints) {
+      providerHints[manifest.id] = manifest.compilerHints as unknown as Record<string, unknown>;
+    }
   }
 
   return {
@@ -238,6 +255,7 @@ export function buildArtifact(
     },
     selectors,
     dispatchTables,
+    ...(Object.keys(providerHints).length > 0 ? { providerHints } : {}),
   };
 }
 

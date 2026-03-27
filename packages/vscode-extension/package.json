@@ -28,6 +28,10 @@
       {
         "fileMatch": ["*-manifest.json", "*.toolkit.json", "smallchat.config.json"],
         "url": "./schemas/manifest.schema.json"
+      },
+      {
+        "fileMatch": ["smallchat.json"],
+        "url": "./schemas/smallchat.schema.json"
       }
     ],
     "snippets": [

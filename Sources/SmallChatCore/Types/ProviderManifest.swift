@@ -5,6 +5,8 @@ public struct ProviderManifest: Sendable, Codable {
     public let transportType: TransportType
     public let endpoint: String?
     public let version: String?
+    /// Provider-level compiler hints — defaults for all tools in this manifest
+    public let compilerHints: ProviderCompilerHints?
     public let channel: ChannelInfo?
 
     public init(
@@ -14,6 +16,7 @@ public struct ProviderManifest: Sendable, Codable {
         transportType: TransportType,
         endpoint: String? = nil,
         version: String? = nil,
+        compilerHints: ProviderCompilerHints? = nil,
         channel: ChannelInfo? = nil
     ) {
         self.id = id
@@ -22,6 +25,7 @@ public struct ProviderManifest: Sendable, Codable {
         self.transportType = transportType
         self.endpoint = endpoint
         self.version = version
+        self.compilerHints = compilerHints
         self.channel = channel
     }
 

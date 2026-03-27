@@ -1,0 +1,47 @@
+{
+  "$schema": "https://smallchat.dev/schema/smallchat.json",
+  "name": "smallchat-examples",
+  "version": "0.1.0",
+  "description": "Example smallchat project demonstrating compiler hints and vendor dependencies",
+  "manifests": [
+    "./manifests"
+  ],
+  "dependencies": {},
+  "compiler": {
+    "embedder": "onnx",
+    "deduplicationThreshold": 0.95,
+    "collisionThreshold": 0.89,
+    "generateSemanticOverloads": true,
+    "semanticOverloadThreshold": 0.82
+  },
+  "output": {
+    "path": "tools.toolkit.json",
+    "format": "json"
+  },
+  "providerHints": {
+    "github": {
+      "namespace": "vcs.github",
+      "selectorHint": "GitHub source code management tools",
+      "priority": 1.1
+    },
+    "slack": {
+      "namespace": "comms.slack",
+      "selectorHint": "Slack team communication tools"
+    }
+  },
+  "toolHints": {
+    "github.search_code": {
+      "aliases": ["find code", "grep repository"],
+      "preferred": true,
+      "priority": 1.5
+    },
+    "slack.send_message": {
+      "aliases": ["post to channel", "chat message"],
+      "selectorHint": "Sends a message to a Slack channel, not a DM"
+    },
+    "filesystem.delete_file": {
+      "priority": 0.5,
+      "selectorHint": "Destructive operation — permanently removes a file from disk"
+    }
+  }
+}

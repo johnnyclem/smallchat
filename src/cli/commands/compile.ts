@@ -1,7 +1,8 @@
 import { Command } from 'commander';
 import { readFileSync, readdirSync, writeFileSync, statSync, existsSync, watch } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join, resolve, dirname } from 'node:path';
 import type { Embedder, VectorIndex, ProviderManifest } from '../../core/types.js';
+import type { SmallChatManifest } from '../../core/manifest.js';
 import { ToolCompiler } from '../../compiler/compiler.js';
 import { LocalEmbedder } from '../../embedding/local-embedder.js';
 import { MemoryVectorIndex } from '../../embedding/memory-vector-index.js';
@@ -144,6 +145,105 @@ function createVectorIndex(type: string, dbPath: string): VectorIndex {
 }
 
 // ---------------------------------------------------------------------------
+// smallchat.json loading
+// ---------------------------------------------------------------------------
+
+/**
+ * Attempt to find and load a smallchat.json manifest.
+ * Searches upward from the given directory.
+ */
+function findSmallChatManifest(startDir: string): { manifest: SmallChatManifest; path: string } | null {
+  let dir = startDir;
+  const root = resolve('/');
+
+  while (dir !== root) {
+    const candidate = join(dir, 'smallchat.json');
+    if (existsSync(candidate)) {
+      try {
+        const content = readFileSync(candidate, 'utf-8');
+        const manifest = JSON.parse(content) as SmallChatManifest;
+        // Basic validation — must have a name
+        if (manifest.name) {
+          return { manifest, path: candidate };
+        }
+      } catch {
+        // Invalid JSON, skip
+      }
+    }
+    dir = dirname(dir);
+  }
+  return null;
+}
+
+/**
+ * Resolve additional manifests declared in smallchat.json dependencies.
+ * Local file paths are resolved relative to the smallchat.json location.
+ */
+function resolvePackageDependencies(
+  manifest: SmallChatManifest,
+  manifestDir: string,
+): ProviderManifest[] {
+  const manifests: ProviderManifest[] = [];
+
+  // Resolve local manifest paths declared in "manifests" array
+  if (manifest.manifests) {
+    for (const p of manifest.manifests) {
+      const resolved = resolve(manifestDir, p);
+      if (existsSync(resolved)) {
+        if (statSync(resolved).isDirectory()) {
+          manifests.push(...loadManifestFiles(findManifestFiles(resolved)));
+        } else if (resolved.endsWith('.json')) {
+          try {
+            const content = readFileSync(resolved, 'utf-8');
+            const m = JSON.parse(content) as ProviderManifest;
+            if (Array.isArray(m.tools)) {
+              manifests.push(m);
+            }
+          } catch { /* skip invalid */ }
+        }
+      }
+    }
+  }
+
+  // Resolve local file dependencies (semver registry resolution is future work)
+  if (manifest.dependencies) {
+    for (const [_name, specifier] of Object.entries(manifest.dependencies)) {
+      // Local file paths start with ./ or ../
+      if (specifier.startsWith('./') || specifier.startsWith('../')) {
+        const resolved = resolve(manifestDir, specifier);
+        if (existsSync(resolved) && resolved.endsWith('.json')) {
+          try {
+            const content = readFileSync(resolved, 'utf-8');
+            const m = JSON.parse(content);
+            if (Array.isArray(m.tools)) {
+              manifests.push(m as ProviderManifest);
+            } else if (Array.isArray(m.providers)) {
+              // Pre-compiled package format — extract provider manifests
+              for (const provider of m.providers) {
+                if (Array.isArray(provider.tools)) {
+                  manifests.push({
+                    id: provider.id,
+                    name: provider.name,
+                    tools: provider.tools,
+                    transportType: provider.transportType ?? 'mcp',
+                    endpoint: provider.endpoint,
+                    version: provider.version,
+                    compilerHints: provider.compilerHints,
+                  } as ProviderManifest);
+                }
+              }
+            }
+          } catch { /* skip invalid */ }
+        }
+      }
+      // TODO: registry-based resolution for semver specifiers
+    }
+  }
+
+  return manifests;
+}
+
+// ---------------------------------------------------------------------------
 // Core compile
 // ---------------------------------------------------------------------------
 
@@ -156,6 +256,7 @@ async function runCompile(
   dbPath: string,
   sourceType?: SourceType,
   format: OutputFormat = 'json',
+  projectManifest?: SmallChatManifest,
 ): Promise<boolean> {
   if (manifests.length === 0) {
     console.error('No valid manifests found.');
@@ -176,7 +277,7 @@ async function runCompile(
   console.log(`\nEmbedding ${manifests.reduce((sum, m) => sum + m.tools.length, 0)} tools...`);
   console.log(`  Model: ${modelLabel}`);
 
-  const result = await compiler.compile(manifests);
+  const result = await compiler.compile(manifests, projectManifest);
 
   console.log(`  Selectors generated: ${result.toolCount}`);
   console.log(`  After dedup (threshold 0.95): ${result.uniqueSelectorCount} unique selectors`);
@@ -252,14 +353,49 @@ export const compileCommand = new Command('compile')
   .option('--timeout <ms>', 'Timeout for MCP server introspection (ms)', '30000')
   .action(async (options) => {
     const source = detectSourceType(options.source);
+    const timeoutMs = parseInt(options.timeout, 10);
+
+    // Look for smallchat.json project manifest
+    const projectResult = findSmallChatManifest(process.cwd());
+    let projectManifest: SmallChatManifest | undefined;
+
+    if (projectResult) {
+      projectManifest = projectResult.manifest;
+      const manifestDir = dirname(projectResult.path);
+      console.log(`Found smallchat.json: ${projectResult.path}`);
+
+      if (projectManifest.compiler?.embedder && !options.embedder) {
+        options.embedder = projectManifest.compiler.embedder;
+      }
+      if (projectManifest.output?.path && options.output === 'tools.toolkit.json') {
+        options.output = resolve(manifestDir, projectManifest.output.path);
+      }
+      if (projectManifest.output?.format && options.format === 'json') {
+        options.format = projectManifest.output.format;
+      }
+      if (projectManifest.output?.dbPath && options.dbPath === 'smallchat.db') {
+        options.dbPath = resolve(manifestDir, projectManifest.output.dbPath);
+      }
+    }
+
     const outputPath = resolve(options.output);
     const embedderType = options.embedder;
     const dbPath = resolve(options.dbPath);
-    const timeoutMs = parseInt(options.timeout, 10);
     const format = (options.format === 'sqlite' ? 'sqlite' : 'json') as OutputFormat;
 
-    const manifests = await resolveManifests(source, { timeoutMs });
-    const ok = await runCompile(manifests, outputPath, embedderType, dbPath, source.type, format);
+    // Resolve manifests from source + smallchat.json dependencies
+    let manifests = await resolveManifests(source, { timeoutMs });
+
+    if (projectResult && projectManifest) {
+      const manifestDir = dirname(projectResult.path);
+      const depManifests = resolvePackageDependencies(projectManifest, manifestDir);
+      if (depManifests.length > 0) {
+        console.log(`\nResolved ${depManifests.length} manifest(s) from smallchat.json dependencies`);
+        manifests = [...manifests, ...depManifests];
+      }
+    }
+
+    const ok = await runCompile(manifests, outputPath, embedderType, dbPath, source.type, format, projectManifest);
 
     if (!options.watch) {
       if (!ok) process.exit(1);
@@ -281,8 +417,12 @@ export const compileCommand = new Command('compile')
       if (debounceTimer) clearTimeout(debounceTimer);
       debounceTimer = setTimeout(async () => {
         console.log(`\n--- Recompiling (${filename} changed) ---\n`);
-        const newManifests = await resolveManifests(source, { timeoutMs });
-        await runCompile(newManifests, outputPath, embedderType, dbPath, source.type, format);
+        let newManifests = await resolveManifests(source, { timeoutMs });
+        if (projectResult && projectManifest) {
+          const manifestDir = dirname(projectResult.path);
+          newManifests = [...newManifests, ...resolvePackageDependencies(projectManifest, manifestDir)];
+        }
+        await runCompile(newManifests, outputPath, embedderType, dbPath, source.type, format, projectManifest);
         console.log(`\nWatching ${watchPath} for changes...`);
       }, 200);
     });
@@ -325,6 +465,22 @@ function serializeResult(
     };
   }
 
+  // Build hint indexes from manifests
+  const toolHintIndex = new Map<string, Record<string, unknown>>();
+  const providerHints: Record<string, object> = {};
+  if (manifests) {
+    for (const m of manifests) {
+      if (m.compilerHints) {
+        providerHints[m.id] = m.compilerHints;
+      }
+      for (const tool of m.tools) {
+        if (tool.compilerHints) {
+          toolHintIndex.set(tool.name, tool.compilerHints as unknown as Record<string, unknown>);
+        }
+      }
+    }
+  }
+
   const dispatchTables: Record<string, Record<string, object>> = {};
   for (const [providerId, table] of result.dispatchTables) {
     const methods: Record<string, object> = {};
@@ -333,6 +489,7 @@ function serializeResult(
         providerId: imp.providerId,
         toolName: imp.toolName,
         transportType: imp.transportType,
+        ...(toolHintIndex.has(imp.toolName) ? { compilerHints: toolHintIndex.get(imp.toolName) } : {}),
       };
     }
     dispatchTables[providerId] = methods;
@@ -374,6 +531,7 @@ function serializeResult(
     dispatchTables,
     collisions: result.collisions,
     ...(Object.keys(channels).length > 0 ? { channels } : {}),
+    ...(Object.keys(providerHints).length > 0 ? { providerHints } : {}),
   };
 }
 

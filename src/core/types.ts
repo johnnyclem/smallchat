@@ -245,6 +245,98 @@ export type DispatchEvent =
   | DispatchEventError;
 
 // ---------------------------------------------------------------------------
+// Compiler hints — vendor-supplied directives that steer semantic mapping
+// ---------------------------------------------------------------------------
+
+/**
+ * CompilerHint — an optional directive attached to a tool or provider that
+ * influences how the compiler maps it into the selector table.
+ *
+ * Analogous to `__attribute__((objc_direct))` or `NS_SWIFT_NAME()` — metadata
+ * that doesn't change what a tool *does*, but steers how it's compiled.
+ */
+export interface CompilerHint {
+  /**
+   * Additional semantic text appended to the tool description during embedding.
+   * Use this to steer the vector into a different region of the semantic space.
+   * e.g. "This tool is for file I/O, not network requests."
+   */
+  selectorHint?: string;
+
+  /**
+   * Pin this tool to a specific canonical selector, bypassing vector-based
+   * interning entirely. The tool will be registered under this exact selector.
+   * e.g. "files.read_file" — forces the canonical regardless of embedding.
+   */
+  pinSelector?: string;
+
+  /**
+   * Semantic aliases — additional intent phrases that should resolve to this tool.
+   * Each alias is embedded and interned as an additional selector pointing to
+   * the same IMP, expanding the tool's "catch surface" in the vector space.
+   * e.g. ["download file", "fetch document", "get blob"]
+   */
+  aliases?: string[];
+
+  /**
+   * Priority multiplier for dispatch ranking (default 1.0).
+   * Values > 1.0 boost this tool in ambiguous resolutions.
+   * Values < 1.0 demote it (useful for deprecated tools).
+   * e.g. 1.5 makes this tool 50% more likely to win ties.
+   */
+  priority?: number;
+
+  /**
+   * Mark this tool as the preferred resolution when multiple tools collide
+   * within the collision threshold. Only one tool per collision group should
+   * set this to true — the compiler warns if multiple do.
+   */
+  preferred?: boolean;
+
+  /**
+   * Exclude this tool from compilation entirely. Useful for vendors who ship
+   * tools that are platform-specific or require opt-in activation.
+   */
+  exclude?: boolean;
+
+  /**
+   * Vendor-defined opaque metadata — passed through to the artifact unchanged.
+   * Vendors can store build config, feature flags, or registry metadata here.
+   */
+  vendorMeta?: Record<string, unknown>;
+}
+
+/**
+ * ProviderCompilerHints — hints applied at the provider (MCP server) level.
+ * These act as defaults for all tools in the manifest and can be overridden
+ * per-tool.
+ */
+export interface ProviderCompilerHints {
+  /**
+   * Default priority multiplier for all tools from this provider.
+   */
+  priority?: number;
+
+  /**
+   * Namespace prefix prepended to all selector canonicals from this provider.
+   * e.g. "vendor.github" → selectors become "vendor.github.search_code"
+   */
+  namespace?: string;
+
+  /**
+   * Semantic context appended to ALL tool descriptions from this provider
+   * during embedding. Useful for disambiguating providers that overlap.
+   * e.g. "All tools in this set operate on the GitHub REST API v4."
+   */
+  selectorHint?: string;
+
+  /**
+   * Vendor-defined opaque metadata — passed through to the artifact unchanged.
+   */
+  vendorMeta?: Record<string, unknown>;
+}
+
+// ---------------------------------------------------------------------------
 // Compiler types
 // ---------------------------------------------------------------------------
 
@@ -254,6 +346,8 @@ export interface ToolDefinition {
   inputSchema: JSONSchemaType;
   providerId: string;
   transportType: TransportType;
+  /** Optional compiler hints that steer semantic mapping for this tool */
+  compilerHints?: CompilerHint;
 }
 
 export interface ProviderManifest {
@@ -264,6 +358,8 @@ export interface ProviderManifest {
   endpoint?: string;
   /** Opaque version string — cache entries tagged with this expire on change */
   version?: string;
+  /** Provider-level compiler hints — defaults for all tools in this manifest */
+  compilerHints?: ProviderCompilerHints;
   /** Channel metadata — present when this provider is a Claude Code channel */
   channel?: {
     /** Whether this provider is a channel */

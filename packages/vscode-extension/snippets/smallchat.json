@@ -46,5 +46,47 @@
       "}"
     ],
     "description": "Create a smallchat configuration file"
+  },
+  "Compiler Hint": {
+    "prefix": "sc-hint",
+    "body": [
+      "\"compilerHints\": {",
+      "  \"selectorHint\": \"${1:Additional semantic context for embedding}\",",
+      "  \"aliases\": [\"${2:alternative intent phrase}\"],",
+      "  \"priority\": ${3:1.0}",
+      "}"
+    ],
+    "description": "Add compiler hints to a tool definition"
+  },
+  "Provider Compiler Hints": {
+    "prefix": "sc-provider-hints",
+    "body": [
+      "\"compilerHints\": {",
+      "  \"namespace\": \"${1:vendor.provider}\",",
+      "  \"selectorHint\": \"${2:Context for all tools in this provider}\",",
+      "  \"priority\": ${3:1.0}",
+      "}"
+    ],
+    "description": "Add provider-level compiler hints to a manifest"
+  },
+  "smallchat.json": {
+    "prefix": "sc-project",
+    "body": [
+      "{",
+      "  \"name\": \"${1:my-project}\",",
+      "  \"version\": \"${2:0.1.0}\",",
+      "  \"description\": \"${3:A smallchat project}\",",
+      "  \"manifests\": [\"${4:./manifests}\"],",
+      "  \"compiler\": {",
+      "    \"embedder\": \"${5|onnx,local|}\",",
+      "    \"deduplicationThreshold\": 0.95",
+      "  },",
+      "  \"output\": {",
+      "    \"path\": \"${6:tools.toolkit.json}\",",
+      "    \"format\": \"${7|json,sqlite|}\"",
+      "  }",
+      "}"
+    ],
+    "description": "Create a smallchat.json project manifest"
   }
 }

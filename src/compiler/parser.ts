@@ -1,4 +1,12 @@
-import type { ArgumentSpec, JSONSchemaType, ProviderManifest, ToolDefinition, TransportType } from '../core/types.js';
+import type {
+  ArgumentSpec,
+  CompilerHint,
+  JSONSchemaType,
+  ProviderManifest,
+  ProviderCompilerHints,
+  ToolDefinition,
+  TransportType,
+} from '../core/types.js';
 
 /**
  * Parser — Phase 1 of the compilation pipeline.
@@ -14,17 +22,89 @@ export interface ParsedTool {
   description: string;
   arguments: ArgumentSpec[];
   transportType: TransportType;
+  /** Resolved compiler hints (merged from provider defaults + tool overrides) */
+  compilerHints?: CompilerHint;
+  /** Provider-level hints (carried for reference during compilation) */
+  providerHints?: ProviderCompilerHints;
 }
 
 /** Parse an MCP-style manifest into ToolKit IR */
 export function parseMCPManifest(manifest: ProviderManifest): ParsedTool[] {
-  return manifest.tools.map(tool => ({
-    providerId: manifest.id,
-    name: tool.name,
-    description: tool.description,
-    arguments: extractArguments(tool.inputSchema),
-    transportType: manifest.transportType,
-  }));
+  return manifest.tools.map(tool => {
+    // Merge provider-level hints with tool-level hints (tool wins on conflict)
+    const mergedHints = mergeCompilerHints(
+      manifest.compilerHints,
+      tool.compilerHints,
+    );
+
+    return {
+      providerId: manifest.id,
+      name: tool.name,
+      description: tool.description,
+      arguments: extractArguments(tool.inputSchema),
+      transportType: manifest.transportType,
+      compilerHints: mergedHints,
+      providerHints: manifest.compilerHints,
+    };
+  });
+}
+
+/**
+ * Merge provider-level compiler hints with tool-level overrides.
+ * Tool-level values take precedence over provider-level defaults.
+ */
+export function mergeCompilerHints(
+  providerHints?: ProviderCompilerHints,
+  toolHints?: CompilerHint,
+): CompilerHint | undefined {
+  if (!providerHints && !toolHints) return undefined;
+  if (!providerHints) return toolHints;
+  if (!toolHints) {
+    // Promote relevant provider hints into a tool-level hint
+    return {
+      selectorHint: providerHints.selectorHint,
+      priority: providerHints.priority,
+    };
+  }
+
+  // Tool-level wins, but inherit unset fields from provider
+  return {
+    selectorHint: toolHints.selectorHint ?? providerHints.selectorHint,
+    pinSelector: toolHints.pinSelector,
+    aliases: toolHints.aliases,
+    priority: toolHints.priority ?? providerHints.priority,
+    preferred: toolHints.preferred,
+    exclude: toolHints.exclude,
+    vendorMeta: toolHints.vendorMeta,
+  };
+}
+
+/**
+ * Apply project-level hint overrides from smallchat.json onto parsed tools.
+ * Called after initial parsing but before compilation.
+ */
+export function applyManifestOverrides(
+  tools: ParsedTool[],
+  providerHints?: Record<string, ProviderCompilerHints>,
+  toolHints?: Record<string, CompilerHint>,
+): ParsedTool[] {
+  if (!providerHints && !toolHints) return tools;
+
+  return tools.map(tool => {
+    const providerOverride = providerHints?.[tool.providerId];
+    const toolKey = `${tool.providerId}.${tool.name}`;
+    const toolOverride = toolHints?.[toolKey];
+
+    if (!providerOverride && !toolOverride) return tool;
+
+    // Re-merge: existing hints + provider override + tool override
+    const baseHints = mergeCompilerHints(providerOverride, tool.compilerHints);
+    const finalHints = toolOverride
+      ? mergeCompilerHints(undefined, { ...baseHints, ...toolOverride })
+      : baseHints;
+
+    return { ...tool, compilerHints: finalHints };
+  });
 }
 
 /** Parse an OpenAPI spec into ToolKit IR */

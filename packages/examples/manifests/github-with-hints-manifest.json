@@ -1,0 +1,90 @@
+{
+  "id": "github",
+  "name": "GitHub",
+  "transportType": "mcp",
+  "compilerHints": {
+    "namespace": "vcs.github",
+    "selectorHint": "All tools operate on the GitHub REST/GraphQL API for source code management",
+    "priority": 1.1
+  },
+  "tools": [
+    {
+      "name": "search_code",
+      "description": "Search for code across GitHub repositories",
+      "providerId": "github",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string", "description": "Search query" },
+          "language": { "type": "string", "description": "Programming language filter" },
+          "repo": { "type": "string", "description": "Repository to search in" }
+        },
+        "required": ["query"]
+      },
+      "compilerHints": {
+        "aliases": ["find code", "grep repository", "code search"],
+        "preferred": true,
+        "selectorHint": "Searches source code content, not issues or pull requests"
+      }
+    },
+    {
+      "name": "create_issue",
+      "description": "Create a new issue in a GitHub repository",
+      "providerId": "github",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "title": { "type": "string", "description": "Issue title" },
+          "body": { "type": "string", "description": "Issue body in markdown" },
+          "repo": { "type": "string", "description": "Repository (owner/name)" },
+          "labels": { "type": "string", "description": "Comma-separated labels" }
+        },
+        "required": ["title", "repo"]
+      },
+      "compilerHints": {
+        "aliases": ["file bug report", "open ticket", "report issue"],
+        "priority": 1.0
+      }
+    },
+    {
+      "name": "list_pull_requests",
+      "description": "List pull requests for a repository",
+      "providerId": "github",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "repo": { "type": "string", "description": "Repository (owner/name)" },
+          "state": { "type": "string", "description": "Filter by state: open, closed, all", "enum": ["open", "closed", "all"] },
+          "sort": { "type": "string", "description": "Sort by: created, updated, popularity", "enum": ["created", "updated", "popularity"] }
+        },
+        "required": ["repo"]
+      },
+      "compilerHints": {
+        "aliases": ["show PRs", "get merge requests", "pending reviews"]
+      }
+    },
+    {
+      "name": "legacy_v3_search",
+      "description": "Search using the deprecated GitHub v3 API",
+      "providerId": "github",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string" }
+        },
+        "required": ["query"]
+      },
+      "compilerHints": {
+        "exclude": true,
+        "vendorMeta": {
+          "deprecatedSince": "2024-01-01",
+          "replacedBy": "search_code"
+        }
+      }
+    }
+  ]
+}
