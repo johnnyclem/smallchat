@@ -1,0 +1,102 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "smallchat.json",
+  "description": "Project manifest for smallchat — analogous to package.json for Node.js",
+  "type": "object",
+  "required": ["name", "version"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Project name"
+    },
+    "version": {
+      "type": "string",
+      "description": "Project version (semver)",
+      "pattern": "^\\d+\\.\\d+\\.\\d+(-[a-zA-Z0-9.]+)?(\\+[a-zA-Z0-9.]+)?$"
+    },
+    "description": {
+      "type": "string",
+      "description": "Human-readable project description"
+    },
+    "dependencies": {
+      "type": "object",
+      "description": "Pre-compiled vendor tool packages. Keys are package names, values are semver ranges or local file paths.",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "manifests": {
+      "type": "array",
+      "description": "Local manifest directories or files to include in compilation",
+      "items": {
+        "type": "string"
+      }
+    },
+    "compiler": {
+      "type": "object",
+      "description": "Compiler configuration",
+      "properties": {
+        "embedder": {
+          "type": "string",
+          "enum": ["onnx", "local"],
+          "description": "Embedder type"
+        },
+        "deduplicationThreshold": {
+          "type": "number",
+          "description": "Deduplication threshold (0–1, default 0.95)",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "collisionThreshold": {
+          "type": "number",
+          "description": "Collision warning threshold (0–1, default 0.89)",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "generateSemanticOverloads": {
+          "type": "boolean",
+          "description": "Enable semantic overload generation"
+        },
+        "semanticOverloadThreshold": {
+          "type": "number",
+          "description": "Semantic overload grouping threshold (0–1, default 0.82)",
+          "minimum": 0,
+          "maximum": 1
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "description": "Output configuration",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Output file path (relative to smallchat.json)"
+        },
+        "format": {
+          "type": "string",
+          "enum": ["json", "sqlite"],
+          "description": "Output format"
+        },
+        "dbPath": {
+          "type": "string",
+          "description": "SQLite database path (when format is sqlite)"
+        }
+      }
+    },
+    "providerHints": {
+      "type": "object",
+      "description": "Provider-level compiler hint overrides, keyed by provider ID",
+      "additionalProperties": {
+        "$ref": "manifest.schema.json#/definitions/providerCompilerHints"
+      }
+    },
+    "toolHints": {
+      "type": "object",
+      "description": "Tool-level compiler hint overrides, keyed by 'providerId.toolName'",
+      "additionalProperties": {
+        "$ref": "manifest.schema.json#/definitions/compilerHint"
+      }
+    }
+  }
+}

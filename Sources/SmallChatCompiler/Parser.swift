@@ -8,6 +8,10 @@ public struct ParsedTool: Sendable {
     public let providerId: String
     public let transportType: TransportType
     public let arguments: [ArgumentSpec]
+    /// Resolved compiler hints (merged from provider defaults + tool overrides)
+    public let compilerHints: CompilerHint?
+    /// Provider-level hints (carried for reference during compilation)
+    public let providerHints: ProviderCompilerHints?
 
     public init(
         name: String,
@@ -15,7 +19,9 @@ public struct ParsedTool: Sendable {
         inputSchema: JSONSchemaType,
         providerId: String,
         transportType: TransportType,
-        arguments: [ArgumentSpec]
+        arguments: [ArgumentSpec],
+        compilerHints: CompilerHint? = nil,
+        providerHints: ProviderCompilerHints? = nil
     ) {
         self.name = name
         self.description = description
@@ -23,7 +29,36 @@ public struct ParsedTool: Sendable {
         self.providerId = providerId
         self.transportType = transportType
         self.arguments = arguments
+        self.compilerHints = compilerHints
+        self.providerHints = providerHints
     }
+}
+
+/// Merge provider-level compiler hints with tool-level overrides.
+/// Tool-level values take precedence over provider-level defaults.
+public func mergeCompilerHints(
+    provider: ProviderCompilerHints?,
+    tool: CompilerHint?
+) -> CompilerHint? {
+    guard provider != nil || tool != nil else { return nil }
+
+    guard let provider = provider else { return tool }
+    guard let tool = tool else {
+        return CompilerHint(
+            selectorHint: provider.selectorHint,
+            priority: provider.priority
+        )
+    }
+
+    return CompilerHint(
+        selectorHint: tool.selectorHint ?? provider.selectorHint,
+        pinSelector: tool.pinSelector,
+        aliases: tool.aliases,
+        priority: tool.priority ?? provider.priority,
+        preferred: tool.preferred,
+        exclude: tool.exclude,
+        vendorMeta: tool.vendorMeta
+    )
 }
 
 /// Parse an MCP-format provider manifest into individual tool definitions
@@ -45,13 +80,20 @@ public func parseMCPManifest(_ manifest: ProviderManifest) -> [ParsedTool] {
             }
         }
 
+        let mergedHints = mergeCompilerHints(
+            provider: manifest.compilerHints,
+            tool: tool.compilerHints
+        )
+
         return ParsedTool(
             name: tool.name,
             description: tool.description,
             inputSchema: tool.inputSchema,
             providerId: manifest.id,
             transportType: manifest.transportType,
-            arguments: arguments
+            arguments: arguments,
+            compilerHints: mergedHints,
+            providerHints: manifest.compilerHints
         )
     }
 }

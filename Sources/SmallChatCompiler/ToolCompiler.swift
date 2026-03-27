@@ -21,7 +21,14 @@ public struct ToolCompiler: Sendable {
             allTools.append(contentsOf: parseMCPManifest(manifest))
         }
 
+        // Filter out tools marked as excluded via compiler hints
+        allTools = allTools.filter { $0.compilerHints?.exclude != true }
+
         // Phase 2: EMBED
+        // Compiler hints steer this phase:
+        //   - selectorHint: appended to embedding text
+        //   - pinSelector: bypasses vector interning entirely
+        //   - aliases: additional selectors pointing to the same IMP
         let selectorTable = SelectorTable(
             index: vectorIndex,
             embedder: embedder,
@@ -29,13 +36,22 @@ public struct ToolCompiler: Sendable {
         )
         var toolSelectors: [Int: ToolSelector] = [:]
         var toolEmbeddings: [Int: [Float]] = [:]
+        var aliasSelectors: [Int: [ToolSelector]] = [:]
         var mergedCount = 0
 
         for (i, tool) in allTools.enumerated() {
-            let text = "\(tool.name): \(tool.description)"
-            let embedding = try await embedder.embed(text)
-            let canonical = "\(tool.providerId).\(tool.name)"
+            // Build embedding text — selectorHint steers the vector
+            var embeddingText = "\(tool.name): \(tool.description)"
+            if let hint = tool.compilerHints?.selectorHint {
+                embeddingText += " \(hint)"
+            }
 
+            // Determine canonical — pinSelector overrides the default
+            let namespace = tool.providerHints?.namespace
+            let defaultCanonical = namespace.map { "\($0).\(tool.name)" } ?? "\(tool.providerId).\(tool.name)"
+            let canonical = tool.compilerHints?.pinSelector ?? defaultCanonical
+
+            let embedding = try await embedder.embed(embeddingText)
             toolEmbeddings[i] = embedding
             let sizeBefore = await selectorTable.size
             let selector = try await selectorTable.intern(embedding: embedding, canonical: canonical)
@@ -43,6 +59,18 @@ public struct ToolCompiler: Sendable {
 
             if sizeAfter == sizeBefore { mergedCount += 1 }
             toolSelectors[i] = selector
+
+            // Process aliases
+            if let aliases = tool.compilerHints?.aliases, !aliases.isEmpty {
+                var aliasSels: [ToolSelector] = []
+                for alias in aliases {
+                    let aliasEmbedding = try await embedder.embed(alias)
+                    let aliasCanonical = "\(canonical)~alias~\(alias.replacingOccurrences(of: " ", with: "_"))"
+                    let aliasSel = try await selectorTable.intern(embedding: aliasEmbedding, canonical: aliasCanonical)
+                    aliasSels.append(aliasSel)
+                }
+                aliasSelectors[i] = aliasSels
+            }
         }
 
         // Phase 2.5: SEMANTIC OVERLOAD GENERATION (optional)
@@ -110,6 +138,13 @@ public struct ToolCompiler: Sendable {
                 guard let selector = toolSelectors[i] else { continue }
                 let imp = createIMP(tool)
                 table[selector.canonical] = imp
+
+                // Wire alias selectors to the same IMP
+                if let aliases = aliasSelectors[i] {
+                    for aliasSel in aliases {
+                        table[aliasSel.canonical] = imp
+                    }
+                }
             }
             dispatchTables[providerId] = table
         }

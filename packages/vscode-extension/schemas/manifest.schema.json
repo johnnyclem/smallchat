@@ -4,6 +4,67 @@
   "description": "Schema for smallchat provider manifest files",
   "type": "object",
   "required": ["id", "name", "tools", "transportType"],
+  "definitions": {
+    "compilerHint": {
+      "type": "object",
+      "description": "Compiler hint — steers how a tool is mapped into the selector table",
+      "properties": {
+        "selectorHint": {
+          "type": "string",
+          "description": "Additional semantic text appended to the tool description during embedding"
+        },
+        "pinSelector": {
+          "type": "string",
+          "description": "Pin this tool to a specific canonical selector, bypassing vector-based interning"
+        },
+        "aliases": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Semantic aliases — additional intent phrases that should resolve to this tool"
+        },
+        "priority": {
+          "type": "number",
+          "description": "Priority multiplier for dispatch ranking (default 1.0)",
+          "minimum": 0
+        },
+        "preferred": {
+          "type": "boolean",
+          "description": "Mark as preferred resolution when multiple tools collide"
+        },
+        "exclude": {
+          "type": "boolean",
+          "description": "Exclude this tool from compilation entirely"
+        },
+        "vendorMeta": {
+          "type": "object",
+          "description": "Vendor-defined opaque metadata"
+        }
+      }
+    },
+    "providerCompilerHints": {
+      "type": "object",
+      "description": "Provider-level compiler hints — defaults for all tools in this manifest",
+      "properties": {
+        "priority": {
+          "type": "number",
+          "description": "Default priority multiplier for all tools from this provider",
+          "minimum": 0
+        },
+        "namespace": {
+          "type": "string",
+          "description": "Namespace prefix prepended to all selector canonicals"
+        },
+        "selectorHint": {
+          "type": "string",
+          "description": "Semantic context appended to all tool descriptions during embedding"
+        },
+        "vendorMeta": {
+          "type": "object",
+          "description": "Vendor-defined opaque metadata"
+        }
+      }
+    }
+  },
   "properties": {
     "id": {
       "type": "string",
@@ -25,6 +86,9 @@
     "endpoint": {
       "type": "string",
       "description": "Endpoint URL for remote transports"
+    },
+    "compilerHints": {
+      "$ref": "#/definitions/providerCompilerHints"
     },
     "tools": {
       "type": "array",
@@ -60,6 +124,9 @@
                 "items": { "type": "string" }
               }
             }
+          },
+          "compilerHints": {
+            "$ref": "#/definitions/compilerHint"
           }
         }
       }

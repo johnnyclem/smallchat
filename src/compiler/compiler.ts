@@ -1,6 +1,7 @@
 import type {
   ArgumentConstraints,
   CompilationResult,
+  CompilerHint,
   Embedder,
   OverloadEntryData,
   OverloadTableData,
@@ -19,7 +20,8 @@ import { ToolClass, ToolProxy } from '../core/tool-class.js';
 import { OverloadTable } from '../core/overload-table.js';
 import { createSignature, param, SCType } from '../core/sc-types.js';
 import type { SCTypeDescriptor, SCParameterSlot } from '../core/sc-types.js';
-import { parseMCPManifest, type ParsedTool } from './parser.js';
+import { parseMCPManifest, applyManifestOverrides, type ParsedTool } from './parser.js';
+import type { SmallChatManifest } from '../core/manifest.js';
 
 /**
  * ToolCompiler — the build-time tool that produces dispatch tables,
@@ -56,34 +58,105 @@ export class ToolCompiler {
 
   /**
    * Compile tool definitions from provider manifests into a compiled artifact.
+   *
+   * @param manifests - Provider manifests to compile
+   * @param projectManifest - Optional smallchat.json project manifest with overrides
    */
-  async compile(manifests: ProviderManifest[]): Promise<CompilationResult> {
+  async compile(
+    manifests: ProviderManifest[],
+    projectManifest?: SmallChatManifest,
+  ): Promise<CompilationResult> {
     // Phase 1: PARSE
-    const allTools: ParsedTool[] = [];
+    let allTools: ParsedTool[] = [];
     for (const manifest of manifests) {
       allTools.push(...parseMCPManifest(manifest));
     }
 
+    // Apply project-level hint overrides from smallchat.json
+    if (projectManifest) {
+      allTools = applyManifestOverrides(
+        allTools,
+        projectManifest.providerHints,
+        projectManifest.toolHints,
+      );
+    }
+
+    // Filter out tools marked as excluded via compiler hints
+    const excludedTools = allTools.filter(t => t.compilerHints?.exclude);
+    allTools = allTools.filter(t => !t.compilerHints?.exclude);
+
+    if (excludedTools.length > 0) {
+      for (const t of excludedTools) {
+        console.log(`  Excluded (compiler hint): ${t.providerId}.${t.name}`);
+      }
+    }
+
     // Phase 2: EMBED — generate embeddings and intern selectors
+    // Compiler hints can steer this phase:
+    //   - selectorHint: appended to embedding text
+    //   - pinSelector: bypasses vector interning entirely
+    //   - aliases: additional selectors pointing to the same IMP
     const toolSelectors: Map<ParsedTool, ToolSelector> = new Map();
     const toolEmbeddings: Map<ParsedTool, Float32Array> = new Map();
+    const aliasSelectors: Map<ParsedTool, ToolSelector[]> = new Map();
     let mergedCount = 0;
     const selectorsBefore = this.selectorTable.size;
 
+    // Warn if multiple tools in the same collision group claim "preferred"
+    const preferredByProvider: Map<string, string[]> = new Map();
+
     for (const tool of allTools) {
-      const text = `${tool.name}: ${tool.description}`;
-      const embedding = await this.embedder.embed(text);
-      const canonical = `${tool.providerId}.${tool.name}`;
+      const hints = tool.compilerHints;
 
+      // Build embedding text — selectorHint steers the vector
+      let embeddingText = `${tool.name}: ${tool.description}`;
+      if (hints?.selectorHint) {
+        embeddingText += ` ${hints.selectorHint}`;
+      }
+
+      // Determine canonical — pinSelector overrides the default
+      const namespace = tool.providerHints?.namespace;
+      const defaultCanonical = namespace
+        ? `${namespace}.${tool.name}`
+        : `${tool.providerId}.${tool.name}`;
+      const canonical = hints?.pinSelector ?? defaultCanonical;
+
+      const embedding = await this.embedder.embed(embeddingText);
       toolEmbeddings.set(tool, embedding);
-      const selector = await this.selectorTable.intern(embedding, canonical);
 
-      // If the selector already existed, this tool was merged (deduplicated)
+      let selector: ToolSelector;
+      if (hints?.pinSelector) {
+        // Pinned: register with the embedding but force the canonical name
+        selector = await this.selectorTable.intern(embedding, hints.pinSelector);
+      } else {
+        selector = await this.selectorTable.intern(embedding, canonical);
+      }
+
+      // Track merged (deduplicated) tools
       if (this.selectorTable.size === selectorsBefore + toolSelectors.size) {
         mergedCount++;
       }
 
       toolSelectors.set(tool, selector);
+
+      // Track preferred hints for collision warning
+      if (hints?.preferred) {
+        const existing = preferredByProvider.get(tool.providerId) ?? [];
+        existing.push(tool.name);
+        preferredByProvider.set(tool.providerId, existing);
+      }
+
+      // Process aliases — each alias gets its own selector pointing to the same tool
+      if (hints?.aliases && hints.aliases.length > 0) {
+        const aliases: ToolSelector[] = [];
+        for (const alias of hints.aliases) {
+          const aliasEmbedding = await this.embedder.embed(alias);
+          const aliasCanonical = `${canonical}~alias~${alias.replace(/\s+/g, '_')}`;
+          const aliasSel = await this.selectorTable.intern(aliasEmbedding, aliasCanonical);
+          aliases.push(aliasSel);
+        }
+        aliasSelectors.set(tool, aliases);
+      }
     }
 
     // Phase 2.5: SEMANTIC OVERLOAD GENERATION (optional compiler pass)
@@ -149,32 +222,63 @@ export class ToolCompiler {
         const selector = toolSelectors.get(tool)!;
         const imp = this.createIMP(tool);
         table.set(selector.canonical, imp);
+
+        // Wire alias selectors to the same IMP
+        const aliases = aliasSelectors.get(tool);
+        if (aliases) {
+          for (const aliasSel of aliases) {
+            table.set(aliasSel.canonical, imp);
+          }
+        }
       }
 
       dispatchTables.set(providerId, table);
     }
 
-    // Detect selector collisions (skip pairs that are now overloaded)
+    // Detect selector collisions (skip pairs that are now overloaded or aliased)
     const overloadedCanonicals = new Set(overloadTables.keys());
+    const aliasCanonicals = new Set<string>();
+    for (const aliases of aliasSelectors.values()) {
+      for (const a of aliases) aliasCanonicals.add(a.canonical);
+    }
+
     const allSelectors = this.selectorTable.all();
     for (let i = 0; i < allSelectors.length; i++) {
       for (let j = i + 1; j < allSelectors.length; j++) {
         const a = allSelectors[i];
         const b = allSelectors[j];
 
-        // Skip collisions between overloaded selectors
+        // Skip collisions between overloaded or alias selectors
         if (overloadedCanonicals.has(a.canonical) || overloadedCanonicals.has(b.canonical)) {
+          continue;
+        }
+        if (aliasCanonicals.has(a.canonical) || aliasCanonicals.has(b.canonical)) {
           continue;
         }
 
         const similarity = cosineSim(a.vector, b.vector);
 
         if (similarity > this.collisionThreshold && similarity < 0.95) {
+          // Check if one of the colliding tools is marked "preferred"
+          const aPreferred = this.isPreferredTool(a.canonical, allTools, toolSelectors);
+          const bPreferred = this.isPreferredTool(b.canonical, allTools, toolSelectors);
+
+          let hint: string;
+          if (aPreferred && bPreferred) {
+            hint = `Warning: both "${a.canonical}" and "${b.canonical}" are marked preferred — only one should be.`;
+          } else if (aPreferred) {
+            hint = `"${a.canonical}" is preferred (compiler hint) over "${b.canonical}" (${(similarity * 100).toFixed(1)}% similar).`;
+          } else if (bPreferred) {
+            hint = `"${b.canonical}" is preferred (compiler hint) over "${a.canonical}" (${(similarity * 100).toFixed(1)}% similar).`;
+          } else {
+            hint = `Disambiguation needed: "${a.canonical}" and "${b.canonical}" are similar (${(similarity * 100).toFixed(1)}%).`;
+          }
+
           collisions.push({
             selectorA: a.canonical,
             selectorB: b.canonical,
             similarity,
-            hint: `Disambiguation needed: "${a.canonical}" and "${b.canonical}" are similar (${(similarity * 100).toFixed(1)}%).`,
+            hint,
           });
         }
       }
@@ -213,6 +317,21 @@ export class ToolCompiler {
     }
 
     return classes;
+  }
+
+  /** Check if a tool is marked as preferred via its compiler hint */
+  private isPreferredTool(
+    canonical: string,
+    tools: ParsedTool[],
+    selectorMap: Map<ParsedTool, ToolSelector>,
+  ): boolean {
+    for (const tool of tools) {
+      const sel = selectorMap.get(tool);
+      if (sel?.canonical === canonical && tool.compilerHints?.preferred) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /** Create a ToolIMP (as a ToolProxy) from a parsed tool */

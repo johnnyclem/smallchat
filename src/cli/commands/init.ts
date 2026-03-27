@@ -46,7 +46,10 @@ export const initCommand = new Command('init')
     // Write .gitignore
     writeIfNotExists(join(projectDir, '.gitignore'), GITIGNORE_CONTENT);
 
-    // Write smallchat config
+    // Write smallchat.json project manifest (the package.json analog)
+    writeIfNotExists(join(projectDir, 'smallchat.json'), JSON.stringify(generateSmallChatJson(projectName, template), null, 2));
+
+    // Write smallchat config (legacy — now prefer smallchat.json)
     writeIfNotExists(join(projectDir, 'smallchat.config.json'), JSON.stringify(generateConfig(template), null, 2));
 
     // Generate template-specific files
@@ -364,6 +367,42 @@ function generateSampleManifest(projectName: string): object {
       },
     ],
   };
+}
+
+function generateSmallChatJson(name: string, template: string): object {
+  const base: Record<string, unknown> = {
+    $schema: 'https://smallchat.dev/schema/smallchat.json',
+    name,
+    version: '0.1.0',
+    description: `A smallchat ${template} project`,
+    manifests: ['./manifests'],
+    compiler: {
+      embedder: 'onnx',
+      deduplicationThreshold: 0.95,
+      collisionThreshold: 0.89,
+    },
+    output: {
+      path: 'tools.toolkit.json',
+      format: 'json',
+    },
+  };
+
+  if (template === 'agent') {
+    // Agent template gets example hint overrides to demonstrate the feature
+    base.providerHints = {
+      [name]: {
+        selectorHint: `Tools for the ${name} agent`,
+      },
+    };
+    base.toolHints = {
+      [`${name}.greet`]: {
+        aliases: ['say hello', 'welcome user'],
+        priority: 1.2,
+      },
+    };
+  }
+
+  return base;
 }
 
 // ---------------------------------------------------------------------------
