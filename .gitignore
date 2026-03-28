@@ -11,3 +11,7 @@ Package.resolved
 # Node.js
 node_modules/
 dist/
+
+# Docusaurus
+.docusaurus/
+build/
