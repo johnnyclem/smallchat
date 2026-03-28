@@ -16,6 +16,27 @@ npx @smallchat/core compile --source ~/.mcp.json
 
 One command. Point it at your MCP config, a directory of manifests, or any MCP server repo. Out comes a compiled artifact with embedded vectors, dispatch tables, and resolution caching — ready to serve.
 
+## Quick Start
+
+Get up and running in under a minute:
+
+```bash
+# Install smallchat
+npm install -g @smallchat/core
+
+# Run the interactive setup wizard
+smallchat setup
+```
+
+The setup wizard will:
+1. **Discover** your existing MCP server configurations (Claude Code, Gemini CLI, OpenCode, Codex, or any `.mcp.json`)
+2. **Compile** them into an optimized smallchat toolkit with embedded vectors and dispatch tables
+3. **Optionally replace** your `mcpServers` config so all tools are served through smallchat
+
+That's it — your agent now dispatches tools semantically instead of stuffing them all into the context window.
+
+> **Prefer non-interactive mode?** Run `smallchat setup --no-interactive` to auto-detect and compile without prompts.
+
 ## Install
 
 ```bash
