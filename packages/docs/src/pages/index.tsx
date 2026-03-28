@@ -194,9 +194,15 @@ function ComparisonTable() {
 
 // ---------- Install strip ----------
 
+const INSTALL_COMMANDS = {
+  typescript: 'npm install @smallchat/core',
+  swift: '.package(url: "https://github.com/johnnyclem/smallchat-swift", from: "0.2.0")',
+};
+
 function InstallStrip() {
   const [copied, setCopied] = useState(false);
-  const cmd = 'npm install @smallchat/core';
+  const [lang, setLang] = useState<'typescript' | 'swift'>('typescript');
+  const cmd = INSTALL_COMMANDS[lang];
 
   function copyCmd() {
     navigator.clipboard.writeText(cmd).then(() => {
@@ -204,6 +210,19 @@ function InstallStrip() {
       setTimeout(() => setCopied(false), 2000);
     });
   }
+
+  const toggleStyle = (active: boolean): React.CSSProperties => ({
+    background: active ? 'rgba(37, 99, 235, 0.15)' : 'transparent',
+    border: active ? '1px solid rgba(37, 99, 235, 0.4)' : '1px solid #2a2a2a',
+    borderRadius: 6,
+    color: active ? '#3b82f6' : '#6b7280',
+    fontFamily: 'var(--ifm-font-family-monospace)',
+    fontSize: '0.8rem',
+    padding: '4px 12px',
+    cursor: 'pointer',
+    transition: 'all 0.15s ease',
+    fontWeight: active ? 600 : 400,
+  });
 
   return (
     <section
@@ -215,9 +234,17 @@ function InstallStrip() {
         textAlign: 'center',
       }}
     >
-      <span style={{ color: '#6b7280', fontSize: '0.875rem', marginRight: '1rem' }}>
-        Get started in seconds:
-      </span>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: '1rem' }}>
+        <span style={{ color: '#6b7280', fontSize: '0.875rem', marginRight: '0.5rem' }}>
+          Get started in seconds:
+        </span>
+        <button onClick={() => setLang('typescript')} style={toggleStyle(lang === 'typescript')}>
+          TypeScript
+        </button>
+        <button onClick={() => setLang('swift')} style={toggleStyle(lang === 'swift')}>
+          Swift
+        </button>
+      </div>
       <button
         onClick={copyCmd}
         style={{

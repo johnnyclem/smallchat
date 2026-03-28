@@ -4,6 +4,9 @@ sidebar_label: Introduction
 slug: /intro
 ---
 
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # Introduction
 
 > "The big idea is messaging." — Alan Kay
@@ -43,13 +46,35 @@ If you have not, the model is still straightforward: tools are grouped into clas
 
 ## Install
 
+<Tabs groupId="language">
+<TabItem value="typescript" label="TypeScript">
+
 ```bash
 npm install @smallchat/core
 ```
 
 Package: `@smallchat/core` — version `0.1.0`
 
+</TabItem>
+<TabItem value="swift" label="Swift">
+
+Add to your `Package.swift`:
+
+```swift
+dependencies: [
+    .package(url: "https://github.com/johnnyclem/smallchat-swift", from: "0.2.0"),
+]
+```
+
+Requires Swift 6.0+, macOS 14+, or iOS 17+.
+
+</TabItem>
+</Tabs>
+
 ## First dispatch
+
+<Tabs groupId="language">
+<TabItem value="typescript" label="TypeScript">
 
 ```typescript
 import { ToolRuntime, LocalEmbedder, MemoryVectorIndex } from '@smallchat/core';
@@ -66,7 +91,32 @@ const result = await runtime.dispatch('search for code', { query: 'typescript ge
 console.log(result.output);
 ```
 
+</TabItem>
+<TabItem value="swift" label="Swift">
+
+```swift
+import SmallChat
+
+let runtime = ToolRuntime(
+    vectorIndex: MemoryVectorIndex(),
+    embedder: LocalEmbedder()
+)
+
+// Load a compiled artifact
+try await runtime.load("./tools.json")
+
+// Dispatch natural-language intent
+let result = try await runtime.dispatch("search for code", args: ["query": "typescript generics"])
+print(result.output)
+```
+
+</TabItem>
+</Tabs>
+
 ## Streaming dispatch
+
+<Tabs groupId="language">
+<TabItem value="typescript" label="TypeScript">
 
 ```typescript
 for await (const event of runtime.dispatchStream('search for code', { query: 'react hooks' })) {
@@ -74,6 +124,25 @@ for await (const event of runtime.dispatchStream('search for code', { query: 're
   if (event.type === 'done') console.log('\nDone.');
 }
 ```
+
+</TabItem>
+<TabItem value="swift" label="Swift">
+
+```swift
+for try await event in runtime.dispatchStream("search for code", args: ["query": "react hooks"]) {
+    switch event {
+    case .chunk(let content, _):
+        print(content, terminator: "")
+    case .done:
+        print("\nDone.")
+    default:
+        break
+    }
+}
+```
+
+</TabItem>
+</Tabs>
 
 ## Next steps
 

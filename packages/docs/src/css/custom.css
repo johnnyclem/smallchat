@@ -789,3 +789,52 @@ tbody td {
   color: #60a5fa;
   font-size: 0.75rem;
 }
+
+/* ============================================================
+   Language toggle tabs (TypeScript / Swift)
+   ============================================================ */
+
+.tabs-container {
+  margin-bottom: 1.5rem;
+}
+
+.tabs {
+  border-bottom: 1px solid #1e1e1e;
+  margin-bottom: 0;
+}
+
+.tabs__item {
+  color: #6b7280;
+  font-size: 0.85rem;
+  font-weight: 500;
+  padding: 8px 16px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.tabs__item:hover {
+  color: #a0a0a0;
+  background: transparent;
+}
+
+.tabs__item--active {
+  color: #3b82f6 !important;
+  border-bottom-color: #2563EB !important;
+  background: transparent !important;
+}
+
+/* Ensure code blocks inside tabs have no extra top margin */
+.tabs-container .margin-top--md {
+  margin-top: 0 !important;
+}
+
+.tabs-container [role='tabpanel'] > :first-child {
+  margin-top: 0.75rem;
+}
+
+.tabs-container [role='tabpanel'] > :last-child {
+  margin-bottom: 0;
+}

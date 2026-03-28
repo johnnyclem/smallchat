@@ -3,6 +3,9 @@ title: Architecture
 sidebar_label: Architecture
 ---
 
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # Architecture
 
 > "The big idea is messaging." — Alan Kay
@@ -98,6 +101,9 @@ Tool definitions (JSON/YAML)
 
 smallchat opens the actual provider stream. Dispatch resolves the intent once, then hands control straight to the LLM provider (OpenAI or Anthropic). Tokens arrive the moment they are generated. No waiting for the full result.
 
+<Tabs groupId="language">
+<TabItem value="typescript" label="TypeScript">
+
 ```typescript
 async function* smallchat_dispatchStream(context, intent, args) {
   yield { type: 'resolving', intent };
@@ -114,6 +120,36 @@ async function* smallchat_dispatchStream(context, intent, args) {
   yield { type: 'done' };
 }
 ```
+
+</TabItem>
+<TabItem value="swift" label="Swift">
+
+```swift
+func smallchatDispatchStream(
+    _ context: DispatchContext,
+    intent: String,
+    args: [String: Any]
+) -> AsyncThrowingStream<DispatchEvent, Error> {
+    AsyncThrowingStream { continuation in
+        Task {
+            continuation.yield(.resolving(intent: intent))
+
+            let resolved = try await resolveIntent(context, intent)
+            continuation.yield(.toolStart(tool: resolved.name, provider: resolved.provider, confidence: resolved.confidence, metadata: nil))
+
+            for try await delta in resolved.implementation.stream(args) {
+                continuation.yield(.chunk(content: delta, metadata: nil))
+            }
+
+            continuation.yield(.done(result: nil))
+            continuation.finish()
+        }
+    }
+}
+```
+
+</TabItem>
+</Tabs>
 
 One generator. Real tokens. No middleware.
 
