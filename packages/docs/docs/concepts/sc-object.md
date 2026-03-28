@@ -3,6 +3,9 @@ title: SCObject System
 sidebar_label: SCObject System
 ---
 
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # SCObject System
 
 The `SCObject` hierarchy is an NSObject-inspired base class for typed parameter passing. It enables runtime type checking, auto-wrapping of plain JavaScript values, and a consistent object model across dispatch boundaries.
@@ -29,6 +32,9 @@ All types inherit from `SCObject`, which provides:
 
 Plain JavaScript values are automatically wrapped into SCObject instances before dispatch and unwrapped after:
 
+<Tabs groupId="language">
+<TabItem value="typescript" label="TypeScript">
+
 ```typescript
 import { wrapValue, unwrapValue, SCArray, SCDictionary, SCData } from '@smallchat/core';
 
@@ -43,7 +49,30 @@ unwrapValue(new SCData('hello')) // → 'hello'
 unwrapValue(new SCArray([...]))  // → [...]
 ```
 
+</TabItem>
+<TabItem value="swift" label="Swift">
+
+```swift
+import SmallChat
+
+// Wrapping
+SCValue.wrap("hello")            // → SCData { value: "hello" }
+SCValue.wrap(42)                 // → SCData { value: 42 }
+SCValue.wrap([1, 2, 3])          // → SCArray { items: [SCData(1), SCData(2), SCData(3)] }
+SCValue.wrap(["a": 1])           // → SCDictionary { entries: ["a": SCData(1)] }
+
+// Unwrapping
+SCValue.unwrap(SCData("hello"))  // → "hello"
+SCValue.unwrap(SCArray([...]))   // → [...]
+```
+
+</TabItem>
+</Tabs>
+
 You can bypass auto-wrapping by constructing SCObject instances directly and passing them as arguments:
+
+<Tabs groupId="language">
+<TabItem value="typescript" label="TypeScript">
 
 ```typescript
 const args = new SCDictionary({
@@ -55,7 +84,26 @@ const args = new SCDictionary({
 await runtime.dispatch('search for code', args);
 ```
 
+</TabItem>
+<TabItem value="swift" label="Swift">
+
+```swift
+let args = SCDictionary([
+    "query": SCData("typescript generics"),
+    "language": SCData("typescript"),
+    "limit": SCData(10),
+])
+
+try await runtime.dispatch("search for code", args)
+```
+
+</TabItem>
+</Tabs>
+
 ## Runtime type checking
+
+<Tabs groupId="language">
+<TabItem value="typescript" label="TypeScript">
 
 ```typescript
 import { SCObject, SCArray, SCData, isSubclass } from '@smallchat/core';
@@ -72,9 +120,33 @@ console.log(isSubclass('SCArray', 'SCObject'));  // true
 console.log(isSubclass('SCData', 'SCArray'));    // false
 ```
 
+</TabItem>
+<TabItem value="swift" label="Swift">
+
+```swift
+import SmallChat
+
+let val = SCValue.wrap([1, 2, 3])
+
+print(val.isKind(of: "SCArray"))     // true
+print(val.isKind(of: "SCObject"))    // true (superclass)
+print(val.isMember(of: "SCArray"))   // true
+print(val.isMember(of: "SCObject"))  // false (not exact)
+
+// isSubclass helper
+print(isSubclass("SCArray", of: "SCObject"))  // true
+print(isSubclass("SCData", of: "SCArray"))    // false
+```
+
+</TabItem>
+</Tabs>
+
 ## `SCSelector`
 
 `SCSelector` wraps a canonical selector string. Dispatch returns `SCSelector` instances when resolving intents, and you can pass them directly to avoid re-resolution:
+
+<Tabs groupId="language">
+<TabItem value="typescript" label="TypeScript">
 
 ```typescript
 import { SCSelector } from '@smallchat/core';
@@ -86,9 +158,28 @@ const scSel = new SCSelector(sel);
 // Can be passed as an argument to tools that accept selectors
 ```
 
+</TabItem>
+<TabItem value="swift" label="Swift">
+
+```swift
+import SmallChat
+
+let sel = runtime.intern("search for code")
+// sel is a ToolSelector (string identifier)
+
+let scSel = SCSelector(sel)
+// Can be passed as an argument to tools that accept selectors
+```
+
+</TabItem>
+</Tabs>
+
 ## `SCToolReference`
 
 `SCToolReference` holds a reference to another tool by class and selector. Useful for tool chaining — passing the output of one tool as the input specification for another:
+
+<Tabs groupId="language">
+<TabItem value="typescript" label="TypeScript">
 
 ```typescript
 import { SCToolReference } from '@smallchat/core';
@@ -102,9 +193,30 @@ await runtime.dispatch('compose tools', {
 });
 ```
 
+</TabItem>
+<TabItem value="swift" label="Swift">
+
+```swift
+import SmallChat
+
+let ref = SCToolReference(provider: "github", tool: "search_code")
+
+// A hypothetical "compose" tool that chains two tools
+try await runtime.dispatch("compose tools", [
+    "first": ref,
+    "then": SCToolReference(provider: "slack", tool: "send_message"),
+])
+```
+
+</TabItem>
+</Tabs>
+
 ## `registerClass` and `getClassHierarchy`
 
 Register custom SCObject subclasses for domain-specific typed parameters:
+
+<Tabs groupId="language">
+<TabItem value="typescript" label="TypeScript">
 
 ```typescript
 import { registerClass, getClassHierarchy } from '@smallchat/core';
@@ -122,5 +234,30 @@ registerClass('SCFileReference', 'SCData');
 console.log(getClassHierarchy('SCFileReference'));
 // ['SCFileReference', 'SCData', 'SCObject']
 ```
+
+</TabItem>
+<TabItem value="swift" label="Swift">
+
+```swift
+import SmallChat
+
+class SCFileReference: SCData {
+    override var className: String { "SCFileReference" }
+    let path: String
+    init(path: String) {
+        self.path = path
+        super.init(path)
+    }
+}
+
+registerClass("SCFileReference", superclass: "SCData")
+
+// Inspect hierarchy
+print(getClassHierarchy("SCFileReference"))
+// ["SCFileReference", "SCData", "SCObject"]
+```
+
+</TabItem>
+</Tabs>
 
 Custom classes participate in `isKindOfClass` and the OverloadTable's type matching.

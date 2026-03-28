@@ -3,17 +3,37 @@ title: ToolCompiler
 sidebar_label: ToolCompiler
 ---
 
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # ToolCompiler API Reference
 
 `ToolCompiler` runs the Parse → Embed → Overload → Link pipeline and emits a compiled artifact.
 
 ## Constructor
 
+<Tabs groupId="language">
+<TabItem value="typescript" label="TypeScript">
+
 ```typescript
 import { ToolCompiler, LocalEmbedder, MemoryVectorIndex } from '@smallchat/core';
 
 const compiler = new ToolCompiler(embedder, vectorIndex);
 ```
+
+</TabItem>
+<TabItem value="swift" label="Swift">
+
+```swift
+import SmallChat
+
+let embedder = LocalEmbedder()
+let vectorIndex = MemoryVectorIndex()
+let compiler = ToolCompiler(embedder: LocalEmbedder(), vectorIndex: MemoryVectorIndex())
+```
+
+</TabItem>
+</Tabs>
 
 Parameters:
 
@@ -25,6 +45,9 @@ Parameters:
 ## `compile(manifests, options?)`
 
 Compile an array of `ProviderManifest` objects:
+
+<Tabs groupId="language">
+<TabItem value="typescript" label="TypeScript">
 
 ```typescript
 import type { ProviderManifest, CompilationResult } from '@smallchat/core';
@@ -39,7 +62,28 @@ const result: CompilationResult = await compiler.compile(manifests, {
 });
 ```
 
+</TabItem>
+<TabItem value="swift" label="Swift">
+
+```swift
+import SmallChat
+import Foundation
+
+let manifests: [ProviderManifest] = [
+    try JSONDecoder().decode(ProviderManifest.self, from: Data(contentsOf: URL(fileURLWithPath: "./tools/github-manifest.json"))),
+    try JSONDecoder().decode(ProviderManifest.self, from: Data(contentsOf: URL(fileURLWithPath: "./tools/slack-manifest.json"))),
+]
+
+let result = try await compiler.compile(manifests, options: CompilerOptions(overloadThreshold: 0.88))
+```
+
+</TabItem>
+</Tabs>
+
 ### `CompilerOptions`
+
+<Tabs groupId="language">
+<TabItem value="typescript" label="TypeScript">
 
 ```typescript
 interface CompilerOptions {
@@ -49,7 +93,23 @@ interface CompilerOptions {
 }
 ```
 
+</TabItem>
+<TabItem value="swift" label="Swift">
+
+```swift
+struct CompilerOptions {
+    var overloadThreshold: Double?   // Default: 0.88 — similarity threshold for auto-grouping overloads
+    var selectorThreshold: Double?   // Default: 0.95 — deduplication threshold
+}
+```
+
+</TabItem>
+</Tabs>
+
 ### `CompilationResult`
+
+<Tabs groupId="language">
+<TabItem value="typescript" label="TypeScript">
 
 ```typescript
 interface CompilationResult {
@@ -66,7 +126,33 @@ interface CompilationResult {
 }
 ```
 
+</TabItem>
+<TabItem value="swift" label="Swift">
+
+```swift
+struct CompilationResult {
+    let artifact: CompiledArtifact                 // the compiled output, ready to serialize
+    let collisions: [SelectorCollision]            // selector name conflicts
+    let overloadGroups: [SemanticOverloadGroup]     // auto-generated overload groups
+    let stats: CompilationStats
+}
+
+struct CompilationStats {
+    let providers: Int
+    let tools: Int
+    let selectors: Int
+    let deduplicated: Int   // selectors that were merged
+    let overloads: Int
+}
+```
+
+</TabItem>
+</Tabs>
+
 ## Manifest format
+
+<Tabs groupId="language">
+<TabItem value="typescript" label="TypeScript">
 
 ```typescript
 import type { ProviderManifest, ToolDefinition } from '@smallchat/core';
@@ -88,6 +174,34 @@ interface ToolDefinition {
 }
 ```
 
+</TabItem>
+<TabItem value="swift" label="Swift">
+
+```swift
+struct ProviderManifest: Codable {
+    let id: String
+    let name: String
+    let transportType: TransportType
+    let description: String?
+    let tools: [ToolDefinition]
+}
+
+struct ToolDefinition: Codable {
+    let name: String
+    let description: String
+    let providerId: String
+    let transportType: TransportType
+    let inputSchema: JSONSchema
+}
+
+enum TransportType: String, Codable {
+    case mcp, http, local
+}
+```
+
+</TabItem>
+</Tabs>
+
 ## Parsers
 
 Utilities for converting other formats to `ProviderManifest`:
@@ -96,15 +210,33 @@ Utilities for converting other formats to `ProviderManifest`:
 
 Parse a raw MCP server manifest (the `tools/list` response format):
 
+<Tabs groupId="language">
+<TabItem value="typescript" label="TypeScript">
+
 ```typescript
 import { parseMCPManifest } from '@smallchat/core';
 
 const manifest = parseMCPManifest(rawMCPResponse);
 ```
 
+</TabItem>
+<TabItem value="swift" label="Swift">
+
+```swift
+import SmallChat
+
+let manifest = try parseMCPManifest(rawMCPResponse)
+```
+
+</TabItem>
+</Tabs>
+
 ### `parseOpenAPISpec(spec)`
 
 Parse an OpenAPI 3.x specification into a `ProviderManifest`:
+
+<Tabs groupId="language">
+<TabItem value="typescript" label="TypeScript">
 
 ```typescript
 import { parseOpenAPISpec } from '@smallchat/core';
@@ -113,15 +245,46 @@ const spec = JSON.parse(fs.readFileSync('./openapi.json', 'utf8'));
 const manifest = parseOpenAPISpec(spec);
 ```
 
+</TabItem>
+<TabItem value="swift" label="Swift">
+
+```swift
+import SmallChat
+import Foundation
+
+let data = try Data(contentsOf: URL(fileURLWithPath: "./openapi.json"))
+let spec = try JSONDecoder().decode(ProviderManifest.self, from: data)
+let manifest = try parseOpenAPISpec(spec)
+```
+
+</TabItem>
+</Tabs>
+
 ### `parseRawSchema(schema)`
 
 Parse a raw JSON Schema object:
+
+<Tabs groupId="language">
+<TabItem value="typescript" label="TypeScript">
 
 ```typescript
 import { parseRawSchema } from '@smallchat/core';
 ```
 
+</TabItem>
+<TabItem value="swift" label="Swift">
+
+```swift
+import SmallChat
+```
+
+</TabItem>
+</Tabs>
+
 ## Programmatic compilation workflow
+
+<Tabs groupId="language">
+<TabItem value="typescript" label="TypeScript">
 
 ```typescript
 import {
@@ -158,3 +321,32 @@ async function compileAll(sourceDir: string, outputPath: string) {
 
 await compileAll('./tools', './tools.json');
 ```
+
+</TabItem>
+<TabItem value="swift" label="Swift">
+
+```swift
+import SmallChat
+import Foundation
+
+let embedder = LocalEmbedder()
+let vectorIndex = MemoryVectorIndex()
+let compiler = ToolCompiler(embedder: embedder, vectorIndex: vectorIndex)
+
+let sourceURL = URL(fileURLWithPath: "./tools")
+let manifests = try FileManager.default.contentsOfDirectory(at: sourceURL, includingPropertiesForKeys: nil)
+    .filter { $0.pathExtension == "json" }
+    .map { try JSONDecoder().decode(ProviderManifest.self, from: Data(contentsOf: $0)) }
+
+let result = try await compiler.compile(manifests, options: CompilerOptions(overloadThreshold: 0.88))
+
+for collision in result.collisions {
+    print("Collision: \(collision.selector) → \(collision.tools)")
+}
+
+let outputData = try JSONEncoder().encode(result.artifact)
+try outputData.write(to: URL(fileURLWithPath: "./tools.json"))
+```
+
+</TabItem>
+</Tabs>
