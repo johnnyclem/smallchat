@@ -1,6 +1,6 @@
 {
   "name": "@smallchat/examples",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Example MCP server manifests for use with @smallchat/core",
   "type": "module",
   "main": "dist/index.js",

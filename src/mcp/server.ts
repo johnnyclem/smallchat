@@ -40,7 +40,7 @@ import {
 
 const MCP_PROTOCOL_VERSION = '2024-11-05';
 const SERVER_NAME = 'smallchat';
-const SERVER_VERSION = '0.1.0';
+const SERVER_VERSION = '0.3.0';
 
 // JSON-RPC error codes
 const PARSE_ERROR = -32700;

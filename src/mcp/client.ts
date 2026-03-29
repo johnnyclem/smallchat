@@ -120,10 +120,10 @@ export async function introspectMcpServer(
       containerSandbox: config.containerSandbox,
     });
 
-    const rl = createInterface({ input: child.stdout, terminal: false });
+    const rl = createInterface({ input: child.stdout!, terminal: false });
 
     // Collect stderr for error messages
-    child.stderr.on('data', (chunk: Buffer) => {
+    child.stderr!.on('data', (chunk: Buffer) => {
       stderrBuf += chunk.toString();
     });
 
@@ -202,13 +202,13 @@ export async function introspectMcpServer(
         serverInstructions = msg.result?.instructions as string | undefined;
 
         // Send initialized notification
-        child.stdin.write(
+        child.stdin!.write(
           JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n',
         );
 
         // Send tools/list request
         phase = 'tools';
-        child.stdin.write(
+        child.stdin!.write(
           JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }) + '\n',
         );
       } else if (phase === 'tools' && msg.id === 2) {
@@ -240,7 +240,7 @@ export async function introspectMcpServer(
     });
 
     // Start the conversation: send initialize request
-    child.stdin.write(
+    child.stdin!.write(
       JSON.stringify({
         jsonrpc: '2.0',
         id: 1,
@@ -248,7 +248,7 @@ export async function introspectMcpServer(
         params: {
           protocolVersion: '2024-11-05',
           capabilities: {},
-          clientInfo: { name: 'smallchat', version: '0.1.0' },
+          clientInfo: { name: 'smallchat', version: '0.3.0' },
         },
       }) + '\n',
     );

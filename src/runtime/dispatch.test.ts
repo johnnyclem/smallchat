@@ -554,7 +554,7 @@ describe('Intent Pinning — semantic collision mitigation', () => {
     const cls = new ToolClass('db');
 
     const embedding = await context.embedder.embed('delete record');
-    const selector = context.selectorTable.intern(embedding, 'db.delete_record');
+    const selector = await context.selectorTable.intern(embedding, 'db.delete_record');
     cls.addMethod(selector, makeIMP('db', 'delete_record', 'deleted'));
     context.registerClass(cls);
 
@@ -571,11 +571,11 @@ describe('Intent Pinning — semantic collision mitigation', () => {
 
     // Register delete_record (pinned exact) and archive_record (not pinned)
     const delEmbed = await context.embedder.embed('delete record permanently');
-    const delSelector = context.selectorTable.intern(delEmbed, 'db.delete_record');
+    const delSelector = await context.selectorTable.intern(delEmbed, 'db.delete_record');
     cls.addMethod(delSelector, makeIMP('db', 'delete_record', 'deleted'));
 
     const archEmbed = await context.embedder.embed('archive record safely');
-    const archSelector = context.selectorTable.intern(archEmbed, 'db.archive_record');
+    const archSelector = await context.selectorTable.intern(archEmbed, 'db.archive_record');
     cls.addMethod(archSelector, makeIMP('db', 'archive_record', 'archived'));
 
     context.registerClass(cls);
@@ -595,11 +595,11 @@ describe('Intent Pinning — semantic collision mitigation', () => {
     const cls = new ToolClass('bank');
 
     const transferEmbed = await context.embedder.embed('transfer funds between accounts');
-    const transferSel = context.selectorTable.intern(transferEmbed, 'bank.transfer_funds');
+    const transferSel = await context.selectorTable.intern(transferEmbed, 'bank.transfer_funds');
     cls.addMethod(transferSel, makeIMP('bank', 'transfer_funds', 'transferred'));
 
     const checkEmbed = await context.embedder.embed('check account balance');
-    const checkSel = context.selectorTable.intern(checkEmbed, 'bank.check_balance');
+    const checkSel = await context.selectorTable.intern(checkEmbed, 'bank.check_balance');
     cls.addMethod(checkSel, makeIMP('bank', 'check_balance', 'balance-checked'));
 
     context.registerClass(cls);
@@ -616,11 +616,11 @@ describe('Intent Pinning — semantic collision mitigation', () => {
     const cls = new ToolClass('db');
 
     const delEmbed = await context.embedder.embed('delete record');
-    const delSelector = context.selectorTable.intern(delEmbed, 'db.delete_record');
+    const delSelector = await context.selectorTable.intern(delEmbed, 'db.delete_record');
     cls.addMethod(delSelector, makeIMP('db', 'delete_record', 'deleted'));
 
     const readEmbed = await context.embedder.embed('read record');
-    const readSelector = context.selectorTable.intern(readEmbed, 'db.read_record');
+    const readSelector = await context.selectorTable.intern(readEmbed, 'db.read_record');
     cls.addMethod(readSelector, makeIMP('db', 'read_record', 'record-data'));
 
     context.registerClass(cls);
@@ -635,7 +635,7 @@ describe('Intent Pinning — semantic collision mitigation', () => {
     const cls = new ToolClass('github');
 
     const embedding = await context.embedder.embed('search code repositories');
-    const selector = context.selectorTable.intern(embedding, 'github.search_code');
+    const selector = await context.selectorTable.intern(embedding, 'github.search_code');
     cls.addMethod(selector, makeIMP('github', 'search_code'));
     context.registerClass(cls);
 
@@ -654,7 +654,7 @@ describe('Intent Pinning — semantic collision mitigation', () => {
     const cls = new ToolClass('db');
 
     const embedding = await context.embedder.embed('delete record');
-    const selector = context.selectorTable.intern(embedding, 'db.delete_record');
+    const selector = await context.selectorTable.intern(embedding, 'db.delete_record');
     cls.addMethod(selector, makeIMP('db', 'delete_record', 'deleted'));
     context.registerClass(cls);
 

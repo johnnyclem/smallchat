@@ -24,7 +24,7 @@ export interface MCPServerOptions {
   sessionTtlMs?: number;
   /** Server name returned in initialize. Default: 'smallchat' */
   serverName?: string;
-  /** Server version returned in initialize. Default: '0.1.0' */
+  /** Server version returned in initialize. Default: '0.3.0' */
   serverVersion?: string;
 }
 
@@ -43,7 +43,7 @@ export class MCPServer {
       dbPath = ':memory:',
       sessionTtlMs = 86_400_000,
       serverName = 'smallchat',
-      serverVersion = '0.1.0',
+      serverVersion = '0.3.0',
     } = opts;
 
     this.serverName = serverName;

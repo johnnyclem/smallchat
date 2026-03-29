@@ -1,6 +1,6 @@
 {
   "name": "@smallchat/core",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "A message-passing tool compiler inspired by the Smalltalk/Objective-C runtime",
   "type": "module",
   "main": "dist/index.js",
