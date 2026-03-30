@@ -103,7 +103,7 @@ export async function loadRuntime(
  * Hydrate a ToolRuntime from a SerializedArtifact — shared between
  * JSON and SQLite load paths.
  */
-function hydrateRuntime(runtime: ToolRuntime, artifact: SerializedArtifact): void {
+async function hydrateRuntime(runtime: ToolRuntime, artifact: SerializedArtifact): Promise<void> {
   for (const [providerId, methods] of Object.entries(artifact.dispatchTables)) {
     const toolClass = new ToolClass(providerId);
 
@@ -246,7 +246,7 @@ export function buildArtifact(
   }
 
   return {
-    version: '0.1.0',
+    version: '0.3.0',
     stats: {
       toolCount: result.toolCount,
       uniqueSelectorCount: result.uniqueSelectorCount,

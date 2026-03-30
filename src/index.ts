@@ -1,5 +1,5 @@
 // ToolKit — A Message-Passing Tool Compiler
-// v0.2.0
+// v0.3.0
 
 // Core types
 export type {

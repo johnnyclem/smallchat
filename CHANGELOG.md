@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-03-29
+
+### Fixed
+- **Build errors** — Fixed missing `async` on `hydrateRuntime` in artifact loader, added null safety for child process stdio handles in MCP client
+- **Test fixes** — Added missing `await` on `SelectorTable.intern()` calls in intent pinning dispatch tests (5 tests)
+
+### Changed
+- **Version bump** — All packages and internal version strings updated to 0.3.0
+- **Test suite** — 786 passing specs across 46 test files (up from 274+ in v0.2.0)
+
 ## [0.2.0] - 2026-03-26
 
 ### Added

@@ -184,7 +184,7 @@ function serializeResult(
   };
 
   return {
-    version: '0.1.0',
+    version: '0.3.0',
     timestamp: new Date().toISOString(),
     embedding: {
       model: embedderType === 'onnx' ? 'all-MiniLM-L6-v2' : 'hash-based',
