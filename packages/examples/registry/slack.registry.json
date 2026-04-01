@@ -1,0 +1,79 @@
+{
+  "$schema": "https://smallchat.dev/schema/registry-entry.json",
+  "id": "slack",
+  "name": "Slack",
+  "description": "Search messages and send messages to Slack channels",
+  "version": "1.0.0",
+  "author": "Anthropic",
+  "license": "MIT",
+  "repository": "https://github.com/modelcontextprotocol/servers",
+  "icon": "slack",
+  "categories": ["communication"],
+  "tags": ["slack", "chat", "messaging", "team", "channels"],
+  "install": {
+    "method": "npx",
+    "package": "@modelcontextprotocol/server-slack",
+    "runtime": "node",
+    "runtimeVersion": ">=18.0.0",
+    "env": [
+      {
+        "name": "SLACK_BOT_TOKEN",
+        "description": "Slack Bot User OAuth Token (starts with xoxb-)",
+        "required": true,
+        "secret": true,
+        "helpUrl": "https://api.slack.com/apps"
+      },
+      {
+        "name": "SLACK_TEAM_ID",
+        "description": "Slack workspace/team ID",
+        "required": false,
+        "helpUrl": "https://slack.com/help/articles/221769328"
+      }
+    ]
+  },
+  "manifest": {
+    "id": "slack",
+    "name": "Slack",
+    "transportType": "mcp",
+    "tools": [
+      {
+        "name": "search_messages",
+        "description": "Search for messages in Slack channels",
+        "providerId": "slack",
+        "transportType": "mcp",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "query": { "type": "string", "description": "Search query" },
+            "channel": { "type": "string", "description": "Channel to search in" },
+            "from": { "type": "string", "description": "Filter by sender" }
+          },
+          "required": ["query"]
+        }
+      },
+      {
+        "name": "send_message",
+        "description": "Send a message to a Slack channel",
+        "providerId": "slack",
+        "transportType": "mcp",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "channel": { "type": "string", "description": "Channel to send to" },
+            "text": { "type": "string", "description": "Message text" }
+          },
+          "required": ["channel", "text"]
+        }
+      }
+    ]
+  },
+  "defaultHints": {
+    "namespace": "comms.slack",
+    "selectorHint": "Slack team communication tools"
+  },
+  "capabilities": {
+    "resources": false,
+    "prompts": false,
+    "streaming": false
+  }
+}

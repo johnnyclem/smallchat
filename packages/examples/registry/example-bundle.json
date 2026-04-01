@@ -1,0 +1,127 @@
+{
+  "$schema": "https://smallchat.dev/schema/bundle.json",
+  "bundleVersion": "1.0.0",
+  "name": "my-dev-toolkit",
+  "description": "GitHub + Slack + PostgreSQL — a developer's daily toolkit",
+  "createdAt": "2026-04-01T12:00:00Z",
+  "registryUrl": "https://smallchat.dev/registry?s=github,slack,postgres",
+
+  "servers": [
+    {
+      "id": "github",
+      "name": "GitHub",
+      "install": {
+        "method": "npx",
+        "package": "@modelcontextprotocol/server-github",
+        "runtime": "node",
+        "runtimeVersion": ">=18.0.0",
+        "env": [
+          {
+            "name": "GITHUB_TOKEN",
+            "description": "GitHub personal access token",
+            "required": true,
+            "secret": true,
+            "helpUrl": "https://github.com/settings/tokens"
+          }
+        ]
+      },
+      "configuredEnv": {
+        "GITHUB_TOKEN": "${GITHUB_TOKEN}"
+      },
+      "mcpServerEntry": {
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-github"],
+        "env": {
+          "GITHUB_TOKEN": "${GITHUB_TOKEN}"
+        }
+      }
+    },
+    {
+      "id": "slack",
+      "name": "Slack",
+      "install": {
+        "method": "npx",
+        "package": "@modelcontextprotocol/server-slack",
+        "runtime": "node",
+        "runtimeVersion": ">=18.0.0",
+        "env": [
+          {
+            "name": "SLACK_BOT_TOKEN",
+            "description": "Slack Bot User OAuth Token (starts with xoxb-)",
+            "required": true,
+            "secret": true,
+            "helpUrl": "https://api.slack.com/apps"
+          }
+        ]
+      },
+      "configuredEnv": {
+        "SLACK_BOT_TOKEN": "${SLACK_BOT_TOKEN}"
+      },
+      "mcpServerEntry": {
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-slack"],
+        "env": {
+          "SLACK_BOT_TOKEN": "${SLACK_BOT_TOKEN}"
+        }
+      }
+    },
+    {
+      "id": "postgres",
+      "name": "PostgreSQL",
+      "install": {
+        "method": "npx",
+        "package": "@modelcontextprotocol/server-postgres",
+        "runtime": "node",
+        "runtimeVersion": ">=18.0.0",
+        "configurableArgs": [
+          {
+            "name": "connection-string",
+            "description": "PostgreSQL connection string",
+            "required": true,
+            "placeholder": "postgresql://user:password@localhost:5432/mydb"
+          }
+        ]
+      },
+      "configuredArgs": {
+        "connection-string": "postgresql://localhost:5432/mydb"
+      },
+      "mcpServerEntry": {
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-postgres", "postgresql://localhost:5432/mydb"]
+      }
+    }
+  ],
+
+  "manifest": {
+    "name": "my-dev-toolkit",
+    "version": "1.0.0",
+    "description": "GitHub + Slack + PostgreSQL — a developer's daily toolkit",
+    "dependencies": {},
+    "compiler": {
+      "embedder": "onnx",
+      "deduplicationThreshold": 0.95,
+      "collisionThreshold": 0.89,
+      "generateSemanticOverloads": true
+    },
+    "output": {
+      "path": "tools.toolkit.json",
+      "format": "json"
+    },
+    "providerHints": {
+      "github": {
+        "namespace": "vcs.github",
+        "selectorHint": "GitHub source code management and collaboration tools"
+      },
+      "slack": {
+        "namespace": "comms.slack",
+        "selectorHint": "Slack team communication tools"
+      },
+      "postgres": {
+        "namespace": "db.postgres",
+        "selectorHint": "PostgreSQL database query and schema inspection tools"
+      }
+    }
+  },
+
+  "targets": ["claude-code", "claude-desktop"]
+}

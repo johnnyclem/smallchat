@@ -1,0 +1,137 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "smallchat Bundle",
+  "description": "A self-contained, distributable package of MCP servers with compiled manifest and install instructions",
+  "type": "object",
+  "required": ["bundleVersion", "name", "createdAt", "servers", "manifest", "targets"],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Schema identifier"
+    },
+    "bundleVersion": {
+      "type": "string",
+      "const": "1.0.0",
+      "description": "Bundle format version"
+    },
+    "name": {
+      "type": "string",
+      "description": "User-chosen name for this toolkit"
+    },
+    "description": {
+      "type": "string",
+      "description": "Optional description"
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When this bundle was created"
+    },
+    "registryUrl": {
+      "type": "string",
+      "format": "uri",
+      "description": "URL back to the registry page with the same selection"
+    },
+    "servers": {
+      "type": "array",
+      "minItems": 1,
+      "description": "The MCP servers included in this bundle",
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "install", "mcpServerEntry"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Registry entry ID"
+          },
+          "name": {
+            "type": "string",
+            "description": "Display name"
+          },
+          "install": {
+            "$ref": "registry-entry.schema.json#/definitions/serverInstallConfig"
+          },
+          "configuredArgs": {
+            "type": "object",
+            "additionalProperties": { "type": "string" },
+            "description": "User-supplied values for configurable args"
+          },
+          "configuredEnv": {
+            "type": "object",
+            "additionalProperties": { "type": "string" },
+            "description": "User-supplied env var values (use ${VAR} placeholders for secrets)"
+          },
+          "mcpServerEntry": {
+            "type": "object",
+            "required": ["command"],
+            "properties": {
+              "command": {
+                "type": "string",
+                "description": "Command to start the server process"
+              },
+              "args": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Arguments passed to the command"
+              },
+              "env": {
+                "type": "object",
+                "additionalProperties": { "type": "string" },
+                "description": "Environment variables for the server process"
+              },
+              "cwd": {
+                "type": "string",
+                "description": "Working directory"
+              }
+            }
+          }
+        }
+      }
+    },
+    "manifest": {
+      "$ref": "smallchat.schema.json",
+      "description": "The smallchat.json manifest for this bundle"
+    },
+    "targets": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "enum": [
+          "claude-desktop",
+          "claude-code",
+          "vscode",
+          "gemini-cli",
+          "opencode",
+          "codex",
+          "cursor",
+          "windsurf"
+        ]
+      },
+      "description": "Which client(s) the installer should configure"
+    },
+    "precompiled": {
+      "type": "object",
+      "description": "Pre-compiled toolkit artifact (skips local compilation)",
+      "required": ["compilerVersion", "embeddingModel", "embeddingDimensions", "toolkit"],
+      "properties": {
+        "compilerVersion": {
+          "type": "string",
+          "description": "Compiler version that produced this artifact"
+        },
+        "embeddingModel": {
+          "type": "string",
+          "description": "Embedding model used"
+        },
+        "embeddingDimensions": {
+          "type": "integer",
+          "description": "Embedding dimensions"
+        },
+        "toolkit": {
+          "type": "object",
+          "description": "The compiled toolkit (same structure as tools.toolkit.json)"
+        }
+      }
+    }
+  }
+}

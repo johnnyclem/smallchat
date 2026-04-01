@@ -1,0 +1,227 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "smallchat Registry Entry",
+  "description": "An enriched provider manifest with install metadata, categorization, and display info for the smallchat registry",
+  "type": "object",
+  "required": ["id", "name", "description", "version", "categories", "install", "manifest"],
+  "definitions": {
+    "installMethod": {
+      "type": "string",
+      "enum": ["npx", "npm", "pip", "uvx", "docker", "binary", "source"],
+      "description": "How the MCP server is installed"
+    },
+    "serverRuntime": {
+      "type": "string",
+      "enum": ["node", "python", "go", "rust", "docker", "binary"],
+      "description": "Runtime environment for the MCP server"
+    },
+    "envVarSpec": {
+      "type": "object",
+      "required": ["name", "description", "required"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Variable name, e.g. GITHUB_TOKEN"
+        },
+        "description": {
+          "type": "string",
+          "description": "Human-readable description shown during install"
+        },
+        "required": {
+          "type": "boolean",
+          "description": "Whether the server fails without this"
+        },
+        "helpUrl": {
+          "type": "string",
+          "format": "uri",
+          "description": "URL where the user can create/find this credential"
+        },
+        "default": {
+          "type": "string",
+          "description": "Default value for non-secret config"
+        },
+        "secret": {
+          "type": "boolean",
+          "description": "If true, the value should not be logged"
+        }
+      }
+    },
+    "serverArgSpec": {
+      "type": "object",
+      "required": ["name", "description", "required"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Argument name or flag"
+        },
+        "description": {
+          "type": "string",
+          "description": "Human-readable description"
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "default": {
+          "type": "string"
+        },
+        "placeholder": {
+          "type": "string",
+          "description": "Placeholder shown in the UI"
+        }
+      }
+    },
+    "serverInstallConfig": {
+      "type": "object",
+      "required": ["method", "package", "runtime"],
+      "properties": {
+        "method": { "$ref": "#/definitions/installMethod" },
+        "package": {
+          "type": "string",
+          "description": "Package identifier — npm name, PyPI name, Docker image, or URL"
+        },
+        "runtime": { "$ref": "#/definitions/serverRuntime" },
+        "command": {
+          "type": "string",
+          "description": "Command to start the server (defaults to package name)"
+        },
+        "args": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Fixed arguments passed to the command"
+        },
+        "configurableArgs": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/serverArgSpec" },
+          "description": "User-configurable arguments"
+        },
+        "env": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/envVarSpec" },
+          "description": "Environment variables the server reads"
+        },
+        "runtimeVersion": {
+          "type": "string",
+          "description": "Minimum runtime version, e.g. >=20.0.0"
+        },
+        "alternatives": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/serverInstallConfig" },
+          "description": "Fallback install methods"
+        }
+      }
+    },
+    "serverCapabilities": {
+      "type": "object",
+      "properties": {
+        "resources": { "type": "boolean" },
+        "prompts": { "type": "boolean" },
+        "sampling": { "type": "boolean" },
+        "streaming": { "type": "boolean" },
+        "oauth": { "type": "boolean" }
+      }
+    }
+  },
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Unique provider identifier (must match manifest id)"
+    },
+    "name": {
+      "type": "string",
+      "description": "Display name for the registry UI"
+    },
+    "description": {
+      "type": "string",
+      "description": "One-line description for the card view"
+    },
+    "longDescription": {
+      "type": "string",
+      "description": "Longer markdown description for the detail page"
+    },
+    "version": {
+      "type": "string",
+      "description": "Version of this registry entry (semver)",
+      "pattern": "^\\d+\\.\\d+\\.\\d+(-[a-zA-Z0-9.]+)?(\\+[a-zA-Z0-9.]+)?$"
+    },
+    "author": {
+      "type": "string",
+      "description": "Author or maintaining organization"
+    },
+    "license": {
+      "type": "string",
+      "description": "SPDX license identifier"
+    },
+    "repository": {
+      "type": "string",
+      "format": "uri",
+      "description": "Source repository URL"
+    },
+    "homepage": {
+      "type": "string",
+      "format": "uri",
+      "description": "Homepage or docs URL"
+    },
+    "icon": {
+      "type": "string",
+      "description": "Icon identifier or URL"
+    },
+    "categories": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "developer-tools",
+          "databases",
+          "communication",
+          "cloud",
+          "productivity",
+          "ai-ml",
+          "search",
+          "file-systems",
+          "monitoring",
+          "security",
+          "finance",
+          "design"
+        ]
+      },
+      "minItems": 1,
+      "description": "Categories for filtering"
+    },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Free-form tags for search"
+    },
+    "install": {
+      "$ref": "#/definitions/serverInstallConfig"
+    },
+    "manifest": {
+      "$ref": "manifest.schema.json",
+      "description": "The full provider manifest (tool definitions, transport config)"
+    },
+    "defaultHints": {
+      "$ref": "manifest.schema.json#/definitions/providerCompilerHints",
+      "description": "Default compiler hints when included in a bundle"
+    },
+    "defaultToolHints": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "manifest.schema.json#/definitions/compilerHint"
+      },
+      "description": "Per-tool default hints, keyed by tool name"
+    },
+    "capabilities": {
+      "$ref": "#/definitions/serverCapabilities"
+    },
+    "stats": {
+      "type": "object",
+      "description": "Popularity/quality signals",
+      "properties": {
+        "bundleCount": { "type": "integer" },
+        "weeklyDownloads": { "type": "integer" },
+        "githubStars": { "type": "integer" },
+        "lastUpdated": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}
