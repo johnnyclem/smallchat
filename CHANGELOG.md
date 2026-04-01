@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-04-01
+
+### Added
+- **Confidence-tiered dispatch (Pillar 1)** — Every dispatch returns a confidence tier (EXACT/HIGH/MEDIUM/LOW/NONE) that determines runtime behavior. Tiers are actionable: MEDIUM triggers verification, LOW triggers decomposition, NONE triggers refinement.
+- **Resolution proof** — Every dispatch includes a serializable `ResolutionProof` trace documenting exactly why a tool was chosen, with per-step timing.
+- **Pre-flight verification (Pillar 2)** — `respondsToSelector:` gate between resolution and execution. Three progressive strategies: schema validation, keyword overlap, and optional LLM micro-check.
+- **Intent decomposition (Pillar 3)** — `doesNotUnderstand:` handler for LOW-confidence dispatches. Complex intents are broken into sub-intents and dispatched individually with dependency resolution.
+- **Refinement protocol (Pillar 4)** — `forwardInvocation:` dialogue for NONE-confidence dispatches. Returns structured `tool_refinement_needed` result type with options for the caller to narrow the intent.
+- **Observation & adaptation (Pillar 5)** — KVO-inspired dispatch observer that tracks correction signals, schema rejections, and adapts per-tool-class thresholds in real-time.
+- **Pluggable LLM interface** — `LLMClient` interface for verification, decomposition, and refinement. All LLM features degrade gracefully without a client.
+- **Collision firewall** — Compiler now detects and warns on tool pairs in the 0.75–0.95 similarity zone (expanded from 0.89–0.95). Dispatches in this zone trigger MEDIUM-confidence verification.
+- **`--strict` mode** — Compile flag that raises thresholds, enables verification on every dispatch, and treats ambiguity as error.
+- **Negative examples** — Observer tracks known-bad intent+tool pairs and skips them during resolution.
+- **Adaptive thresholds** — Per-tool-class threshold tuning based on observed correction signals and schema rejections.
+- **MCP `tool_refinement_needed` result type** — New result type for MCP clients to present refinement options to users.
+
+### Changed
+- **Dispatch pipeline** — `resolveToolIMP` now branches on confidence tiers instead of binary match/fallback
+- **Vector search threshold** — Lowered to 0.60 (from 0.75) to capture LOW-tier candidates for decomposition
+- **DispatchContext** — Now accepts `DispatchConfig` with LLM client, strict mode, thresholds, and observer options
+- **RuntimeOptions** — Extended with `llmClient`, `strict`, `thresholds`, and `observerOptions`
+- **MCP server** — Version bumped to 0.4.0, tool call responses include confidence tier and refinement data
+- **Version bump** — All packages and internal version strings updated to 0.4.0
+
 ## [0.3.0] - 2026-03-29
 
 ### Fixed

@@ -4,9 +4,13 @@ import { SelectorTable } from '../core/selector-table.js';
 import { ToolClass } from '../core/tool-class.js';
 import { OverloadTable } from '../core/overload-table.js';
 import { DispatchContext, toolkit_dispatch, smallchat_dispatchStream } from './dispatch.js';
+import type { DispatchConfig } from './dispatch.js';
 import type { SCMethodSignature } from '../core/sc-types.js';
 import { DispatchBuilder } from './dispatch-builder.js';
 import { SelectorNamespace } from '../core/selector-namespace.js';
+import type { LLMClient } from '../core/llm-client.js';
+import type { DispatchObserver } from './observer.js';
+import type { ConfidenceTier, ResolutionProof, TierThresholds } from '../core/confidence.js';
 
 /**
  * ToolRuntime — the top-level runtime that manages everything.
@@ -50,13 +54,36 @@ export class ToolRuntime {
 
     this.selectorNamespace = options?.selectorNamespace ?? new SelectorNamespace();
 
+    const dispatchConfig: DispatchConfig = {
+      llmClient: options?.llmClient,
+      strict: options?.strict,
+      thresholds: options?.thresholds,
+      observerOptions: options?.observerOptions,
+    };
+
     this.context = new DispatchContext(
       this.selectorTable,
       this.cache,
       vectorIndex,
       embedder,
       this.selectorNamespace,
+      undefined, // intentPins
+      dispatchConfig,
     );
+  }
+
+  // ---------------------------------------------------------------------------
+  // 0.4.0: Observer access
+  // ---------------------------------------------------------------------------
+
+  /** Get the dispatch observer for inspection and diagnostics */
+  get observer(): DispatchObserver {
+    return this.context.observer;
+  }
+
+  /** Whether strict mode is enabled */
+  get strict(): boolean {
+    return this.context.strict;
   }
 
   /**
@@ -373,4 +400,12 @@ export interface RuntimeOptions {
   selectorNamespace?: SelectorNamespace;
   /** Semantic rate limiter options — prevents vector flooding DoS */
   rateLimiter?: import('../core/semantic-rate-limiter.js').SemanticRateLimiterOptions;
+  /** 0.4.0: Pluggable LLM client for verification, decomposition, refinement */
+  llmClient?: LLMClient;
+  /** 0.4.0: Enable --strict mode — verify all dispatches, treat ambiguity as error */
+  strict?: boolean;
+  /** 0.4.0: Custom confidence tier thresholds */
+  thresholds?: TierThresholds;
+  /** 0.4.0: Observer options for dispatch learning */
+  observerOptions?: import('./observer.js').ObserverOptions;
 }

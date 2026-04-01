@@ -39,6 +39,25 @@ export interface ToolResult {
   content: unknown;
   isError?: boolean;
   metadata?: Record<string, unknown>;
+  /** When present, indicates the dispatch requires caller refinement (Pillar 4) */
+  refinement?: ToolRefinementNeeded;
+}
+
+/**
+ * ToolRefinementNeeded — returned when confidence is NONE and the runtime
+ * cannot resolve the intent. The caller should present the options to the
+ * user and re-dispatch with the refined intent.
+ */
+export interface ToolRefinementNeeded {
+  type: 'tool_refinement_needed';
+  originalIntent: string;
+  question: string;
+  options: Array<{
+    label: string;
+    intent: string;
+    confidence: number;
+  }>;
+  narrowedIntents: string[];
 }
 
 export interface ValidationResult {
