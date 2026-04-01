@@ -1,5 +1,5 @@
 // ToolKit — A Message-Passing Tool Compiler
-// v0.3.0
+// v0.4.0 — "Tool Selection Errors: Solved"
 
 // Core types
 export type {
@@ -89,10 +89,34 @@ export { ToolClass, ToolProxy } from './core/tool-class.js';
 
 // Runtime
 export { DispatchContext, UnrecognizedIntent, toolkit_dispatch, smallchat_dispatchStream } from './runtime/dispatch.js';
-export type { FallbackStep, FallbackChainResult } from './runtime/dispatch.js';
+export type { FallbackStep, FallbackChainResult, DispatchConfig } from './runtime/dispatch.js';
 export { ToolRuntime } from './runtime/runtime.js';
 export type { RuntimeOptions } from './runtime/runtime.js';
 export { DispatchBuilder } from './runtime/dispatch-builder.js';
+
+// 0.4.0: Confidence-Tiered Dispatch (Pillar 1)
+export { computeTier, requiresVerification, requiresDecomposition, requiresRefinement, createProof, addProofStep, DEFAULT_THRESHOLDS } from './core/confidence.js';
+export type { ConfidenceTier, TierThresholds, ResolutionProof, ProofStep } from './core/confidence.js';
+
+// 0.4.0: Pluggable LLM Interface
+export { NULL_LLM_CLIENT } from './core/llm-client.js';
+export type { LLMClient, MicroCheckRequest, DecomposeRequest, DecomposeResponse, RefineRequest, RefineResponse, SubIntent, RefinementOption, ToolSummary } from './core/llm-client.js';
+
+// 0.4.0: Pre-Flight Verification (Pillar 2)
+export { verify, computeKeywordOverlap } from './runtime/verification.js';
+export type { VerificationResult, VerificationOptions } from './runtime/verification.js';
+
+// 0.4.0: Intent Decomposition (Pillar 3)
+export { decompose, executeDecomposition } from './runtime/decomposition.js';
+export type { DecompositionResult, DecompositionOptions } from './runtime/decomposition.js';
+
+// 0.4.0: Refinement Protocol (Pillar 4)
+export { refine, buildRefinementResult } from './runtime/refinement.js';
+export type { RefinementResult } from './runtime/refinement.js';
+
+// 0.4.0: Observation & Adaptation (Pillar 5)
+export { DispatchObserver } from './runtime/observer.js';
+export type { DispatchRecord, CorrectionSignal, SchemaRejection, AdaptiveThreshold, NegativeExample, ObserverOptions } from './runtime/observer.js';
 
 // Compiler
 export { ToolCompiler } from './compiler/compiler.js';

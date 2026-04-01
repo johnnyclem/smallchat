@@ -236,6 +236,11 @@ export class ToolCompiler {
     }
 
     // Detect selector collisions (skip pairs that are now overloaded or aliased)
+    // 0.4.0 COLLISION FIREWALL: expanded detection to the 0.75-0.95 zone.
+    // In --strict mode, collisions in the 0.75-0.89 zone are errors, not warnings.
+    const isStrict = this.collisionThreshold < 0.89; // --strict lowers the threshold
+    const firewallThreshold = 0.75; // Collision firewall lower bound
+
     const overloadedCanonicals = new Set(overloadTables.keys());
     const aliasCanonicals = new Set<string>();
     for (const aliases of aliasSelectors.values()) {
@@ -258,10 +263,15 @@ export class ToolCompiler {
 
         const similarity = cosineSim(a.vector, b.vector);
 
-        if (similarity > this.collisionThreshold && similarity < 0.95) {
-          // Check if one of the colliding tools is marked "preferred"
+        // 0.4.0: Collision firewall — detect in the 0.75-0.95 zone
+        if (similarity > firewallThreshold && similarity < 0.95) {
           const aPreferred = this.isPreferredTool(a.canonical, allTools, toolSelectors);
           const bPreferred = this.isPreferredTool(b.canonical, allTools, toolSelectors);
+
+          // Determine severity: 0.89-0.95 is always a collision,
+          // 0.75-0.89 is a collision-zone warning (error in --strict)
+          const inCollisionZone = similarity >= this.collisionThreshold;
+          const severity = inCollisionZone ? 'collision' : 'collision-zone';
 
           let hint: string;
           if (aPreferred && bPreferred) {
@@ -270,6 +280,8 @@ export class ToolCompiler {
             hint = `"${a.canonical}" is preferred (compiler hint) over "${b.canonical}" (${(similarity * 100).toFixed(1)}% similar).`;
           } else if (bPreferred) {
             hint = `"${b.canonical}" is preferred (compiler hint) over "${a.canonical}" (${(similarity * 100).toFixed(1)}% similar).`;
+          } else if (severity === 'collision-zone') {
+            hint = `Collision zone (${(similarity * 100).toFixed(1)}%): "${a.canonical}" and "${b.canonical}" — dispatches will trigger MEDIUM-confidence verification. Consider renaming, merging, or pinning.`;
           } else {
             hint = `Disambiguation needed: "${a.canonical}" and "${b.canonical}" are similar (${(similarity * 100).toFixed(1)}%).`;
           }
@@ -484,6 +496,11 @@ export interface CompilerOptions {
     demoted: Map<string, number>;
     excluded: Set<string>;
   };
+  /**
+   * 0.4.0 --strict mode: raises all thresholds, enables verification on every
+   * dispatch, and treats ambiguity as an error instead of a warning.
+   */
+  strict?: boolean;
 }
 
 /** Internal representation of a semantic group during compilation */

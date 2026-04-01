@@ -40,7 +40,7 @@ import {
 
 const MCP_PROTOCOL_VERSION = '2024-11-05';
 const SERVER_NAME = 'smallchat';
-const SERVER_VERSION = '0.3.0';
+const SERVER_VERSION = '0.4.0';
 
 // JSON-RPC error codes
 const PARSE_ERROR = -32700;
@@ -460,7 +460,19 @@ export class MCPServer {
 
     try {
       const result = await this.runtime.dispatch(toolName, args);
-      sendRpcOk(res, id, { content: formatContent(result), isError: result.isError ?? false });
+      const response: Record<string, unknown> = {
+        content: formatContent(result),
+        isError: result.isError ?? false,
+      };
+      // 0.4.0: Surface refinement protocol as a distinct result type
+      if (result.refinement) {
+        response.refinement = result.refinement;
+      }
+      // 0.4.0: Include confidence tier in response metadata
+      if (result.metadata?.tier) {
+        response.confidence = result.metadata.tier;
+      }
+      sendRpcOk(res, id, response);
     } catch (err) {
       sendRpcError(res, id, INTERNAL_ERROR, (err as Error).message);
     }

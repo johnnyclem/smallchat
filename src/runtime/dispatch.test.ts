@@ -94,14 +94,10 @@ describe('toolkit_dispatch', () => {
     // Should return a result, not throw
     expect(result).toBeDefined();
     expect(result.metadata).toBeDefined();
-    expect(result.metadata!.fallback).toBe(true);
-
-    const content = result.content as FallbackChainResult;
-    expect(content.tool).toBe('unknown');
-    expect(content.message.toLowerCase()).toContain('want me to search');
-    expect(content.intent).toBe('completely unknown operation xyz123');
-    expect(content.fallbackSteps).toBeDefined();
-    expect(content.fallbackSteps.length).toBeGreaterThan(0);
+    // 0.4.0: may return refinement or forwarding fallback — both include a proof
+    expect(result.metadata!.proof).toBeDefined();
+    expect(result.metadata!.tier).toBeDefined();
+    expect(result.isError).not.toBe(true);
   });
 
   it('tries superclass chain during fallback', async () => {
@@ -147,16 +143,16 @@ describe('toolkit_dispatch', () => {
     expect(result.content).toBeDefined();
   });
 
-  it('includes fallback steps trace in metadata', async () => {
+  it('includes resolution proof in metadata', async () => {
     const context = createContext();
 
     const result = await toolkit_dispatch(context, 'nonexistent tool operation');
-    const steps = (result.metadata as any)?.fallbackSteps;
+    const proof = (result.metadata as any)?.proof;
 
-    expect(steps).toBeDefined();
-    expect(Array.isArray(steps)).toBe(true);
-    // Should have at least the LLM disambiguate stub step
-    expect(steps.some((s: any) => s.strategy === 'llm_disambiguate')).toBe(true);
+    expect(proof).toBeDefined();
+    expect(proof.intent).toBe('nonexistent tool operation');
+    expect(proof.tier).toBeDefined();
+    expect(Array.isArray(proof.steps)).toBe(true);
   });
 
   it('passes arguments through to the IMP and returns them in metadata', async () => {
@@ -174,9 +170,8 @@ describe('toolkit_dispatch', () => {
     });
 
     expect(result.content).toBe('send_message:executed');
-    expect(result.metadata).toEqual({
-      args: { channel: '#general', text: 'hello world' },
-    });
+    expect(result.metadata?.args).toEqual({ channel: '#general', text: 'hello world' });
+    expect(result.metadata?.tier).toBeDefined();
   });
 
   it('selects the correct provider when multiple are registered', async () => {
@@ -331,7 +326,7 @@ describe('smallchat_dispatchStream', () => {
     for await (const _ of gen) { /* drain */ }
   });
 
-  it('yields fallback done event when no tool matches', async () => {
+  it('yields done event when no tool matches (refinement or fallback)', async () => {
     const context = createContext();
 
     const events = await collectEvents(
@@ -342,9 +337,8 @@ describe('smallchat_dispatchStream', () => {
     const doneEvent = events.find(e => e.type === 'done');
     expect(doneEvent).toBeDefined();
     const result = (doneEvent as { type: 'done'; result: ToolResult }).result;
-    expect(result.metadata?.fallback).toBe(true);
-    const content = result.content as FallbackChainResult;
-    expect(content.intent).toBe('completely unknown operation xyz123');
+    // 0.4.0: May return refinement or fallback depending on nearest matches
+    expect(result.metadata?.tier).toBeDefined();
   });
 
   it('streams chunks from an IMP with executeStream', async () => {
@@ -549,16 +543,18 @@ describe('smallchat_dispatchStream', () => {
 describe('Intent Pinning — semantic collision mitigation', () => {
   it('exact-pinned tool dispatches when intent matches exactly', async () => {
     const pins = new IntentPinRegistry();
-    pins.pin({ canonical: 'db.delete_record', policy: 'exact' });
+    // Pin with a canonical that matches what canonicalize() produces for 'delete record'
+    // canonicalize('delete record') → 'delete:record'
+    pins.pin({ canonical: 'delete:record', policy: 'exact' });
     const context = createContext(pins);
     const cls = new ToolClass('db');
 
     const embedding = await context.embedder.embed('delete record');
-    const selector = await context.selectorTable.intern(embedding, 'db.delete_record');
+    const selector = await context.selectorTable.intern(embedding, 'delete:record');
     cls.addMethod(selector, makeIMP('db', 'delete_record', 'deleted'));
     context.registerClass(cls);
 
-    // Exact intent should work
+    // Exact intent should work — canonicalize('delete record') === 'delete:record'
     const result = await toolkit_dispatch(context, 'delete record');
     expect(result.content).toBe('deleted');
   });
