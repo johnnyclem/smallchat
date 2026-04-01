@@ -1,0 +1,98 @@
+{
+  "$schema": "https://smallchat.dev/schema/registry-entry.json",
+  "id": "postgres",
+  "name": "PostgreSQL",
+  "description": "Read-only database access with schema inspection capabilities",
+  "longDescription": "The PostgreSQL MCP server provides read-only access to PostgreSQL databases. Run SELECT queries, list tables, and inspect schema information. The server enforces read-only mode to prevent accidental data modification.",
+  "version": "1.0.0",
+  "author": "Anthropic",
+  "license": "MIT",
+  "repository": "https://github.com/modelcontextprotocol/servers",
+  "icon": "database",
+  "categories": ["databases"],
+  "tags": ["postgres", "postgresql", "sql", "database", "query"],
+  "install": {
+    "method": "npx",
+    "package": "@modelcontextprotocol/server-postgres",
+    "runtime": "node",
+    "runtimeVersion": ">=18.0.0",
+    "args": [],
+    "configurableArgs": [
+      {
+        "name": "connection-string",
+        "description": "PostgreSQL connection string",
+        "required": true,
+        "placeholder": "postgresql://user:password@localhost:5432/mydb"
+      }
+    ],
+    "alternatives": [
+      {
+        "method": "docker",
+        "package": "mcp/postgres",
+        "runtime": "docker",
+        "configurableArgs": [
+          {
+            "name": "connection-string",
+            "description": "PostgreSQL connection string",
+            "required": true,
+            "placeholder": "postgresql://user:password@host.docker.internal:5432/mydb"
+          }
+        ]
+      }
+    ]
+  },
+  "manifest": {
+    "id": "postgres",
+    "name": "PostgreSQL",
+    "transportType": "mcp",
+    "tools": [
+      {
+        "name": "query",
+        "description": "Run a read-only SQL query against the PostgreSQL database",
+        "providerId": "postgres",
+        "transportType": "mcp",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "sql": { "type": "string", "description": "SQL query to execute (SELECT only)" }
+          },
+          "required": ["sql"]
+        }
+      },
+      {
+        "name": "list_tables",
+        "description": "List all tables in the database with their schemas",
+        "providerId": "postgres",
+        "transportType": "mcp",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "schema": { "type": "string", "description": "Schema name to filter by (default: public)" }
+          }
+        }
+      },
+      {
+        "name": "describe_table",
+        "description": "Get the schema information for a specific table",
+        "providerId": "postgres",
+        "transportType": "mcp",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "tableName": { "type": "string", "description": "Name of the table to describe" }
+          },
+          "required": ["tableName"]
+        }
+      }
+    ]
+  },
+  "defaultHints": {
+    "namespace": "db.postgres",
+    "selectorHint": "PostgreSQL database query and schema inspection tools"
+  },
+  "capabilities": {
+    "resources": true,
+    "prompts": false,
+    "streaming": false
+  }
+}

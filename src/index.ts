@@ -258,3 +258,36 @@ export {
   buildDockerArgs,
   isDockerAvailable,
 } from './transport/index.js';
+
+// Manifest types
+export type {
+  SmallChatManifest,
+  SmallChatPackage,
+  ManifestCompilerConfig,
+  ManifestOutputConfig,
+  PreCompiledProvider,
+} from './core/manifest.js';
+
+// Registry & Bundle types
+export type {
+  RegistryEntry,
+  RegistryIndex,
+  RegistryIndexEntry,
+  SmallChatBundle,
+  BundleServer,
+  ServerInstallConfig,
+  EnvVarSpec,
+  ServerArgSpec,
+  McpServerEntry,
+  InstallMethod,
+  ServerRuntime,
+  InstallTarget,
+  ServerCapabilities,
+  RegistryEntryStats,
+  CategoryDefinition,
+  PrecompiledArtifact,
+  InstallPlan,
+  InstallStep,
+  ConfigWriteStep,
+  PrerequisiteCheck,
+} from './core/registry-types.js';
