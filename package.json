@@ -30,6 +30,10 @@
     "./channel": {
       "types": "./dist/channel/index.d.ts",
       "import": "./dist/channel/index.js"
+    },
+    "./importance": {
+      "types": "./dist/importance/index.d.ts",
+      "import": "./dist/importance/index.js"
     }
   },
   "bin": {
