@@ -209,6 +209,62 @@ export type {
   ArtifactManifest,
 } from './dream/types.js';
 
+// Compaction — multi-level conversation state compaction with formal verification
+export {
+  DefaultCompactor,
+  estimateTokens,
+  estimateConversationTokens,
+  extractEntities,
+  extractDecisions,
+  detectTombstones,
+  DefaultQuizGenerator,
+  DefaultQuizEvaluator,
+  tokenOverlapScore,
+  runRecallTest,
+  correctionPropagation,
+  entityProvenance,
+  decisionCompleteness,
+  tombstoneConsistency,
+  temporalOrdering,
+  BUILTIN_INVARIANTS,
+  checkInvariants,
+  tokenize,
+  shannonEntropy,
+  totalInformationBits,
+  computeEntropyMetrics,
+  computeRateDistortion,
+  measureEntityRetention,
+  analyzeInformationTheoretic,
+  VerificationHarness,
+  DEFAULT_VERIFICATION_CONFIG,
+} from './compaction/index.js';
+export type {
+  CompactedState,
+  CompactionInvariant,
+  CompactionLevel,
+  CompactionVerificationConfig,
+  Compactor,
+  ConversationHistory,
+  ConversationMessage,
+  Decision,
+  EntityCorrection,
+  EntityRetention,
+  EntropyMetrics,
+  ExtractedEntity,
+  InformationTheoreticResult,
+  InvariantCheckResult,
+  InvariantViolation,
+  QuizEvaluator,
+  QuizGenerator,
+  RateDistortionMetrics,
+  RecallAnswer,
+  RecallQuestion,
+  RecallTestResult,
+  Tombstone,
+} from './compaction/index.js';
+// VerificationResult name collides with core/types — export under alias
+export type { VerificationResult as CompactionVerificationResult } from './compaction/index.js';
+
 // Transport Layer — ITransport interface and implementations
 export type {
   ITransport,
