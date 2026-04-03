@@ -209,7 +209,7 @@ export type {
   ArtifactManifest,
 } from './dream/types.js';
 
-// Compaction — multi-level conversation state compaction with formal verification
+// Compaction — re-exported from @shorthand/core
 export {
   DefaultCompactor,
   estimateTokens,
@@ -237,7 +237,7 @@ export {
   analyzeInformationTheoretic,
   VerificationHarness,
   DEFAULT_VERIFICATION_CONFIG,
-} from './compaction/index.js';
+} from '@shorthand/core/compaction';
 export type {
   CompactedState,
   CompactionInvariant,
@@ -261,9 +261,9 @@ export type {
   RecallQuestion,
   RecallTestResult,
   Tombstone,
-} from './compaction/index.js';
+} from '@shorthand/core/compaction';
 // VerificationResult name collides with core/types — export under alias
-export type { VerificationResult as CompactionVerificationResult } from './compaction/index.js';
+export type { VerificationResult as CompactionVerificationResult } from '@shorthand/core/compaction';
 
 // Transport Layer — ITransport interface and implementations
 export type {
@@ -339,7 +339,7 @@ export {
   isDockerAvailable,
 } from './transport/index.js';
 
-// CRDT — Conflict-free Replicated Data Types for multi-agent shared memory
+// CRDT — re-exported from @shorthand/core
 export {
   LamportClock,
   compareLamport,
@@ -355,7 +355,7 @@ export {
   AgentMemory,
   MemoryMerge,
   ConflictDetector,
-} from './crdt/index.js';
+} from '@shorthand/core/crdt';
 export type {
   AgentId,
   LamportTimestamp,
@@ -384,7 +384,7 @@ export type {
   AgentMemoryState,
   SemanticConflict,
   ConflictSeverity,
-} from './crdt/index.js';
+} from '@shorthand/core/crdt';
 
 // Manifest types
 export type {
