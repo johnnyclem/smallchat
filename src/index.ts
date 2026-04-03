@@ -283,6 +283,53 @@ export {
   isDockerAvailable,
 } from './transport/index.js';
 
+// CRDT — Conflict-free Replicated Data Types for multi-agent shared memory
+export {
+  LamportClock,
+  compareLamport,
+  createVectorClock,
+  tickVectorClock,
+  mergeVectorClocks,
+  compareVectorClocks,
+  LWWRegister,
+  ORSet,
+  GSet,
+  defaultMergeFn,
+  RGA,
+  AgentMemory,
+  MemoryMerge,
+  ConflictDetector,
+} from './crdt/index.js';
+export type {
+  AgentId,
+  LamportTimestamp,
+  VectorClock,
+  UniqueTag,
+  CausalMeta,
+  MergeResult,
+  CRDTInterface,
+  LWWEntry,
+  LWWRegisterState,
+  ORSetState,
+  GSetEntry,
+  GSetState,
+  GSetMergeFn,
+  RGANodeId,
+  RGANode,
+  RGAState,
+  MemoryLayer,
+  L4Invariants,
+  L3Entity,
+  L3Edge,
+  L3Graph,
+  L2Summary,
+  L1Context,
+  L0Message,
+  AgentMemoryState,
+  SemanticConflict,
+  ConflictSeverity,
+} from './crdt/index.js';
+
 // Manifest types
 export type {
   SmallChatManifest,
