@@ -1,0 +1,63 @@
+{
+  "name": "@shorthand/core",
+  "version": "0.1.0",
+  "description": "Progressive context compaction for LLMs — LSM-tree-inspired conversation state management",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./compaction": {
+      "types": "./dist/compaction/index.d.ts",
+      "import": "./dist/compaction/index.js"
+    },
+    "./crdt": {
+      "types": "./dist/crdt/index.d.ts",
+      "import": "./dist/crdt/index.js"
+    },
+    "./importance": {
+      "types": "./dist/importance/index.d.ts",
+      "import": "./dist/importance/index.js"
+    },
+    "./embedding": {
+      "types": "./dist/embedding/local-embedder.d.ts",
+      "import": "./dist/embedding/local-embedder.js"
+    }
+  },
+  "files": ["dist", "models", "README.md", "LICENSE", "CHANGELOG.md"],
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "llm", "context-window", "compaction", "crdt", "agent-memory",
+    "importance-detection", "conversation", "token-optimization"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/johnnyclem/shorthand.git"
+  },
+  "author": "Johnny Clem",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.0.0",
+    "onnxruntime-node": "^1.20.0",
+    "sqlite-vec": "^0.1.7"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
