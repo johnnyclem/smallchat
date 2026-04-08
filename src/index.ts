@@ -209,6 +209,81 @@ export type {
   ArtifactManifest,
 } from './dream/types.js';
 
+// Memex — knowledge base compiler
+export {
+  compile as memexCompile,
+  ingest as memexIngest,
+  cosineSimilarity as memexCosineSimilarity,
+  serializeKnowledgeBase,
+  deserializeKnowledgeBase,
+} from './memex/knowledge-compiler.js';
+export type { CompileOptions as MemexCompileOptions } from './memex/knowledge-compiler.js';
+export {
+  resolveQuery as memexResolveQuery,
+  computeTier as memexComputeTier,
+  DEFAULT_KNOWLEDGE_THRESHOLDS,
+} from './memex/resolver.js';
+export type { KnowledgeTierThresholds, ResolverOptions as MemexResolverOptions } from './memex/resolver.js';
+export {
+  lint as memexLint,
+  listLintRules as memexListLintRules,
+} from './memex/lint.js';
+export {
+  loadMemexConfig,
+  saveMemexConfig,
+  DEFAULT_MEMEX_CONFIG,
+  loadKnowledgeSchema,
+  saveKnowledgeSchema,
+  DEFAULT_KNOWLEDGE_SCHEMA,
+} from './memex/config.js';
+export {
+  discoverSources,
+  readSource as readKnowledgeSource,
+  readSources as readKnowledgeSources,
+  inferSourceType,
+  hashFileContents,
+  stripMarkdown,
+} from './memex/source-reader.js';
+export type { SourceContent } from './memex/source-reader.js';
+export {
+  extractKnowledge,
+  extractKnowledgeBatch,
+  mergeKnowledgeIRs,
+  slugify,
+} from './memex/claim-extractor.js';
+export {
+  emitWikiPages,
+  emitWikiIndex,
+  renderIndexMarkdown,
+  renderLogMarkdown,
+} from './memex/wiki-emitter.js';
+export type {
+  SourceType,
+  KnowledgeSource,
+  ExtractedClaim as MemexExtractedClaim,
+  ExtractedEntity as MemexExtractedEntity,
+  ExtractedRelationship,
+  KnowledgeIR,
+  ClaimSelector,
+  WikiPage,
+  WikiIndex,
+  IngestionLogEntry,
+  KnowledgeBase,
+  Contradiction,
+  KnowledgeConfidenceTier,
+  KnowledgeResult,
+  LintSeverity,
+  LintFinding,
+  LintReport,
+  IngestResult,
+  KnowledgeSchema,
+  LintRuleConfig,
+  MemexOutputConfig,
+  MemexCompilerConfig,
+  MemexConfig,
+  MemexCompileResult,
+} from './memex/types.js';
+
 // Compaction — re-exported from @shorthand/core
 export {
   DefaultCompactor,
