@@ -11,6 +11,7 @@ import { docsCommand } from './commands/docs.js';
 import { replCommand } from './commands/repl.js';
 import { channelCommand } from './commands/channel.js';
 import { dreamCommand } from './commands/dream.js';
+import { memexCommand } from './commands/memex.js';
 import { setupCommand } from './commands/setup.js';
 
 const program = new Command();
@@ -33,6 +34,7 @@ program.addCommand(docsCommand);
 program.addCommand(replCommand);
 program.addCommand(channelCommand);
 program.addCommand(dreamCommand);
+program.addCommand(memexCommand);
 program.addCommand(setupCommand);
 
 // Add a getting-started guide to the help output
@@ -53,6 +55,9 @@ Getting Started
 
   5. Start a server:
      $ smallchat serve --source tools.toolkit.json
+
+  6. Compile a knowledge base:
+     $ smallchat memex compile --schema my-domain.schema.json
 
   Run "smallchat <command> --help" for detailed usage of any command.
   Run "smallchat doctor" to check your system health.
