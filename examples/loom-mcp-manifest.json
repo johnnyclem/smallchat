@@ -1,0 +1,620 @@
+{
+  "id": "loom",
+  "name": "Loom MCP",
+  "transportType": "mcp",
+  "description": "AST-aware code-context compiler. Symbol-level retrieval, semantic search, and impact analysis over a local code index. NOTE: Despite the name, this is the muhnehh/loom-mcp code-context server, not the Loom video platform. Tool input schemas below are reasonable best-effort approximations from the published documentation; consult the live MCP server's tools/list for exact field names.",
+  "compilerHints": {
+    "selectorHint": "All tools in this set query a local AST-indexed code workspace for symbols, dependencies, and structural information. They are read-only, code-aware, and operate offline against an indexed repository.",
+    "namespace": "loom"
+  },
+  "tools": [
+    {
+      "name": "loom_get_topology",
+      "description": "Return a skeleton representation of the indexed codebase: directories, files, and top-level symbols.",
+      "providerId": "loom",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "repo": { "type": "string", "description": "Repository identifier (defaults to the active workspace)." },
+          "format": { "type": "string", "enum": ["auto", "compact", "json"], "description": "Wire format. 'auto' switches to compact when ≥15% byte savings are projected." }
+        }
+      },
+      "compilerHints": {
+        "selectorHint": "Bird's-eye structural overview of a codebase.",
+        "aliases": [
+          "show me the project structure",
+          "what's in this codebase",
+          "outline of the repo",
+          "high-level layout of the code"
+        ]
+      }
+    },
+    {
+      "name": "loom_index_folder",
+      "description": "Index a local directory into the Loom workspace, parsing source files with tree-sitter and extracting symbols.",
+      "providerId": "loom",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string", "description": "Absolute or workspace-relative path to index." },
+          "force": { "type": "boolean", "description": "Re-index even if cached." },
+          "format": { "type": "string", "enum": ["auto", "compact", "json"] }
+        },
+        "required": ["path"]
+      },
+      "compilerHints": {
+        "selectorHint": "Build or refresh the symbol index for a directory.",
+        "aliases": [
+          "index this folder",
+          "scan a directory into the code index",
+          "build the symbol database for this repo"
+        ]
+      }
+    },
+    {
+      "name": "loom_list_repos",
+      "description": "Enumerate repositories that have been indexed into the Loom workspace.",
+      "providerId": "loom",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "format": { "type": "string", "enum": ["auto", "compact", "json"] }
+        }
+      },
+      "compilerHints": {
+        "selectorHint": "List indexed repositories.",
+        "aliases": [
+          "what repos are indexed",
+          "show all indexed projects"
+        ]
+      }
+    },
+    {
+      "name": "loom_search_symbols",
+      "description": "Search symbols (functions, classes, methods) by name with fuzzy matching.",
+      "providerId": "loom",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string", "description": "Symbol name or pattern." },
+          "kind": { "type": "string", "description": "Filter by symbol kind (function, class, method, …)." },
+          "limit": { "type": "number" },
+          "format": { "type": "string", "enum": ["auto", "compact", "json"] }
+        },
+        "required": ["query"]
+      },
+      "compilerHints": {
+        "selectorHint": "Find a function or class by name.",
+        "aliases": [
+          "find a function by name",
+          "where is the class defined",
+          "look up a symbol",
+          "search for a method named foo"
+        ]
+      }
+    },
+    {
+      "name": "loom_bm25_search",
+      "description": "Rank documents/symbols using the BM25 algorithm against a free-text query.",
+      "providerId": "loom",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string" },
+          "limit": { "type": "number" },
+          "format": { "type": "string", "enum": ["auto", "compact", "json"] }
+        },
+        "required": ["query"]
+      },
+      "compilerHints": {
+        "selectorHint": "Keyword search ranked by term frequency (BM25).",
+        "aliases": [
+          "keyword search the code",
+          "rank code by relevance to a query"
+        ]
+      }
+    },
+    {
+      "name": "loom_fuzzy_search",
+      "description": "Fuzzy substring/pattern match against symbol names and file paths.",
+      "providerId": "loom",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string" },
+          "limit": { "type": "number" },
+          "format": { "type": "string", "enum": ["auto", "compact", "json"] }
+        },
+        "required": ["query"]
+      },
+      "compilerHints": {
+        "selectorHint": "Loose pattern match on names and paths.",
+        "aliases": [
+          "fuzzy find a file or symbol",
+          "approximate name search"
+        ]
+      }
+    },
+    {
+      "name": "loom_search_text",
+      "description": "Full-text search over indexed source files.",
+      "providerId": "loom",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string" },
+          "limit": { "type": "number" },
+          "format": { "type": "string", "enum": ["auto", "compact", "json"] }
+        },
+        "required": ["query"]
+      },
+      "compilerHints": {
+        "selectorHint": "Grep-style full-text search across the codebase.",
+        "aliases": [
+          "grep the code",
+          "search for a string in source files",
+          "find literal text in code"
+        ]
+      }
+    },
+    {
+      "name": "loom_semantic_search",
+      "description": "Embedding-based semantic search over symbols and code chunks (GPU-accelerated when available).",
+      "providerId": "loom",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string", "description": "Natural-language description of the code to find." },
+          "limit": { "type": "number" },
+          "format": { "type": "string", "enum": ["auto", "compact", "json"] }
+        },
+        "required": ["query"]
+      },
+      "compilerHints": {
+        "selectorHint": "Find code by what it does, not by name.",
+        "aliases": [
+          "semantic search the code",
+          "find code that does X",
+          "where do we handle authentication",
+          "vector search for code"
+        ]
+      }
+    },
+    {
+      "name": "loom_get_symbol",
+      "description": "Fetch the exact source text and location of a named symbol.",
+      "providerId": "loom",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "symbol": { "type": "string", "description": "Fully-qualified symbol name." },
+          "format": { "type": "string", "enum": ["auto", "compact", "json"] }
+        },
+        "required": ["symbol"]
+      },
+      "compilerHints": {
+        "selectorHint": "Get the source code for a single symbol.",
+        "aliases": [
+          "show me the source of this function",
+          "get the implementation of a symbol",
+          "read the body of foo"
+        ]
+      }
+    },
+    {
+      "name": "loom_get_ranked_context",
+      "description": "Assemble the most-relevant code context for a query within a token budget; stops appending when budget is exhausted rather than truncating after the fact.",
+      "providerId": "loom",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string" },
+          "tokenBudget": { "type": "number", "description": "Max tokens to include in the assembled context." },
+          "format": { "type": "string", "enum": ["auto", "compact", "json"] }
+        },
+        "required": ["query"]
+      },
+      "compilerHints": {
+        "selectorHint": "Token-budgeted context bundle for a query.",
+        "aliases": [
+          "give me as much relevant code as fits in N tokens",
+          "build a context bundle for this question",
+          "ranked code context within a budget"
+        ]
+      }
+    },
+    {
+      "name": "loom_focus",
+      "description": "Page in the complete implementation of a symbol or file, expanding from a stub or summary.",
+      "providerId": "loom",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "target": { "type": "string", "description": "Symbol or file to expand." },
+          "format": { "type": "string", "enum": ["auto", "compact", "json"] }
+        },
+        "required": ["target"]
+      },
+      "compilerHints": {
+        "selectorHint": "Expand a symbol or file from summary to full source.",
+        "aliases": [
+          "show me the full implementation",
+          "expand this stub",
+          "load the complete source for this symbol"
+        ]
+      }
+    },
+    {
+      "name": "loom_find_importers",
+      "description": "Reverse-dependency lookup: find every symbol or file that imports/references the target.",
+      "providerId": "loom",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "symbol": { "type": "string" },
+          "format": { "type": "string", "enum": ["auto", "compact", "json"] }
+        },
+        "required": ["symbol"]
+      },
+      "compilerHints": {
+        "selectorHint": "Find callers / importers of a symbol.",
+        "aliases": [
+          "find callers of foo",
+          "who imports this",
+          "where is this function used",
+          "reverse dependency lookup"
+        ]
+      }
+    },
+    {
+      "name": "loom_blast_radius",
+      "description": "Impact analysis: compute the dependency-weighted set of symbols affected by changing a target, with risk scoring.",
+      "providerId": "loom",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "symbol": { "type": "string" },
+          "depth": { "type": "number", "description": "Max traversal depth." },
+          "format": { "type": "string", "enum": ["auto", "compact", "json"] }
+        },
+        "required": ["symbol"]
+      },
+      "compilerHints": {
+        "selectorHint": "What breaks if I change this symbol.",
+        "aliases": [
+          "what would break if I rename this",
+          "impact analysis for a change",
+          "blast radius of a refactor",
+          "what depends on this transitively"
+        ]
+      }
+    },
+    {
+      "name": "loom_find_dead_code",
+      "description": "Identify symbols that are defined but never referenced (unreachable from any entry point).",
+      "providerId": "loom",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "scope": { "type": "string", "description": "Repo or path scope to analyze." },
+          "format": { "type": "string", "enum": ["auto", "compact", "json"] }
+        }
+      },
+      "compilerHints": {
+        "selectorHint": "Find unreachable / unused code.",
+        "aliases": [
+          "show me dead code",
+          "find unused functions",
+          "what's never called"
+        ]
+      }
+    },
+    {
+      "name": "loom_get_class_hierarchy",
+      "description": "Traverse the inheritance graph for a class, including ancestors and descendants.",
+      "providerId": "loom",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "class": { "type": "string" },
+          "direction": { "type": "string", "enum": ["ancestors", "descendants", "both"] },
+          "format": { "type": "string", "enum": ["auto", "compact", "json"] }
+        },
+        "required": ["class"]
+      },
+      "compilerHints": {
+        "selectorHint": "Class inheritance / subclass tree.",
+        "aliases": [
+          "what does this class inherit from",
+          "subclasses of foo",
+          "show the class hierarchy"
+        ]
+      }
+    },
+    {
+      "name": "loom_pagerank_centrality",
+      "description": "Rank symbols by architectural importance using PageRank over the dependency graph.",
+      "providerId": "loom",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "limit": { "type": "number" },
+          "format": { "type": "string", "enum": ["auto", "compact", "json"] }
+        }
+      },
+      "compilerHints": {
+        "selectorHint": "Most architecturally central symbols.",
+        "aliases": [
+          "what are the most important functions",
+          "rank symbols by centrality",
+          "core nodes of the codebase"
+        ]
+      }
+    },
+    {
+      "name": "loom_get_hotspots",
+      "description": "Combine cyclomatic complexity with git churn to identify high-risk hotspots.",
+      "providerId": "loom",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "limit": { "type": "number" },
+          "format": { "type": "string", "enum": ["auto", "compact", "json"] }
+        }
+      },
+      "compilerHints": {
+        "selectorHint": "High-complexity, high-churn code.",
+        "aliases": [
+          "show me the risky code",
+          "where are the hotspots",
+          "files that change a lot and are complex"
+        ]
+      }
+    },
+    {
+      "name": "loom_get_changed_symbols",
+      "description": "Map a git diff onto the symbol graph, returning the set of symbols touched by the change.",
+      "providerId": "loom",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "ref": { "type": "string", "description": "Git ref or range (e.g. 'HEAD~5..HEAD')." },
+          "format": { "type": "string", "enum": ["auto", "compact", "json"] }
+        }
+      },
+      "compilerHints": {
+        "selectorHint": "Symbols changed by a diff.",
+        "aliases": [
+          "what symbols changed in this PR",
+          "diff to symbol mapping",
+          "which functions were modified"
+        ]
+      }
+    },
+    {
+      "name": "loom_get_dependency_cycles",
+      "description": "Detect circular import / dependency cycles in the indexed graph.",
+      "providerId": "loom",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "format": { "type": "string", "enum": ["auto", "compact", "json"] }
+        }
+      },
+      "compilerHints": {
+        "selectorHint": "Circular dependencies in the codebase.",
+        "aliases": [
+          "find import cycles",
+          "where are the circular dependencies",
+          "do we have any dependency loops"
+        ]
+      }
+    },
+    {
+      "name": "loom_remember",
+      "description": "Store a key/value note that persists across MCP sessions for cross-conversation memory.",
+      "providerId": "loom",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "key": { "type": "string" },
+          "value": { "type": "string" }
+        },
+        "required": ["key", "value"]
+      },
+      "compilerHints": {
+        "selectorHint": "Persist a note for a future session.",
+        "aliases": [
+          "remember this for next time",
+          "save a fact for later sessions",
+          "persistent memory note"
+        ]
+      }
+    },
+    {
+      "name": "loom_watch_start",
+      "description": "Start watching the workspace for file changes, debouncing re-index on edits.",
+      "providerId": "loom",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string" },
+          "debounceMs": { "type": "number" }
+        }
+      },
+      "compilerHints": {
+        "selectorHint": "Start filesystem watcher.",
+        "aliases": [
+          "watch for file changes",
+          "auto re-index on save",
+          "start the file watcher"
+        ]
+      }
+    },
+    {
+      "name": "loom_watch_stop",
+      "description": "Stop the workspace file watcher.",
+      "providerId": "loom",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "compilerHints": {
+        "selectorHint": "Stop filesystem watcher.",
+        "aliases": [
+          "stop watching files",
+          "disable auto re-index"
+        ]
+      }
+    },
+    {
+      "name": "loom_audit_agent_config",
+      "description": "Validate agent config files (CLAUDE.md, .cursorrules) against the live symbol index, flagging stale references to renamed or deleted symbols.",
+      "providerId": "loom",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string", "description": "Path to the config file. Defaults to autodetected CLAUDE.md / .cursorrules." },
+          "format": { "type": "string", "enum": ["auto", "compact", "json"] }
+        }
+      },
+      "compilerHints": {
+        "selectorHint": "Find stale symbol references in CLAUDE.md or .cursorrules.",
+        "aliases": [
+          "audit my CLAUDE.md for stale references",
+          "check agent config for deleted symbols",
+          "validate .cursorrules against the codebase"
+        ]
+      }
+    },
+    {
+      "name": "loom_plan_refactoring",
+      "description": "Generate edit-ready instructions for a refactor, including affected symbols, suggested order, and risk assessment.",
+      "providerId": "loom",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "intent": { "type": "string", "description": "Natural-language description of the refactor." },
+          "format": { "type": "string", "enum": ["auto", "compact", "json"] }
+        },
+        "required": ["intent"]
+      },
+      "compilerHints": {
+        "selectorHint": "Plan a refactor as a sequence of edits.",
+        "aliases": [
+          "plan a refactor for me",
+          "how should I rename this across the codebase",
+          "generate refactoring steps"
+        ]
+      }
+    },
+    {
+      "name": "loom_get_symbol_provenance",
+      "description": "Trace the git history of a symbol: every commit that touched it, classified by change type (creation, bugfix, refactor, feature, perf, rename, revert).",
+      "providerId": "loom",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "symbol": { "type": "string" },
+          "format": { "type": "string", "enum": ["auto", "compact", "json"] }
+        },
+        "required": ["symbol"]
+      },
+      "compilerHints": {
+        "selectorHint": "Git history of a single symbol with change classification.",
+        "aliases": [
+          "history of this function",
+          "blame this symbol",
+          "how did this code evolve",
+          "git archaeology for foo"
+        ]
+      }
+    },
+    {
+      "name": "loom_get_metrics",
+      "description": "Return session statistics including tool call counts, token savings, and active focus budget.",
+      "providerId": "loom",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "format": { "type": "string", "enum": ["auto", "compact", "json"] }
+        }
+      },
+      "compilerHints": {
+        "selectorHint": "Session telemetry from the Loom MCP server.",
+        "aliases": [
+          "show loom session stats",
+          "how many tokens have I saved",
+          "loom metrics"
+        ]
+      }
+    },
+    {
+      "name": "loom_get_deps",
+      "description": "Return the dependency graph for a target symbol, file, or the whole repo.",
+      "providerId": "loom",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "target": { "type": "string", "description": "Symbol, file, or '*' for the full graph." },
+          "format": { "type": "string", "enum": ["auto", "compact", "json"] }
+        }
+      },
+      "compilerHints": {
+        "selectorHint": "Outbound dependencies of a target.",
+        "aliases": [
+          "what does this depend on",
+          "show the dependency graph",
+          "outbound imports of a file"
+        ]
+      }
+    },
+    {
+      "name": "loom_workspace_stats",
+      "description": "Return SQLite analytics about the indexed workspace: symbol counts, language distribution, file counts.",
+      "providerId": "loom",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "format": { "type": "string", "enum": ["auto", "compact", "json"] }
+        }
+      },
+      "compilerHints": {
+        "selectorHint": "Aggregate stats over the indexed workspace.",
+        "aliases": [
+          "workspace statistics",
+          "how big is this codebase",
+          "language breakdown of the index"
+        ]
+      }
+    }
+  ]
+}
