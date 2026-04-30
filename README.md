@@ -88,16 +88,20 @@ for await (const token of runtime.inferenceStream('find flights', { to: 'NYC' })
 }
 ```
 
-## What's New in 0.2.0
+## What's New in 0.5.0
 
-- **Claude Code channel protocol** — Bidirectional integration with Claude Code
-- **Security hardening** — Intent pinning, selector namespacing, semantic rate limiting, container sandboxing
-- **Worker thread embeddings** — Non-blocking ONNX inference and SQLite vector search
-- **SQLite artifact persistence** — Durable compiled artifact storage
-- **Fluent SDK API** — Chainable `runtime.intent().withArgs().exec()` with full TypeScript inference
-- **New CLI commands** — `init`, `docs`, `repl` for project scaffolding, documentation, and interactive exploration
-- **Satellite packages** — `@smallchat/react`, `@smallchat/nextjs`, `@smallchat/testing`, VS Code extension, Playground UI
-- **274+ test specs** — Comprehensive Gherkin-style coverage across all modules
+- **LoomMCP integration guide** — Compile [LoomMCP](https://muhnehh.github.io/loom-mcp/)'s 17 MCP tools through smallchat for semantic dispatch on top of exact-symbol retrieval. See the [LoomMCP integration page](./packages/docs/docs/integrations/loom-mcp.md).
+- **Synchronized package versions** — Every workspace package is now aligned at 0.5.0.
+- **Refreshed runtime version metadata** — MCP server, channel server, MCP client, REPL banner, and compiled artifacts now report 0.5.0.
+
+Plus everything from 0.4.0:
+
+- **Confidence-tiered dispatch** — Every dispatch returns EXACT/HIGH/MEDIUM/LOW/NONE and branches accordingly
+- **Resolution proof** — Serializable trace documenting why a tool was chosen
+- **Pre-flight verification** — `respondsToSelector:` gate between resolution and execution
+- **Intent decomposition** — `doesNotUnderstand:` handler breaks complex intents into sub-intents
+- **Refinement protocol** — `forwardInvocation:` dialogue for NONE-confidence dispatches
+- **Observation & adaptation** — KVO-inspired observer adapts thresholds in real time
 
 See the full [Changelog](./CHANGELOG.md) for details.
 
@@ -142,6 +146,7 @@ See the [Architecture doc](./ARCHITECTURE.md) for the full design and the [Refer
 | [Reference](./docs/REFERENCE.md) | Runtime, dispatch, streaming, MCP server, CLI details |
 | [Concept Mapping](./docs/REFERENCE.md#concept-mapping) | Smalltalk/Obj-C → smallchat translation table |
 | [Migration Guide](./MIGRATION.md) | Upgrading from 0.1.0 to 0.2.0 |
+| [LoomMCP integration](./packages/docs/docs/integrations/loom-mcp.md) | Pair smallchat with LoomMCP for semantic dispatch over symbol-level retrieval |
 | [Changelog](./CHANGELOG.md) | Release history |
 
 ## Development

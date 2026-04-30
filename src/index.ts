@@ -1,5 +1,5 @@
 // ToolKit — A Message-Passing Tool Compiler
-// v0.4.0 — "Tool Selection Errors: Solved"
+// v0.5.0 — "Tool Selection Errors: Solved"
 
 // Core types
 export type {

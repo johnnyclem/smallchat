@@ -71,6 +71,11 @@ const config: Config = {
           position: 'left',
         },
         {
+          to: '/docs/integrations',
+          label: 'Integrations',
+          position: 'left',
+        },
+        {
           to: '/docs/getting-started',
           label: 'Get Started',
           position: 'right',
@@ -103,6 +108,13 @@ const config: Config = {
             { label: 'CLI Reference', to: '/docs/cli' },
             { label: 'API Reference', to: '/docs/api/runtime' },
             { label: 'Architecture', to: '/docs/architecture' },
+          ],
+        },
+        {
+          title: 'Integrations',
+          items: [
+            { label: 'Overview', to: '/docs/integrations' },
+            { label: 'LoomMCP', to: '/docs/integrations/loom-mcp' },
           ],
         },
         {

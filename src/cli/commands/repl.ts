@@ -72,7 +72,7 @@ export const replCommand = new Command('repl')
     const selectorCount = Object.keys(data.selectors).length;
     const providerCount = Object.keys(data.dispatchTables).length;
 
-    console.log(`smallchat repl v0.3.0`);
+    console.log(`smallchat repl v0.5.0`);
     console.log(`Loaded ${selectorCount} selectors from ${providerCount} providers`);
     console.log(`Type an intent to resolve, or :help for commands.\n`);
 

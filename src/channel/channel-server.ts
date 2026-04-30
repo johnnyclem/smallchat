@@ -279,7 +279,7 @@ export class ChannelServer extends EventEmitter {
       capabilities,
       serverInfo: {
         name: `smallchat-channel-${this.config.channelName}`,
-        version: '0.3.0',
+        version: '0.5.0',
       },
       ...(this.config.instructions
         ? { instructions: this.config.instructions }

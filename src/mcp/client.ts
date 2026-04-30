@@ -248,7 +248,7 @@ export async function introspectMcpServer(
         params: {
           protocolVersion: '2024-11-05',
           capabilities: {},
-          clientInfo: { name: 'smallchat', version: '0.3.0' },
+          clientInfo: { name: 'smallchat', version: '0.5.0' },
         },
       }) + '\n',
     );
