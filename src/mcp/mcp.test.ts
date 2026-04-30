@@ -395,6 +395,184 @@ describe('tools/list', () => {
     const res = await send(router, 'tools/list', {}, 2, sid);
     expect(typeof (res!.result as Record<string, unknown>).snapshot).toBe('string');
   });
+
+  // ---------------------------------------------------------------------------
+  // Compact wire format (TOON-inspired)
+  // ---------------------------------------------------------------------------
+
+  // Build a payload large enough that auto-negotiation will choose compact.
+  const largeTools: McpTool[] = Array.from({ length: 12 }, (_, i) => ({
+    id: `loom:tool-${i}`,
+    name: `tool_${i}`,
+    title: `Tool ${i}`,
+    description: `Tool number ${i} with a deliberately verbose description so packed rows save bytes`,
+    inputSchema: { type: 'object' },
+  }));
+
+  it('omits compact envelope by default (format absent)', async () => {
+    const { router } = makeRouter({ tools: largeTools });
+    const sid = await init(router);
+    const res = await send(router, 'tools/list', {}, 2, sid);
+    const result = res!.result as Record<string, unknown>;
+    expect(result.__sc_wire).toBeUndefined();
+    expect(Array.isArray(result.tools)).toBe(true);
+  });
+
+  it('returns a wrapped envelope when format="compact"', async () => {
+    const { router } = makeRouter({ tools: largeTools });
+    const sid = await init(router);
+    const res = await send(router, 'tools/list', { format: 'compact' }, 2, sid);
+    const result = res!.result as Record<string, unknown>;
+    expect(result.__sc_wire).toBe(1);
+    expect(result.data).toBeDefined();
+  });
+
+  it('decoded compact response equals JSON response', async () => {
+    const { router } = makeRouter({ tools: largeTools });
+    const sid = await init(router);
+
+    const jsonRes = await send(router, 'tools/list', {}, 2, sid);
+    const compactRes = await send(router, 'tools/list', { format: 'compact' }, 3, sid);
+
+    const { unwrap } = await import('./wire-format.js');
+    const decoded = unwrap(compactRes!.result as never);
+    expect(decoded).toEqual(jsonRes!.result);
+  });
+
+  it('format="auto" picks compact for a large tools/list and saves >=15% bytes', async () => {
+    const { router } = makeRouter({ tools: largeTools });
+    const sid = await init(router);
+
+    const jsonRes = await send(router, 'tools/list', { format: 'json' }, 2, sid);
+    const autoRes = await send(router, 'tools/list', { format: 'auto' }, 3, sid);
+
+    const result = autoRes!.result as Record<string, unknown>;
+    expect(result.__sc_wire).toBe(1);
+
+    const jsonBytes = Buffer.byteLength(JSON.stringify(jsonRes!.result), 'utf8');
+    const autoBytes = Buffer.byteLength(JSON.stringify(autoRes!.result), 'utf8');
+    const savings = (jsonBytes - autoBytes) / jsonBytes;
+    expect(savings).toBeGreaterThanOrEqual(0.15);
+  });
+
+  it('format="auto" stays JSON for an empty tools list', async () => {
+    const { router } = makeRouter();
+    const sid = await init(router);
+    const res = await send(router, 'tools/list', { format: 'auto' }, 2, sid);
+    const result = res!.result as Record<string, unknown>;
+    expect(result.__sc_wire).toBeUndefined();
+    expect(result.tools).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// tools/listRanked — token-budgeted, BM25-ranked tool slice
+// ---------------------------------------------------------------------------
+
+describe('tools/listRanked', () => {
+  const rankingTools: McpTool[] = [
+    {
+      id: 'loom:search_symbols',
+      name: 'loom_search_symbols',
+      title: 'Search symbols',
+      description: 'Search symbols by name in the indexed code workspace',
+      inputSchema: { type: 'object' },
+    },
+    {
+      id: 'loom:find_dead_code',
+      name: 'loom_find_dead_code',
+      title: 'Find dead code',
+      description: 'Identify unreachable symbols in the codebase',
+      inputSchema: { type: 'object' },
+    },
+    {
+      id: 'loom:remember',
+      name: 'loom_remember',
+      title: 'Remember',
+      description: 'Store a fact for later sessions',
+      inputSchema: { type: 'object' },
+    },
+  ];
+
+  it('rejects a missing query', async () => {
+    const { router } = makeRouter({ tools: rankingTools });
+    const sid = await init(router);
+    const res = await send(router, 'tools/listRanked', { tokenBudget: 100 }, 2, sid);
+    expect(res?.error?.code).toBe(MCP_ERROR.INVALID_PARAMS);
+  });
+
+  it('rejects a non-positive tokenBudget', async () => {
+    const { router } = makeRouter({ tools: rankingTools });
+    const sid = await init(router);
+    const res = await send(router, 'tools/listRanked', { query: 'x', tokenBudget: 0 }, 2, sid);
+    expect(res?.error?.code).toBe(MCP_ERROR.INVALID_PARAMS);
+  });
+
+  it('returns highest-scoring tool when budget only fits one', async () => {
+    const { router } = makeRouter({ tools: rankingTools });
+    const sid = await init(router);
+    // Pick a budget tight enough to keep just one or two tools.
+    const res = await send(
+      router,
+      'tools/listRanked',
+      { query: 'find a symbol by name in the code', tokenBudget: 60 },
+      2,
+      sid,
+    );
+    const result = res!.result as Record<string, unknown>;
+    const tools = result.tools as Array<{ id: string }>;
+    expect(tools.length).toBeGreaterThanOrEqual(1);
+    expect(tools[0].id).toBe('loom:search_symbols');
+    expect(['budget', 'candidates']).toContain(result.exhausted);
+  });
+
+  it('reports excluded tools when the budget is exhausted', async () => {
+    const { router } = makeRouter({ tools: rankingTools });
+    const sid = await init(router);
+    const res = await send(
+      router,
+      'tools/listRanked',
+      { query: 'symbol code', tokenBudget: 50 },
+      2,
+      sid,
+    );
+    const result = res!.result as Record<string, unknown>;
+    const excluded = result.excluded as Array<{ id: string }>;
+    if (result.exhausted === 'budget') {
+      expect(excluded.length).toBeGreaterThan(0);
+    }
+    expect(typeof result.totalTokens).toBe('number');
+    expect(result.totalTokens).toBeLessThanOrEqual(50);
+  });
+
+  it('honours format="compact"', async () => {
+    const { router } = makeRouter({ tools: rankingTools });
+    const sid = await init(router);
+    const res = await send(
+      router,
+      'tools/listRanked',
+      { query: 'symbol', tokenBudget: 1000, format: 'compact' },
+      2,
+      sid,
+    );
+    const result = res!.result as Record<string, unknown>;
+    expect(result.__sc_wire).toBe(1);
+  });
+
+  it('exhausted="candidates" when budget exceeds the registry size', async () => {
+    const { router } = makeRouter({ tools: rankingTools });
+    const sid = await init(router);
+    const res = await send(
+      router,
+      'tools/listRanked',
+      { query: 'symbol', tokenBudget: 100_000 },
+      2,
+      sid,
+    );
+    const result = res!.result as Record<string, unknown>;
+    expect(result.exhausted).toBe('candidates');
+    expect((result.tools as unknown[]).length).toBe(rankingTools.length);
+  });
 });
 
 // ---------------------------------------------------------------------------

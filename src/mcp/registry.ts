@@ -80,6 +80,14 @@ export class Registry<T extends { id: string }> {
     return this.items.size;
   }
 
+  /**
+   * Return every registered item without pagination. Used by ranked-listing
+   * paths that need to score across the full set before slicing.
+   */
+  all(): T[] {
+    return Array.from(this.items.values());
+  }
+
   onChange(cb: () => void): void {
     this.listeners.push(cb);
   }

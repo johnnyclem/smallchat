@@ -17,6 +17,12 @@ import {
 import type { SessionManager } from './session.js';
 import type { ToolRegistry, ResourceRegistry, PromptRegistry } from './registry.js';
 import type { SseBroker } from './sse-broker.js';
+import { negotiate, parseFormatParam, type Json } from './wire-format.js';
+import {
+  assembleWithinBudget,
+  scoreByQuery,
+  type ToolDescriptor,
+} from '../runtime/budgeted-assembly.js';
 
 export class McpRouter {
   constructor(
@@ -65,6 +71,8 @@ export class McpRouter {
           return this.handleShutdown(id, req.params ?? {}, sessionId);
         case 'tools/list':
           return this.handleToolsList(id, req.params ?? {}, sessionId);
+        case 'tools/listRanked':
+          return this.handleToolsListRanked(id, req.params ?? {}, sessionId);
         case 'tools/call':
           return this.handleToolsCall(id, req.params ?? {}, sessionId);
         case 'resources/list':
@@ -215,17 +223,78 @@ export class McpRouter {
 
     try {
       const result = this.tools.list(cursor, rawLimit);
-      return rpcOk(id, {
-        tools: result.items,
-        nextCursor: result.nextCursor,
-        snapshot: result.snapshot,
-      });
+      return rpcOk(
+        id,
+        applyWireFormat(params, {
+          tools: result.items as unknown as Json,
+          nextCursor: result.nextCursor ?? null,
+          snapshot: result.snapshot,
+        }),
+      );
     } catch (err) {
       if (isCursorError(err)) {
         return rpcError(id, err.code, err.message, err.data);
       }
       throw err;
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // tools/listRanked — TOON-inspired token-budgeted slice of the tool registry,
+  // ranked by BM25 against `query`. Returns only the tools that fit within
+  // `tokenBudget` so callers can stream a single context bundle of bounded
+  // size instead of fetching all tools and truncating.
+  // ---------------------------------------------------------------------------
+
+  private handleToolsListRanked(
+    id: string | number | null,
+    params: Record<string, unknown>,
+    sessionId: string | null,
+  ): JsonRpcResponse {
+    const session = this.requireSession(id, sessionId);
+    if (isErrorResponse(session)) return session;
+
+    const query = params.query;
+    if (typeof query !== 'string' || query.length === 0) {
+      return rpcError(id, MCP_ERROR.INVALID_PARAMS, 'query must be a non-empty string');
+    }
+
+    const rawBudget = params.tokenBudget;
+    if (
+      typeof rawBudget !== 'number' ||
+      !Number.isFinite(rawBudget) ||
+      rawBudget <= 0
+    ) {
+      return rpcError(
+        id,
+        MCP_ERROR.INVALID_PARAMS,
+        'tokenBudget must be a positive number',
+      );
+    }
+
+    const all = this.tools.all();
+    const descriptors: ToolDescriptor[] = all.map((t) => ({
+      id: t.id,
+      name: t.name,
+      providerId: idToProviderId(t.id),
+      description: t.description,
+      inputSchema: t.inputSchema,
+    }));
+
+    const ranked = scoreByQuery(descriptors, query);
+    const result = assembleWithinBudget(ranked, rawBudget);
+
+    return rpcOk(
+      id,
+      applyWireFormat(params, {
+        tools: result.included as unknown as Json,
+        excluded: result.excluded.map((d) => ({ id: d.id })) as unknown as Json,
+        totalTokens: result.totalTokens,
+        tokenBudget: result.tokenBudget,
+        exhausted: result.exhausted,
+        snapshot: this.tools.snapshot(),
+      }),
+    );
   }
 
   // ---------------------------------------------------------------------------
@@ -296,11 +365,14 @@ export class McpRouter {
 
     try {
       const result = this.resources.list(cursor, rawLimit);
-      return rpcOk(id, {
-        resources: result.items,
-        nextCursor: result.nextCursor,
-        snapshot: result.snapshot,
-      });
+      return rpcOk(
+        id,
+        applyWireFormat(params, {
+          resources: result.items as unknown as Json,
+          nextCursor: result.nextCursor ?? null,
+          snapshot: result.snapshot,
+        }),
+      );
     } catch (err) {
       if (isCursorError(err)) {
         return rpcError(id, err.code, err.message, err.data);
@@ -384,11 +456,14 @@ export class McpRouter {
 
     try {
       const result = this.prompts.list(cursor, rawLimit);
-      return rpcOk(id, {
-        prompts: result.items,
-        nextCursor: result.nextCursor,
-        snapshot: result.snapshot,
-      });
+      return rpcOk(
+        id,
+        applyWireFormat(params, {
+          prompts: result.items as unknown as Json,
+          nextCursor: result.nextCursor ?? null,
+          snapshot: result.snapshot,
+        }),
+      );
     } catch (err) {
       if (isCursorError(err)) {
         return rpcError(id, err.code, err.message, err.data);
@@ -593,6 +668,32 @@ function rpcError(
 
 function safeMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Honour an optional `format: "auto" | "compact" | "json"` parameter on list
+ * methods, returning either the original payload (no envelope) or a wrapped
+ * compact envelope. Defaults to JSON for clients that don't opt in.
+ */
+function applyWireFormat(
+  params: Record<string, unknown>,
+  payload: Record<string, Json>,
+): Json {
+  const format = parseFormatParam(params);
+  return negotiate(format, payload).payload;
+}
+
+/**
+ * Best-effort extraction of a provider id from a tool's stable id.
+ * smallchat's compiled artifact uses `providerId.toolName` form; the live
+ * `McpTool` type doesn't carry a provider field separately, so we split.
+ */
+function idToProviderId(id: string): string {
+  const sepIdx = id.indexOf(':');
+  if (sepIdx > 0) return id.slice(0, sepIdx);
+  const dotIdx = id.indexOf('.');
+  if (dotIdx > 0) return id.slice(0, dotIdx);
+  return 'unknown';
 }
 
 interface CursorErrorShape {
