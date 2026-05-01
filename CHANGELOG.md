@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-04-30
+
+### Added
+- **LoomMCP integration guide** — New documentation page covering [LoomMCP](https://muhnehh.github.io/loom-mcp/), an MCP server that pairs naturally with smallchat: LoomMCP indexes codebases for exact-symbol retrieval (~97% token reduction) and smallchat dispatches its 17 MCP tools semantically, so an agent can hand smallchat a natural-language intent like "find all callers of loginUser" and have it route into the right loom_* tool with the right arguments.
+- **Synchronized package versions** — All workspace packages (`@smallchat/core`, `@smallchat/react`, `@smallchat/nextjs`, `@smallchat/testing`, `@smallchat/playground`, `@smallchat/docs`, `@smallchat/examples`, `smallchat-vscode`) are now aligned at 0.5.0. Previous releases left the satellite packages at 0.3.0 while the core moved to 0.4.0.
+
+### Changed
+- **MCP server version** — `serverVersion` default in `MCPServer` and the version reported by the channel server, MCP client `clientInfo`, REPL banner, and compiled artifact metadata all bumped to 0.5.0.
+- **Compiled artifact format version** — Artifact `version` field bumped from `0.3.0` to `0.5.0`. Existing 0.3.0/0.4.0 artifacts continue to load; recompile to refresh metadata.
+
+### Documentation
+- New `Integrations / LoomMCP` page in the Docusaurus site explaining how to compile LoomMCP's tools through smallchat.
+- README "What's New" section refreshed to point at the 0.5.0 release notes.
+
 ## [0.4.0] - 2026-04-01
 
 ### Added

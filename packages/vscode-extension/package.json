@@ -2,7 +2,7 @@
   "name": "smallchat-vscode",
   "displayName": "smallchat",
   "description": "Syntax highlighting and intellisense for smallchat manifest files",
-  "version": "0.3.0",
+  "version": "0.5.0",
   "publisher": "smallchat",
   "engines": {
     "vscode": "^1.85.0"

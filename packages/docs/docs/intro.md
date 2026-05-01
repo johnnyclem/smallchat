@@ -53,7 +53,7 @@ If you have not, the model is still straightforward: tools are grouped into clas
 npm install @smallchat/core
 ```
 
-Package: `@smallchat/core` — version `0.1.0`
+Package: `@smallchat/core` — version `0.5.0`
 
 </TabItem>
 <TabItem value="swift" label="Swift">

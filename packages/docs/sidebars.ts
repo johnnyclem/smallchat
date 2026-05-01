@@ -36,6 +36,11 @@ const sidebars: SidebarsConfig = {
       label: 'Manifests',
       items: ['manifests/format', 'manifests/examples'],
     },
+    {
+      type: 'category',
+      label: 'Integrations',
+      items: ['integrations/index', 'integrations/loom-mcp'],
+    },
     'architecture',
   ],
 };
