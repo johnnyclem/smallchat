@@ -29,7 +29,14 @@ const config: Config = {
           sidebarPath: './sidebars.ts',
           editUrl: 'https://github.com/johnnyclem/smallchat/tree/main/packages/docs/',
         },
-        blog: false,
+        blog: {
+          path: 'blog',
+          routeBasePath: 'blog',
+          showReadingTime: true,
+          blogTitle: 'smallchat blog',
+          blogDescription: 'Releases, design notes, and integration deep dives.',
+          editUrl: 'https://github.com/johnnyclem/smallchat/tree/main/packages/docs/',
+        },
         theme: {
           customCss: './src/css/custom.css',
         },
@@ -73,6 +80,11 @@ const config: Config = {
         {
           to: '/docs/integrations',
           label: 'Integrations',
+          position: 'left',
+        },
+        {
+          to: '/blog',
+          label: 'Blog',
           position: 'left',
         },
         {
@@ -120,6 +132,10 @@ const config: Config = {
         {
           title: 'Community',
           items: [
+            {
+              label: 'Blog',
+              to: '/blog',
+            },
             {
               label: 'Source Code',
               href: 'https://github.com/johnnyclem/smallchat',
