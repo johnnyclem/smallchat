@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node -e \"const i=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));const c=(i.tool_input&&i.tool_input.command)||'';const prefixes=['git ','cargo ','npm ','npx ','pnpm ','yarn ','pytest','go test','go build','grep ','find ','ls ','eslint','tsc','docker ','kubectl '];const needs=prefixes.some(p=>c.trimStart().startsWith(p));if(needs&&!c.includes('rtk ')){i.tool_input.command='rtk '+c.trimStart();}process.stdout.write(JSON.stringify(i));\""
+          }
+        ]
+      }
+    ]
+  }
+}

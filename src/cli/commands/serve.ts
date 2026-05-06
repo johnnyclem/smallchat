@@ -26,6 +26,10 @@ export const serveCommand = new Command('serve')
   .option('--rate-limit-rpm <number>', 'Max requests per minute', '600')
   .option('--audit', 'Enable audit logging', false)
   .option('--session-ttl <hours>', 'Session TTL in hours', '24')
+  .option('--rtk', 'Enable RTK output compression (reduces LLM token usage 60-90%)', false)
+  .option('--rtk-path <path>', 'Path to rtk binary (default: resolved from PATH)')
+  .option('--rtk-filter-level <level>', 'RTK filter aggressiveness: default | aggressive', 'default')
+  .option('--rtk-threshold <bytes>', 'Minimum content size in bytes before RTK filters', '512')
   .action(async (options) => {
     const sourcePath = resolve(options.source);
     const port = parseInt(options.port, 10);
@@ -43,6 +47,14 @@ export const serveCommand = new Command('serve')
       rateLimitRPM: parseInt(options.rateLimitRpm, 10),
       enableAudit: options.audit,
       sessionTTLMs: parseFloat(options.sessionTtl) * 60 * 60 * 1000,
+      ...(options.rtk && {
+        rtkConfig: {
+          enabled: true,
+          binaryPath: options.rtkPath,
+          filterLevel: options.rtkFilterLevel as 'default' | 'aggressive',
+          filterThresholdBytes: parseInt(options.rtkThreshold, 10),
+        },
+      }),
     };
 
     const server = new MCPServer(config);
