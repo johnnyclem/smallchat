@@ -33,6 +33,8 @@ import {
   formatContent,
   type SerializedArtifact,
 } from './artifact.js';
+import { filterContentWithRtk } from '../transport/rtk-transport.js';
+import type { RtkConfig } from '../transport/types.js';
 
 // ---------------------------------------------------------------------------
 // Protocol constants
@@ -72,6 +74,16 @@ export interface MCPServerConfig {
   enableAudit?: boolean;
   /** Session TTL in milliseconds (default: 24h) */
   sessionTTLMs?: number;
+  /**
+   * RTK (Rust Token Killer) output compression config.
+   *
+   * When set, tool call results are filtered through the RTK binary before
+   * being returned to the MCP client, reducing token consumption by 60–90%
+   * for common dev command outputs.
+   *
+   * Requires rtk to be installed: https://github.com/johnnyclem-rdc/rtk
+   */
+  rtkConfig?: RtkConfig;
 }
 
 // ---------------------------------------------------------------------------
@@ -148,6 +160,11 @@ export class MCPServer {
 
     console.log(`  ${artifact.stats.toolCount} tools across ${artifact.stats.providerCount} providers`);
     console.log(`  ${this.sessionStore.count()} active sessions`);
+    if (this.config.rtkConfig?.enabled !== false && this.config.rtkConfig) {
+      const level = this.config.rtkConfig.filterLevel ?? 'default';
+      const threshold = this.config.rtkConfig.filterThresholdBytes ?? 512;
+      console.log(`  RTK compression enabled (level=${level}, threshold=${threshold}B)`);
+    }
 
     this.server = createServer((req, res) => this.handleRequest(req, res));
 
@@ -460,8 +477,21 @@ export class MCPServer {
 
     try {
       const result = await this.runtime.dispatch(toolName, args);
+      let formattedContent = formatContent(result);
+
+      if (this.config.rtkConfig && this.config.rtkConfig.enabled !== false && !result.isError) {
+        const contentStr = typeof formattedContent === 'string'
+          ? formattedContent
+          : JSON.stringify(formattedContent);
+        const { compressed, savedPct, enabled } = await filterContentWithRtk(contentStr, this.config.rtkConfig);
+        if (enabled) {
+          formattedContent = compressed;
+          result.metadata = { ...result.metadata, rtkSavedPct: savedPct };
+        }
+      }
+
       const response: Record<string, unknown> = {
-        content: formatContent(result),
+        content: formattedContent,
         isError: result.isError ?? false,
       };
       // 0.4.0: Surface refinement protocol as a distinct result type
@@ -471,6 +501,9 @@ export class MCPServer {
       // 0.4.0: Include confidence tier in response metadata
       if (result.metadata?.tier) {
         response.confidence = result.metadata.tier;
+      }
+      if (result.metadata?.rtkSavedPct !== undefined) {
+        response.rtkSavedPct = result.metadata.rtkSavedPct;
       }
       sendRpcOk(res, id, response);
     } catch (err) {
