@@ -94,6 +94,33 @@ export interface McpClientCapabilities {
 // Registry item types
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// MCP Apps Extension types (io.modelcontextprotocol/ui, spec 2026-01-26)
+// ---------------------------------------------------------------------------
+
+/** UI resource metadata declared by MCP Apps tool authors */
+export interface McpUiToolMeta {
+  /** The ui:// resource URI for this tool's interactive view */
+  resourceUri: string;
+  /**
+   * Which audiences may invoke this view.
+   * "model" = AI only, "app" = UI only, both = unrestricted (default).
+   */
+  visibility?: Array<'model' | 'app'>;
+}
+
+/** CSP and permission metadata for a ui:// resource */
+export interface McpUiResourceMeta {
+  /** External domains the view may connect to (connect-src CSP) */
+  allowedDomains?: string[];
+  /** Browser capabilities the view requests */
+  permissions?: Array<'camera' | 'microphone' | 'geolocation' | 'clipboard-write'>;
+  /** Dedicated origin for OAuth callbacks or API allowlists */
+  domain?: string;
+  /** Visual hint: render with border/background (true) or borderless (false) */
+  prefersBorder?: boolean;
+}
+
 export interface McpTool {
   id: string;
   name: string;
@@ -103,6 +130,8 @@ export interface McpTool {
   outputSchema?: Record<string, unknown>;
   tags?: string[];
   version?: string;
+  /** MCP Apps metadata — present when this tool has an interactive view */
+  _meta?: { ui?: McpUiToolMeta };
 }
 
 export interface McpResource {

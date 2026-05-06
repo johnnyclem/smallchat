@@ -22,6 +22,7 @@ import { createSignature, param, SCType } from '../core/sc-types.js';
 import type { SCTypeDescriptor, SCParameterSlot } from '../core/sc-types.js';
 import { parseMCPManifest, applyManifestOverrides, type ParsedTool } from './parser.js';
 import type { SmallChatManifest } from '../core/manifest.js';
+import { AppCompiler } from '../app/app-compiler.js';
 
 /**
  * ToolCompiler — the build-time tool that produces dispatch tables,
@@ -38,6 +39,8 @@ export class ToolCompiler {
   private collisionThreshold: number;
   private generateSemanticOverloads: boolean;
   private semanticOverloadThreshold: number;
+  private compileApps: boolean;
+  private appVectorIndex: VectorIndex | undefined;
 
   constructor(
     embedder: Embedder,
@@ -49,6 +52,8 @@ export class ToolCompiler {
     this.collisionThreshold = options?.collisionThreshold ?? 0.89;
     this.generateSemanticOverloads = options?.generateSemanticOverloads ?? false;
     this.semanticOverloadThreshold = options?.semanticOverloadThreshold ?? 0.82;
+    this.compileApps = options?.compileApps ?? true;
+    this.appVectorIndex = options?.appVectorIndex;
     this.selectorTable = new SelectorTable(
       vectorIndex,
       embedder,
@@ -296,6 +301,19 @@ export class ToolCompiler {
       }
     }
 
+    // Phase 2.5: COMPILE APPS — optional AppCompiler pass
+    // Runs after LINK so all tool IMPs already carry their uiUri field.
+    // Auto-enabled when any tools declare uiResourceUri; suppressible via compileApps: false.
+    const toolsWithUI = allTools.filter(t => t.uiResourceUri);
+    let appArtifact: CompilationResult['appArtifact'];
+
+    if (this.compileApps && toolsWithUI.length > 0) {
+      const appIndex = this.appVectorIndex ?? this.vectorIndex;
+      const appCompiler = new AppCompiler(this.embedder, appIndex);
+      const appResult = await appCompiler.compile(manifests);
+      appArtifact = appResult.appArtifact;
+    }
+
     return {
       selectors: new Map(allSelectors.map(s => [s.canonical, s])),
       dispatchTables,
@@ -306,6 +324,7 @@ export class ToolCompiler {
       collisions,
       overloadTables,
       semanticOverloads,
+      appArtifact,
     };
   }
 
@@ -501,6 +520,14 @@ export interface CompilerOptions {
    * dispatch, and treats ambiguity as an error instead of a warning.
    */
   strict?: boolean;
+  /**
+   * MCP Apps: run AppCompiler after the tool LINK phase to compile UI components.
+   * Defaults to true when any tools declare uiResourceUri; set to false to skip.
+   * The resulting AppArtifact is stored in CompilationResult.appArtifact.
+   */
+  compileApps?: boolean;
+  /** VectorIndex for the AppCompiler (separate from tool vector space) */
+  appVectorIndex?: VectorIndex;
 }
 
 /** Internal representation of a semantic group during compilation */

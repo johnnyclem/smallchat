@@ -26,6 +26,10 @@ export interface ParsedTool {
   compilerHints?: CompilerHint;
   /** Provider-level hints (carried for reference during compilation) */
   providerHints?: ProviderCompilerHints;
+  /** MCP Apps ui:// resource URI from _meta.ui.resourceUri */
+  uiResourceUri?: string;
+  /** MCP Apps visibility from _meta.ui.visibility */
+  uiVisibility?: Array<'model' | 'app'>;
 }
 
 /** Parse an MCP-style manifest into ToolKit IR */
@@ -45,6 +49,9 @@ export function parseMCPManifest(manifest: ProviderManifest): ParsedTool[] {
       transportType: manifest.transportType,
       compilerHints: mergedHints,
       providerHints: manifest.compilerHints,
+      // MCP Apps: extract ui:// resource metadata from _meta.ui (spec 2026-01-26)
+      uiResourceUri: tool.uiResourceUri,
+      uiVisibility: tool.uiVisibility,
     };
   });
 }

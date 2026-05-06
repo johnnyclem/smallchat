@@ -17,6 +17,7 @@ import {
 import type { SessionManager } from './session.js';
 import type { ToolRegistry, ResourceRegistry, PromptRegistry } from './registry.js';
 import type { SseBroker } from './sse-broker.js';
+import type { UIResourceRegistry } from './ui-resources.js';
 import { negotiate, parseFormatParam, type Json } from './wire-format.js';
 import {
   assembleWithinBudget,
@@ -32,6 +33,7 @@ export class McpRouter {
     private readonly prompts: PromptRegistry,
     private readonly broker: SseBroker,
     private readonly opts: RouterOptions,
+    private readonly uiResources?: UIResourceRegistry,
   ) {}
 
   /**
@@ -385,26 +387,46 @@ export class McpRouter {
   // resources/read
   // ---------------------------------------------------------------------------
 
-  private handleResourcesRead(
+  private async handleResourcesRead(
     id: string | number | null,
     params: Record<string, unknown>,
     sessionId: string | null,
-  ): JsonRpcResponse {
+  ): Promise<JsonRpcResponse> {
     const session = this.requireSession(id, sessionId);
     if (isErrorResponse(session)) return session;
 
     const resourceId = params.resourceId as string | undefined;
-    if (!resourceId || typeof resourceId !== 'string') {
-      return rpcError(id, MCP_ERROR.INVALID_PARAMS, 'resourceId is required');
+    const uri = params.uri as string | undefined;
+    const target = uri ?? resourceId;
+
+    if (!target || typeof target !== 'string') {
+      return rpcError(id, MCP_ERROR.INVALID_PARAMS, 'resourceId or uri is required');
     }
 
-    const resource = this.resources.get(resourceId);
+    // MCP Apps: ui:// URIs are served by the UIResourceRegistry
+    if (target.startsWith('ui://') && this.uiResources?.isUIUri(target)) {
+      const content = await this.uiResources.read(target);
+      if (!content) {
+        return rpcError(id, MCP_ERROR.RESOURCE_NOT_FOUND, `UI resource not found: ${target}`);
+      }
+      return rpcOk(id, {
+        uri: target,
+        contents: [{
+          uri: content.uri,
+          mimeType: content.mimeType,
+          text: content.text,
+        }],
+      });
+    }
+
+    // Standard resource lookup by ID
+    const resource = this.resources.get(target);
     if (!resource) {
-      return rpcError(id, MCP_ERROR.RESOURCE_NOT_FOUND, `Resource not found: ${resourceId}`);
+      return rpcError(id, MCP_ERROR.RESOURCE_NOT_FOUND, `Resource not found: ${target}`);
     }
 
     return rpcOk(id, {
-      resourceId,
+      resourceId: target,
       content: {
         mimeType: resource.mimeType ?? 'application/octet-stream',
         data: '',
