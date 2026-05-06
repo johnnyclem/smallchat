@@ -78,6 +78,7 @@
     "vitest": "^3.0.0"
   },
   "dependencies": {
+    "@modelcontextprotocol/ext-apps": "^1.7.1",
     "@shorthand/core": "file:./shorthand",
     "better-sqlite3": "^11.0.0",
     "commander": "^13.0.0",

@@ -121,6 +121,10 @@ export interface ToolIMP {
   execute(args: Record<string, unknown>): Promise<ToolResult>;
   /** Argument type constraints */
   constraints: ArgumentConstraints;
+  /** Optional MCP Apps ui:// resource URI — present when this tool has an interactive view */
+  uiUri?: string;
+  /** Visibility for the UI resource: which audiences can invoke it */
+  uiVisibility?: Array<'model' | 'app'>;
 }
 
 // ---------------------------------------------------------------------------
@@ -255,13 +259,51 @@ export interface DispatchEventInferenceDelta {
   tokenIndex: number;
 }
 
+// ---------------------------------------------------------------------------
+// App/UI streaming events — MCP Apps Extension lifecycle events
+// ---------------------------------------------------------------------------
+
+/** Tool has an associated ui:// resource; host should prepare the iframe */
+export interface DispatchEventUIAvailable {
+  type: 'ui-available';
+  componentUri: string;
+  capabilities: string[];
+  confidence: number;
+  /** Which audiences can access this view ("model" | "app") */
+  visibility: string[];
+}
+
+/** AppBridge connect() completed — view is initialized and ready */
+export interface DispatchEventUIReady {
+  type: 'ui-ready';
+  displayMode: 'inline' | 'fullscreen' | 'pip';
+}
+
+/** Tool result delivered to the view via ui/notifications/tool-result */
+export interface DispatchEventUIUpdate {
+  type: 'ui-update';
+  data: unknown;
+}
+
+/** View fired a tool call or message back through the host */
+export interface DispatchEventUIInteraction {
+  type: 'ui-interaction';
+  event: string;
+  sourceToolName: string;
+  payload: unknown;
+}
+
 export type DispatchEvent =
   | DispatchEventResolving
   | DispatchEventToolStart
   | DispatchEventChunk
   | DispatchEventInferenceDelta
   | DispatchEventDone
-  | DispatchEventError;
+  | DispatchEventError
+  | DispatchEventUIAvailable
+  | DispatchEventUIReady
+  | DispatchEventUIUpdate
+  | DispatchEventUIInteraction;
 
 // ---------------------------------------------------------------------------
 // Compiler hints — vendor-supplied directives that steer semantic mapping
@@ -367,6 +409,10 @@ export interface ToolDefinition {
   transportType: TransportType;
   /** Optional compiler hints that steer semantic mapping for this tool */
   compilerHints?: CompilerHint;
+  /** MCP Apps ui:// resource URI declared in _meta.ui.resourceUri */
+  uiResourceUri?: string;
+  /** MCP Apps visibility — which audiences can invoke the view */
+  uiVisibility?: Array<'model' | 'app'>;
 }
 
 export interface ProviderManifest {
@@ -406,6 +452,8 @@ export interface CompilationResult {
   overloadTables: Map<string, OverloadTableData>;
   /** Diagnostic info about compiler-generated semantic overloads */
   semanticOverloads: SemanticOverloadGroup[];
+  /** Compiled app/UI artifact — present when any tools declare uiResourceUri */
+  appArtifact?: AppArtifact;
 }
 
 /** Serializable representation of an overload table (for compilation output) */
@@ -483,6 +531,148 @@ export type InvalidationEvent =
   | { type: 'flush' }
   | { type: 'provider'; providerId: string }
   | { type: 'selector'; selector: ToolSelector }
-  | { type: 'stale'; reason: 'provider-version' | 'model-version' | 'schema-change'; key: string };
+  | { type: 'stale'; reason: 'provider-version' | 'model-version' | 'schema-change'; key: string }
+  | { type: 'ui-resource'; uri: string };
 
 export type InvalidationHook = (event: InvalidationEvent) => void;
+
+// ---------------------------------------------------------------------------
+// MCP Apps Extension — App/UI types (io.modelcontextprotocol/ui, spec 2026-01-26)
+//
+// Maps the Obj-C object model onto interactive UI component dispatch:
+//   ComponentSelector  → SEL  (semantic fingerprint of a UI intent)
+//   AppIMP             → IMP  (ui:// URI + capabilities; the "display method pointer")
+//   AppClass           → Class (component dispatch table per provider)
+//   AppProtocol        → Protocol (UI capability interface, e.g. ChartProtocol)
+//   AppExtension       → Category (adds component types to an existing AppProtocol)
+//   AppCompilerHint    → __attribute__ / NS_SWIFT_NAME (steers component compilation)
+// ---------------------------------------------------------------------------
+
+/**
+ * ComponentSelector — SEL equivalent for UI dispatch.
+ * Identical shape to ToolSelector; kept separate so tool and component
+ * intent spaces remain distinct (separate VectorIndex instances).
+ */
+export interface ComponentSelector {
+  vector: Float32Array;
+  canonical: string;
+  parts: string[];
+  arity: number;
+}
+
+/**
+ * AppIMP — IMP equivalent for UI components.
+ * Everything needed to mount an MCP Apps view.
+ */
+export interface AppIMP {
+  /** Provider that owns this component */
+  providerId: string;
+  /** Tool name this view is associated with */
+  toolName: string;
+  /** The ui:// resource URI, e.g. "ui://weather/view.html" */
+  componentUri: string;
+  /** MCP Apps MIME type */
+  mimeType: 'text/html;profile=mcp-app';
+  /** Semantic capability tags, e.g. ["chart", "interactive", "resizable"] */
+  capabilities: string[];
+  /**
+   * Which audiences can invoke this view.
+   * "model" = AI only, "app" = UI only, both = unrestricted.
+   */
+  visibility: Array<'model' | 'app'>;
+  /** CSP metadata from McpUiResourceMeta */
+  csp?: { allowedDomains?: string[] };
+  /** Preferred initial display mode */
+  preferredDisplayMode?: 'inline' | 'fullscreen' | 'pip';
+  /** Check whether this component handles a given capability tag */
+  supportsCapability(cap: string): boolean;
+}
+
+/** AppMethod = ComponentSelector + AppIMP (mirrors ToolMethod) */
+export interface AppMethod {
+  selector: ComponentSelector;
+  imp: AppIMP;
+}
+
+/**
+ * AppProtocol — Protocol equivalent for UI capability interfaces.
+ * e.g. ChartProtocol requires render(data) + zoom() + pan() components.
+ */
+export interface AppProtocol {
+  name: string;
+  embedding: Float32Array;
+  requiredComponents: ComponentSelector[];
+  optionalComponents: ComponentSelector[];
+}
+
+/**
+ * AppExtension — Category equivalent.
+ * Adds new component types to an existing AppProtocol without modifying
+ * the base AppClass. e.g. a "Maps" extension adds geo-view to DataVizProtocol.
+ */
+export interface AppExtension {
+  name: string;
+  extendsProtocol: string;
+  methods: AppMethod[];
+}
+
+/**
+ * AppCompilerHint — build-time directive that steers component compilation.
+ * Analogous to CompilerHint for tools.
+ */
+export interface AppCompilerHint {
+  /** Semantic steering text appended to the component description during embedding */
+  componentHint?: string;
+  /** Pin to a specific canonical component selector, bypassing vector interning */
+  pinComponent?: string;
+  /** Additional UI intent phrases: "show as chart", "visualize data" */
+  componentAliases?: string[];
+  /** Pre-fetch the ui:// HTML on runtime mount (hot-path hint) */
+  preload?: boolean;
+  /** Preferred display mode hint */
+  displayModePreference?: 'inline' | 'fullscreen' | 'pip';
+}
+
+/**
+ * AppArtifact — the compiled output of AppCompiler.
+ * Stored in CompilationResult.appArtifact when any tools declare uiResourceUri.
+ */
+export interface AppArtifact {
+  /** AppClass dispatch tables keyed by providerId */
+  appClasses: Map<string, SerializedAppClass>;
+  /** ComponentSelector table — canonical → serialized selector */
+  componentSelectors: Map<string, SerializedComponentSelector>;
+  /** Total number of compiled UI components */
+  componentCount: number;
+  /** ISO timestamp of compilation */
+  compiledAt: string;
+}
+
+/** Wire-format representation of an AppClass (JSON-serializable) */
+export interface SerializedAppClass {
+  providerId: string;
+  name: string;
+  /** canonical → AppIMP */
+  componentDispatchTable: Record<string, SerializedAppIMP>;
+  superclassName?: string;
+  protocolNames: string[];
+}
+
+/** Wire-format representation of an AppIMP */
+export interface SerializedAppIMP {
+  providerId: string;
+  toolName: string;
+  componentUri: string;
+  capabilities: string[];
+  visibility: string[];
+  csp?: { allowedDomains?: string[] };
+  preferredDisplayMode?: string;
+}
+
+/** Wire-format representation of a ComponentSelector */
+export interface SerializedComponentSelector {
+  canonical: string;
+  parts: string[];
+  arity: number;
+  vector: number[];   // Float32Array serialized as plain number[]
+}

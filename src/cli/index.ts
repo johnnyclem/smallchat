@@ -13,6 +13,7 @@ import { channelCommand } from './commands/channel.js';
 import { dreamCommand } from './commands/dream.js';
 import { memexCommand } from './commands/memex.js';
 import { setupCommand } from './commands/setup.js';
+import { appCommand } from './commands/app.js';
 
 const program = new Command();
 
@@ -26,6 +27,7 @@ program.showSuggestionAfterError(true);
 
 program.addCommand(initCommand);
 program.addCommand(compileCommand);
+program.addCommand(appCommand);
 program.addCommand(inspectCommand);
 program.addCommand(resolveCommand);
 program.addCommand(serveCommand);
