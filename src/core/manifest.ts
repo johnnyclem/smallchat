@@ -32,6 +32,45 @@
 import type { CompilerHint, ProviderCompilerHints } from './types.js';
 
 // ---------------------------------------------------------------------------
+// RTK project config — smallchat.json "rtk" block
+// ---------------------------------------------------------------------------
+
+/**
+ * RtkProjectConfig — RTK integration settings for a smallchat project.
+ *
+ * Add a "rtk" block to your smallchat.json to enable RTK output compression
+ * project-wide. Per-provider and per-tool overrides allow fine-grained control.
+ *
+ * Example smallchat.json:
+ * ```json
+ * {
+ *   "rtk": {
+ *     "enabled": true,
+ *     "filterLevel": "aggressive",
+ *     "providers": { "github": false },
+ *     "tools": { "rtk.rtk_gain": false }
+ *   }
+ * }
+ * ```
+ */
+export interface RtkProjectConfig {
+  /** Enable RTK integration for all tool dispatches in this project */
+  enabled: boolean;
+  /** Absolute or PATH-relative path to the RTK binary (default: "rtk") */
+  binaryPath?: string;
+  /** Minimum content size in bytes before RTK filters (default: 512) */
+  filterThresholdBytes?: number;
+  /** Filter aggressiveness: 'default' | 'aggressive' */
+  filterLevel?: 'default' | 'aggressive';
+  /** RTK subprocess timeout in ms (default: 5000) */
+  timeoutMs?: number;
+  /** Per-provider overrides: { providerId: enabled } */
+  providers?: Record<string, boolean>;
+  /** Per-tool overrides: { "providerId.toolName": enabled } */
+  tools?: Record<string, boolean>;
+}
+
+// ---------------------------------------------------------------------------
 // Project manifest — smallchat.json
 // ---------------------------------------------------------------------------
 
@@ -90,6 +129,17 @@ export interface SmallChatManifest {
    * e.g. { "github.search_code": { "priority": 1.5, "aliases": ["find code"] } }
    */
   toolHints?: Record<string, CompilerHint>;
+
+  /**
+   * RTK (Rust Token Killer) integration configuration.
+   *
+   * When present and enabled, tool dispatch results are compressed through the
+   * RTK binary before being returned to the LLM client, reducing token usage
+   * by 60–90% for common dev command outputs (git, cargo, npm, etc.).
+   *
+   * Requires the rtk binary to be installed: https://github.com/johnnyclem-rdc/rtk
+   */
+  rtk?: RtkProjectConfig;
 }
 
 export interface ManifestCompilerConfig {

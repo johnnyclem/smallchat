@@ -120,6 +120,19 @@ export interface TransportMetadata {
   attempt?: number;
   /** Circuit breaker state at time of call */
   circuitState?: 'closed' | 'open' | 'half-open';
+  /** RTK compression metadata — present when RtkTransport is in use */
+  rtk?: {
+    /** Whether RTK compression was applied */
+    enabled: boolean;
+    /** Original content size in bytes */
+    inputBytes: number;
+    /** Compressed content size in bytes */
+    outputBytes: number;
+    /** Percentage of tokens saved (0–100) */
+    savedPct: number;
+    /** Which compression mode was applied */
+    mode: 'prefix' | 'filter' | 'none';
+  };
   /** Any additional provider-specific data */
   [key: string]: unknown;
 }
@@ -283,6 +296,35 @@ export interface CircuitBreakerConfig {
   resetTimeoutMs?: number;
   /** Number of successful calls in half-open state to close the circuit (default: 1) */
   successThreshold?: number;
+}
+
+// ---------------------------------------------------------------------------
+// RTK (Rust Token Killer) integration types
+// ---------------------------------------------------------------------------
+
+/**
+ * RtkConfig — configuration for the RTK output compression integration.
+ *
+ * RTK (https://github.com/johnnyclem-rdc/rtk) is a CLI proxy that reduces
+ * LLM token consumption by 60–90% by filtering/compressing shell command
+ * outputs before they reach the LLM context window.
+ */
+export interface RtkConfig {
+  /** Absolute path to the rtk binary (default: resolved from PATH) */
+  binaryPath?: string;
+  /** Minimum content size in bytes before RTK filtering is applied (default: 512) */
+  filterThresholdBytes?: number;
+  /** Filter aggressiveness: 'default' | 'aggressive' (default: 'default') */
+  filterLevel?: 'default' | 'aggressive';
+  /** Timeout for RTK subprocess in milliseconds (default: 5000) */
+  timeoutMs?: number;
+  /** Disable RTK even when the config object is present (default: true) */
+  enabled?: boolean;
+}
+
+export interface RtkTransportConfig extends RtkConfig {
+  /** The inner transport to wrap */
+  inner: ITransport;
 }
 
 // ---------------------------------------------------------------------------

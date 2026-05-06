@@ -1,0 +1,308 @@
+{
+  "id": "rtk",
+  "name": "RTK (Rust Token Killer)",
+  "transportType": "local",
+  "version": "1.0.0",
+  "compilerHints": {
+    "namespace": "rtk",
+    "selectorHint": "All tools in this provider run shell commands through the RTK token-compression proxy, reducing LLM context usage by 60-90%."
+  },
+  "tools": [
+    {
+      "name": "rtk_git_status",
+      "description": "Show the working tree status, compressing the output to eliminate noise before returning to the LLM. Equivalent to 'git status' but with 60-90% fewer tokens.",
+      "providerId": "rtk",
+      "transportType": "local",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "cwd": { "type": "string", "description": "Working directory to run git status in (default: current directory)" },
+          "short": { "type": "boolean", "description": "Use short format output" }
+        }
+      },
+      "compilerHints": {
+        "selectorHint": "git repository status working tree changes staged unstaged",
+        "aliases": ["git status", "show git status", "what changed in git", "check git status", "repo status"]
+      }
+    },
+    {
+      "name": "rtk_git_diff",
+      "description": "Show changes between commits, commit and working tree, etc., with RTK token compression. Equivalent to 'git diff' but returns a compressed diff that preserves all signal while eliminating boilerplate.",
+      "providerId": "rtk",
+      "transportType": "local",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "ref": { "type": "string", "description": "Commit ref, branch, or range (e.g. HEAD~1, main..feature)" },
+          "file": { "type": "string", "description": "Limit diff to a specific file or path" },
+          "staged": { "type": "boolean", "description": "Show staged (cached) diff only" },
+          "cwd": { "type": "string", "description": "Working directory" }
+        }
+      },
+      "compilerHints": {
+        "selectorHint": "git diff changes patch lines added removed",
+        "aliases": ["git diff", "show diff", "what are the changes", "show changes", "diff HEAD"]
+      }
+    },
+    {
+      "name": "rtk_git_log",
+      "description": "Show the commit log with RTK compression to summarize history without token bloat. Equivalent to 'git log' but compressed.",
+      "providerId": "rtk",
+      "transportType": "local",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "ref": { "type": "string", "description": "Branch or commit ref to start from" },
+          "n": { "type": "number", "description": "Number of commits to show (default: 10)" },
+          "oneline": { "type": "boolean", "description": "Use one-line format per commit" },
+          "cwd": { "type": "string", "description": "Working directory" }
+        }
+      },
+      "compilerHints": {
+        "selectorHint": "git log history commits messages authors",
+        "aliases": ["git log", "show commit history", "recent commits", "commit log"]
+      }
+    },
+    {
+      "name": "rtk_cargo_test",
+      "description": "Run Cargo tests with RTK compression — reduces test output from thousands of tokens to a concise summary of passes, failures, and error details.",
+      "providerId": "rtk",
+      "transportType": "local",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "filter": { "type": "string", "description": "Test name filter (passed to cargo test)" },
+          "package": { "type": "string", "description": "Package to test (cargo -p flag)" },
+          "release": { "type": "boolean", "description": "Build in release mode" },
+          "cwd": { "type": "string", "description": "Working directory" }
+        }
+      },
+      "compilerHints": {
+        "selectorHint": "rust cargo tests unit integration run test suite",
+        "aliases": ["cargo test", "run rust tests", "run tests", "test rust", "cargo tests"]
+      }
+    },
+    {
+      "name": "rtk_cargo_build",
+      "description": "Build a Rust project with Cargo, with RTK compression to surface only errors and warnings without noise.",
+      "providerId": "rtk",
+      "transportType": "local",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "release": { "type": "boolean", "description": "Build in release mode" },
+          "package": { "type": "string", "description": "Package to build (cargo -p flag)" },
+          "cwd": { "type": "string", "description": "Working directory" }
+        }
+      },
+      "compilerHints": {
+        "selectorHint": "rust cargo build compile binary",
+        "aliases": ["cargo build", "build rust", "compile rust", "build the project"]
+      }
+    },
+    {
+      "name": "rtk_cargo_clippy",
+      "description": "Run Clippy (Rust linter) with RTK compression — surfaces only actionable lint warnings and errors, not verbose pass messages.",
+      "providerId": "rtk",
+      "transportType": "local",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "fix": { "type": "boolean", "description": "Automatically apply suggested fixes" },
+          "cwd": { "type": "string", "description": "Working directory" }
+        }
+      },
+      "compilerHints": {
+        "selectorHint": "rust clippy lint static analysis warnings",
+        "aliases": ["cargo clippy", "run clippy", "lint rust", "rust lint"]
+      }
+    },
+    {
+      "name": "rtk_npm_test",
+      "description": "Run npm test (Jest, Vitest, Mocha, etc.) with RTK compression — reduces test output to passing count and full failure details only.",
+      "providerId": "rtk",
+      "transportType": "local",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "script": { "type": "string", "description": "npm script to run (default: test)", "default": "test" },
+          "filter": { "type": "string", "description": "Test name filter pattern" },
+          "cwd": { "type": "string", "description": "Working directory" }
+        }
+      },
+      "compilerHints": {
+        "selectorHint": "npm node javascript typescript jest vitest mocha tests",
+        "aliases": ["npm test", "run npm tests", "run javascript tests", "vitest", "jest", "run tests"]
+      }
+    },
+    {
+      "name": "rtk_npm_install",
+      "description": "Run npm install with RTK compression — suppresses verbose dependency tree output and returns only warnings, errors, and the install summary.",
+      "providerId": "rtk",
+      "transportType": "local",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "package": { "type": "string", "description": "Package to install (omit for npm install)" },
+          "dev": { "type": "boolean", "description": "Install as devDependency" },
+          "cwd": { "type": "string", "description": "Working directory" }
+        }
+      },
+      "compilerHints": {
+        "selectorHint": "npm install dependencies packages node_modules",
+        "aliases": ["npm install", "install npm packages", "install dependencies", "npm i"]
+      }
+    },
+    {
+      "name": "rtk_pytest",
+      "description": "Run Python pytest tests with RTK compression — returns only failed test names, errors, and the summary line. Suppresses verbose passing output.",
+      "providerId": "rtk",
+      "transportType": "local",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string", "description": "Test file or directory path (default: current dir)" },
+          "filter": { "type": "string", "description": "Test name filter (-k flag)" },
+          "verbose": { "type": "boolean", "description": "Include verbose output" },
+          "cwd": { "type": "string", "description": "Working directory" }
+        }
+      },
+      "compilerHints": {
+        "selectorHint": "python pytest tests unit integration",
+        "aliases": ["pytest", "run python tests", "python tests", "run pytest"]
+      }
+    },
+    {
+      "name": "rtk_go_test",
+      "description": "Run Go tests with RTK compression — returns only failures and the final summary. Suppresses verbose PASS lines.",
+      "providerId": "rtk",
+      "transportType": "local",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "package": { "type": "string", "description": "Package path to test (default: ./...)" },
+          "run": { "type": "string", "description": "Test name regex filter (-run flag)" },
+          "cwd": { "type": "string", "description": "Working directory" }
+        }
+      },
+      "compilerHints": {
+        "selectorHint": "go golang tests unit testing",
+        "aliases": ["go test", "run go tests", "golang tests"]
+      }
+    },
+    {
+      "name": "rtk_eslint",
+      "description": "Run ESLint with RTK compression — returns only errors and warnings, grouped by file, with counts. Suppresses passing file messages.",
+      "providerId": "rtk",
+      "transportType": "local",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string", "description": "File or directory to lint (default: .)" },
+          "fix": { "type": "boolean", "description": "Automatically fix fixable issues" },
+          "ext": { "type": "string", "description": "File extensions to check (e.g. .ts,.tsx)" },
+          "cwd": { "type": "string", "description": "Working directory" }
+        }
+      },
+      "compilerHints": {
+        "selectorHint": "eslint javascript typescript lint code quality",
+        "aliases": ["eslint", "run eslint", "lint javascript", "lint typescript", "js lint"]
+      }
+    },
+    {
+      "name": "rtk_tsc",
+      "description": "Run TypeScript compiler (tsc) with RTK compression — returns only type errors, deduplicated and grouped by file.",
+      "providerId": "rtk",
+      "transportType": "local",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "noEmit": { "type": "boolean", "description": "Type-check only, no output files (default: true)", "default": true },
+          "project": { "type": "string", "description": "Path to tsconfig.json" },
+          "cwd": { "type": "string", "description": "Working directory" }
+        }
+      },
+      "compilerHints": {
+        "selectorHint": "typescript tsc type check compile errors",
+        "aliases": ["tsc", "typescript check", "type check", "run tsc", "check types"]
+      }
+    },
+    {
+      "name": "rtk_grep",
+      "description": "Search for patterns in files with RTK compression — deduplicates results, groups by file, and truncates excessive matches intelligently.",
+      "providerId": "rtk",
+      "transportType": "local",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "pattern": { "type": "string", "description": "Search pattern (regex or literal)" },
+          "path": { "type": "string", "description": "File or directory to search (default: .)" },
+          "recursive": { "type": "boolean", "description": "Search recursively (-r flag)" },
+          "ignoreCase": { "type": "boolean", "description": "Case-insensitive search (-i flag)" },
+          "cwd": { "type": "string", "description": "Working directory" }
+        },
+        "required": ["pattern"]
+      },
+      "compilerHints": {
+        "selectorHint": "grep search find text pattern files",
+        "aliases": ["grep", "search files", "find in files", "text search", "search for pattern"]
+      }
+    },
+    {
+      "name": "rtk_find",
+      "description": "Find files matching criteria with RTK compression — groups results by directory and truncates very large result sets to the most relevant matches.",
+      "providerId": "rtk",
+      "transportType": "local",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string", "description": "Root directory to search (default: .)" },
+          "name": { "type": "string", "description": "Filename pattern (e.g. '*.ts')" },
+          "type": { "type": "string", "description": "File type: f (file), d (directory), l (symlink)" },
+          "maxdepth": { "type": "number", "description": "Maximum directory depth" },
+          "cwd": { "type": "string", "description": "Working directory" }
+        }
+      },
+      "compilerHints": {
+        "selectorHint": "find files directories filesystem search locate",
+        "aliases": ["find files", "search directory", "locate files", "find command"]
+      }
+    },
+    {
+      "name": "rtk_ls",
+      "description": "List directory contents with RTK compression — groups files by type, sorts by recency, and deduplicates when listing multiple directories.",
+      "providerId": "rtk",
+      "transportType": "local",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string", "description": "Directory to list (default: current directory)" },
+          "all": { "type": "boolean", "description": "Include hidden files (-a flag)" },
+          "long": { "type": "boolean", "description": "Long format with details (-l flag)" },
+          "cwd": { "type": "string", "description": "Working directory" }
+        }
+      },
+      "compilerHints": {
+        "selectorHint": "list files directory contents ls",
+        "aliases": ["ls", "list files", "list directory", "show files", "what files are here"]
+      }
+    },
+    {
+      "name": "rtk_gain",
+      "description": "Show RTK token savings analytics dashboard — displays total commands processed, input/output token counts, per-command savings breakdown, and historical trends.",
+      "providerId": "rtk",
+      "transportType": "local",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "json": { "type": "boolean", "description": "Output as JSON instead of formatted table" }
+        }
+      },
+      "compilerHints": {
+        "selectorHint": "rtk analytics token savings statistics dashboard metrics",
+        "aliases": ["rtk gain", "token savings", "show savings", "rtk stats", "compression analytics"],
+        "priority": 0.8
+      }
+    }
+  ]
+}

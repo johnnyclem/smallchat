@@ -13,6 +13,7 @@ import { channelCommand } from './commands/channel.js';
 import { dreamCommand } from './commands/dream.js';
 import { memexCommand } from './commands/memex.js';
 import { setupCommand } from './commands/setup.js';
+import { rtkCommand } from './commands/rtk.js';
 
 const program = new Command();
 
@@ -36,6 +37,7 @@ program.addCommand(channelCommand);
 program.addCommand(dreamCommand);
 program.addCommand(memexCommand);
 program.addCommand(setupCommand);
+program.addCommand(rtkCommand);
 
 // Add a getting-started guide to the help output
 program.addHelpText('after', `
@@ -58,6 +60,10 @@ Getting Started
 
   6. Compile a knowledge base:
      $ smallchat memex compile --schema my-domain.schema.json
+
+  7. Reduce LLM token usage with RTK compression:
+     $ smallchat rtk setup
+     $ smallchat serve --source tools.toolkit.json --rtk
 
   Run "smallchat <command> --help" for detailed usage of any command.
   Run "smallchat doctor" to check your system health.
