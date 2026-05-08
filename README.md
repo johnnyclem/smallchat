@@ -1,6 +1,6 @@
 # smallchat
 
-> Object-oriented inference. A tool compiler for the age of agents.
+> Semantic tool dispatch. The agent knows what to do — smallchat figures out which tool does it.
 
 [smallchat.dev](https://smallchat.dev)
 
@@ -10,11 +10,28 @@ Your agent has 50 tools. The LLM sees all 50 in its context window every single 
 
 **smallchat compiles your tools into a dispatch table.** The LLM expresses intent. The runtime resolves it — semantically, deterministically, in microseconds. No prompt stuffing. No selection lottery.
 
+> **Dispatch, not retrieval.** smallchat is not a knowledge engine or a RAG layer — it doesn't compile documents or answer questions. It compiles *which tool to call* from a natural-language intent. The data substrate is your agent's tool registry (`.toolkit.json`), not enterprise documents.
+
 ```bash
 npx @smallchat/core compile --source ~/.mcp.json
 ```
 
 One command. Point it at your MCP config, a directory of manifests, or any MCP server repo. Out comes a compiled artifact with embedded vectors, dispatch tables, and resolution caching — ready to serve.
+
+## Where smallchat fits
+
+An agent in production needs two things: **what it knows** and **what it can do**. These are solved at different layers.
+
+| Layer | Problem | Example |
+|-------|---------|---------|
+| Knowledge layer | Pre-compile documents and data into governed, answer-shaped artifacts. Reduces tokens by moving retrieval upstream from inference time. | RAG pipelines, enterprise knowledge engines |
+| **Dispatch layer** | **Pre-compile which tool to call from a natural-language intent. Reduces tokens by moving tool-selection upstream from inference time.** | **smallchat** |
+
+smallchat runs **in the agent process** — no SaaS dependency, no external round-trip. Your tool registry lives with your agent.
+
+An agent backed by any knowledge engine still has to decide whether to run a query, post to Slack, or write a file. That decision is exactly what smallchat handles. The two layers compose cleanly:
+
+> **Use your knowledge engine for what the agent knows. Use smallchat for what the agent does.**
 
 ## Quick Start
 
