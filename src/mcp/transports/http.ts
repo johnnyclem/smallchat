@@ -19,7 +19,20 @@ import { MCP_PROTOCOL_VERSIONS } from '../types.js';
 export interface HttpTransportOptions {
   serverName: string;
   serverVersion: string;
+  /**
+   * Access-Control-Allow-Origin value. When undefined/null no CORS
+   * headers are emitted (the safe default for 127.0.0.1 binds). Set
+   * to '*' or to a specific origin to opt in.
+   */
+  corsOrigin?: string | null;
+  /**
+   * Maximum POST body size in bytes; requests exceeding this receive
+   * HTTP 413. Defaults to 4 MiB.
+   */
+  maxBodyBytes?: number;
 }
+
+const DEFAULT_MAX_BODY_BYTES = 4 * 1024 * 1024;
 
 export function createHttpHandler(
   router: McpRouter,
@@ -28,12 +41,16 @@ export function createHttpHandler(
   tools: ToolRegistry,
   opts: HttpTransportOptions,
 ): RequestListener {
+  const maxBodyBytes = opts.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
   return async (req: IncomingMessage, res: ServerResponse) => {
-    // CORS — allow any origin for local dev
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Accept, MCP-Session-Id');
-    res.setHeader('Access-Control-Expose-Headers', 'MCP-Session-Id');
+    // CORS — off by default; opt in via opts.corsOrigin.
+    if (opts.corsOrigin) {
+      res.setHeader('Access-Control-Allow-Origin', opts.corsOrigin);
+      res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Accept, MCP-Session-Id');
+      res.setHeader('Access-Control-Expose-Headers', 'MCP-Session-Id');
+      if (opts.corsOrigin !== '*') res.setHeader('Vary', 'Origin');
+    }
 
     if (req.method === 'OPTIONS') {
       res.writeHead(204);
@@ -140,7 +157,21 @@ export function createHttpHandler(
     // POST /mcp — JSON-RPC 2.0
     // -------------------------------------------------------------------------
     if (req.method === 'POST' && path === '/mcp') {
-      const body = await readBody(req);
+      let body: string;
+      try {
+        body = await readBody(req, maxBodyBytes);
+      } catch (err) {
+        if (err instanceof PayloadTooLargeError) {
+          res.writeHead(413, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            jsonrpc: '2.0',
+            id: null,
+            error: { code: -32700, message: 'Payload too large', data: { limit: err.limit } },
+          }));
+          return;
+        }
+        throw err;
+      }
       let parsed: unknown;
 
       try {
@@ -211,10 +242,28 @@ function extractSessionId(req: IncomingMessage, url: string): string | null {
   return null;
 }
 
-function readBody(req: IncomingMessage): Promise<string> {
+class PayloadTooLargeError extends Error {
+  readonly limit: number;
+  constructor(limit: number) {
+    super(`Request body exceeds ${limit} bytes`);
+    this.name = 'PayloadTooLargeError';
+    this.limit = limit;
+  }
+}
+
+function readBody(req: IncomingMessage, maxBytes: number): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    req.on('data', (chunk: Buffer) => chunks.push(chunk));
+    let received = 0;
+    req.on('data', (chunk: Buffer) => {
+      received += chunk.length;
+      if (received > maxBytes) {
+        req.destroy();
+        reject(new PayloadTooLargeError(maxBytes));
+        return;
+      }
+      chunks.push(chunk);
+    });
     req.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));
     req.on('error', reject);
   });
