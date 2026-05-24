@@ -46,8 +46,20 @@ export async function startPlayground(config: PlaygroundConfig): Promise<void> {
     }
 
     if (req.method === 'POST' && req.url === '/api/resolve') {
+      const MAX_BODY_BYTES = 64 * 1024;
       let body = '';
-      for await (const chunk of req) body += chunk;
+      let received = 0;
+      let tooLarge = false;
+      for await (const chunk of req) {
+        received += chunk.length;
+        if (received > MAX_BODY_BYTES) { tooLarge = true; break; }
+        body += chunk;
+      }
+      if (tooLarge) {
+        res.writeHead(413, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'payload too large' }));
+        return;
+      }
 
       try {
         const { intent } = JSON.parse(body) as { intent: string };
@@ -159,13 +171,25 @@ const PLAYGROUND_HTML = `<!DOCTYPE html>
     const resultsDiv = document.getElementById('results');
     const statsDiv = document.getElementById('stats');
 
+    // Escape any value coming from a loaded toolkit before injecting
+    // it into HTML. A malicious manifest can otherwise put '<script>'
+    // in a tool name and execute it in the developer's browser.
+    function esc(value) {
+      return String(value == null ? '' : value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
     intentInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') resolve(); });
 
     fetch('/api/tools').then(r => r.json()).then(data => {
       statsDiv.innerHTML = [
-        '<span>Tools: <span class="stat-value">' + data.stats.toolCount + '</span></span>',
-        '<span>Selectors: <span class="stat-value">' + data.stats.uniqueSelectorCount + '</span></span>',
-        '<span>Providers: <span class="stat-value">' + data.stats.providerCount + '</span></span>',
+        '<span>Tools: <span class="stat-value">' + esc(data.stats.toolCount) + '</span></span>',
+        '<span>Selectors: <span class="stat-value">' + esc(data.stats.uniqueSelectorCount) + '</span></span>',
+        '<span>Providers: <span class="stat-value">' + esc(data.stats.providerCount) + '</span></span>',
       ].join('');
     });
 
@@ -183,11 +207,11 @@ const PLAYGROUND_HTML = `<!DOCTYPE html>
       const data = await res.json();
 
       if (data.error) {
-        resultsDiv.innerHTML = '<div class="chain" style="color:#f85149">Error: ' + data.error + '</div>';
+        resultsDiv.innerHTML = '<div class="chain" style="color:#f85149">Error: ' + esc(data.error) + '</div>';
         return;
       }
 
-      let html = '<div class="result-header">Resolved selector: <span class="selector">' + data.resolvedSelector + '</span></div>';
+      let html = '<div class="result-header">Resolved selector: <span class="selector">' + esc(data.resolvedSelector) + '</span></div>';
       html += '<div class="chain">';
 
       if (data.matches.length === 0) {
@@ -198,11 +222,11 @@ const PLAYGROUND_HTML = `<!DOCTYPE html>
         const conf = parseFloat(match.confidence);
         const cls = conf > 80 ? 'high' : conf > 50 ? 'medium' : 'low';
         html += '<div class="chain-step">';
-        html += '<span class="confidence ' + cls + '">' + match.confidence + '%</span>';
+        html += '<span class="confidence ' + cls + '">' + esc(match.confidence) + '%</span>';
         html += '<span class="arrow">&rarr;</span>';
-        html += '<span class="tool-name">' + match.toolName + '</span>';
-        html += '<span class="provider">(' + match.provider + ')</span>';
-        html += '<span class="selector">' + match.selector + '</span>';
+        html += '<span class="tool-name">' + esc(match.toolName) + '</span>';
+        html += '<span class="provider">(' + esc(match.provider) + ')</span>';
+        html += '<span class="selector">' + esc(match.selector) + '</span>';
         html += '</div>';
       }
 

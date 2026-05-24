@@ -255,16 +255,26 @@ function readBody(req: IncomingMessage, maxBytes: number): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let received = 0;
+    let aborted = false;
     req.on('data', (chunk: Buffer) => {
+      if (aborted) return;
       received += chunk.length;
       if (received > maxBytes) {
-        req.destroy();
+        aborted = true;
+        // Don't destroy the socket: we still need to send the 413
+        // response. Discard remaining chunks and pause the stream
+        // so we don't keep buffering.
+        req.pause();
         reject(new PayloadTooLargeError(maxBytes));
         return;
       }
       chunks.push(chunk);
     });
-    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));
-    req.on('error', reject);
+    req.on('end', () => {
+      if (!aborted) resolve(Buffer.concat(chunks).toString('utf-8'));
+    });
+    req.on('error', (err) => {
+      if (!aborted) reject(err);
+    });
   });
 }

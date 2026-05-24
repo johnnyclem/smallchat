@@ -523,7 +523,7 @@ export class MCPServer {
           : JSON.stringify(formattedContent);
         const { compressed, savedPct, enabled } = await filterContentWithRtk(contentStr, this.config.rtkConfig);
         if (enabled) {
-          formattedContent = compressed;
+          formattedContent = [{ type: 'text', text: compressed }];
           result.metadata = { ...result.metadata, rtkSavedPct: savedPct };
         }
       }
@@ -752,16 +752,25 @@ function readBody(req: IncomingMessage, maxBytes = DEFAULT_MAX_BODY_BYTES): Prom
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let received = 0;
+    let aborted = false;
     req.on('data', (chunk: Buffer) => {
+      if (aborted) return;
       received += chunk.length;
       if (received > maxBytes) {
-        req.destroy();
+        aborted = true;
+        // Keep the socket alive so the handler can respond with 413;
+        // pause the stream so we stop buffering further chunks.
+        req.pause();
         reject(new PayloadTooLargeError(maxBytes));
         return;
       }
       chunks.push(chunk);
     });
-    req.on('end', () => resolve(Buffer.concat(chunks).toString()));
-    req.on('error', reject);
+    req.on('end', () => {
+      if (!aborted) resolve(Buffer.concat(chunks).toString());
+    });
+    req.on('error', (err) => {
+      if (!aborted) reject(err);
+    });
   });
 }

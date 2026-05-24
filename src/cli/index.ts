@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 
 import { Command } from 'commander';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import { compileCommand } from './commands/compile.js';
 import { initCommand } from './commands/init.js';
 import { inspectCommand } from './commands/inspect.js';
@@ -16,12 +19,24 @@ import { setupCommand } from './commands/setup.js';
 import { appCommand } from './commands/app.js';
 import { rtkCommand } from './commands/rtk.js';
 
+function readPackageVersion(): string {
+  try {
+    // dist/cli/index.js → dist/ → repo root containing package.json
+    const here = dirname(fileURLToPath(import.meta.url));
+    const pkgPath = join(here, '..', '..', 'package.json');
+    const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8')) as { version?: string };
+    return pkg.version ?? '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+}
+
 const program = new Command();
 
 program
   .name('smallchat')
   .description('A message-passing tool compiler inspired by the Smalltalk/Objective-C runtime')
-  .version('0.1.0');
+  .version(readPackageVersion());
 
 // Enable "Did you mean ...?" suggestions for mistyped commands
 program.showSuggestionAfterError(true);
