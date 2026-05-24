@@ -1,4 +1,4 @@
-import type { ToolRuntime, ToolResult, DispatchEvent } from 'smallchat';
+import type { ToolRuntime, ToolResult, DispatchEvent } from '@smallchat/core';
 
 // ---------------------------------------------------------------------------
 // Runtime singleton management

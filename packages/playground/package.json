@@ -9,7 +9,7 @@
     "dev": "tsc --watch"
   },
   "dependencies": {
-    "smallchat": "^0.1.0"
+    "@smallchat/core": "^0.5.0"
   },
   "devDependencies": {
     "typescript": "^5.7.0"

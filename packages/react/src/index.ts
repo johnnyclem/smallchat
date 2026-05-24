@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect, createContext, useContext } from 'react';
-import type { ToolRuntime, ToolResult, DispatchEvent, AppIMP, DispatchEventUIAvailable } from 'smallchat';
-import type { UIRuntime } from 'smallchat/app';
+import type { ToolRuntime, ToolResult, DispatchEvent, AppIMP, DispatchEventUIAvailable } from '@smallchat/core';
+import type { UIRuntime } from '@smallchat/core/app';
 
 // ---------------------------------------------------------------------------
 // Context — provide a ToolRuntime to the tree
@@ -539,4 +539,4 @@ export function AppView({
 }
 
 // Re-export UIRuntime type for consumers who want to type their context value
-export type { UIRuntime } from 'smallchat/app';
+export type { UIRuntime } from '@smallchat/core/app';

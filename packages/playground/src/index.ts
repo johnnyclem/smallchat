@@ -1,10 +1,10 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-import type { Embedder, VectorIndex } from 'smallchat';
-import { LocalEmbedder } from 'smallchat';
-import { MemoryVectorIndex } from 'smallchat';
-import { SelectorTable } from 'smallchat';
+import type { Embedder, VectorIndex } from '@smallchat/core';
+import { LocalEmbedder } from '@smallchat/core';
+import { MemoryVectorIndex } from '@smallchat/core';
+import { SelectorTable } from '@smallchat/core';
 
 /**
  * Playground web server — serves a single-page UI for testing

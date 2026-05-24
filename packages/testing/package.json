@@ -18,10 +18,10 @@
     "dev": "tsc --watch"
   },
   "peerDependencies": {
-    "smallchat": ">=0.1.0"
+    "@smallchat/core": "^0.5.0"
   },
   "devDependencies": {
-    "smallchat": "^0.1.0",
+    "@smallchat/core": "^0.5.0",
     "typescript": "^5.7.0"
   },
   "keywords": ["smallchat", "testing", "mocks", "unit-test"],

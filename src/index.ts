@@ -493,3 +493,10 @@ export type {
   ConfigWriteStep,
   PrerequisiteCheck,
 } from './core/registry-types.js';
+
+// MCP Apps Extension — UI dispatch surface used by @smallchat/react
+export type {
+  AppIMP,
+  SerializedAppIMP,
+  DispatchEventUIAvailable,
+} from './core/types.js';

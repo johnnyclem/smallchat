@@ -19,11 +19,11 @@
   },
   "peerDependencies": {
     "next": ">=13.0.0",
-    "smallchat": ">=0.1.0"
+    "@smallchat/core": "^0.5.0"
   },
   "devDependencies": {
     "next": "^16.2.1",
-    "smallchat": "^0.1.0",
+    "@smallchat/core": "^0.5.0",
     "typescript": "^5.7.0"
   },
   "keywords": ["smallchat", "nextjs", "api-routes", "server-actions"],

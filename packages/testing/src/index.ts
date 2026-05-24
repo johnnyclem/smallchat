@@ -10,7 +10,7 @@ import type {
   ValidationResult,
   TransportType,
   DispatchEvent,
-} from 'smallchat';
+} from '@smallchat/core';
 
 // ---------------------------------------------------------------------------
 // MockEmbedder — deterministic embedder for testing
