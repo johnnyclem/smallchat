@@ -95,6 +95,29 @@ describe('container-sandbox', () => {
         expect.any(Object),
       );
     });
+
+    it('does not forward parent env vars that are not in the safe allowlist', () => {
+      process.env.SMALLCHAT_TEST_SECRET_X = 'leaked';
+      try {
+        spawnMcpProcess({ command: 'node', args: [] });
+        const spawnedEnv = (mockSpawn.mock.calls[0][2] as { env: Record<string, string> }).env;
+        expect(spawnedEnv.SMALLCHAT_TEST_SECRET_X).toBeUndefined();
+        expect(spawnedEnv.PATH).toBe(process.env.PATH);
+      } finally {
+        delete process.env.SMALLCHAT_TEST_SECRET_X;
+      }
+    });
+
+    it('forwards parent env vars when inheritEnv: true is set', () => {
+      process.env.SMALLCHAT_TEST_SECRET_Y = 'inherited';
+      try {
+        spawnMcpProcess({ command: 'node', args: [], inheritEnv: true });
+        const spawnedEnv = (mockSpawn.mock.calls[0][2] as { env: Record<string, string> }).env;
+        expect(spawnedEnv.SMALLCHAT_TEST_SECRET_Y).toBe('inherited');
+      } finally {
+        delete process.env.SMALLCHAT_TEST_SECRET_Y;
+      }
+    });
   });
 
   // -------------------------------------------------------------------------
