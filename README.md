@@ -134,14 +134,20 @@ See the [Architecture doc](./ARCHITECTURE.md) for the full design and the [Refer
 
 | Command | Description |
 |---------|-------------|
+| `setup` | Auto-detect MCP servers and run an interactive compile wizard |
+| `init` | Scaffold a new project from a template |
 | `compile` | Compile manifests into a dispatch artifact |
 | `serve` | Start an MCP-compatible server |
 | `resolve` | Test intent-to-tool resolution |
 | `inspect` | Examine a compiled artifact |
 | `doctor` | Check your environment |
-| `init` | Scaffold a new project from a template |
 | `docs` | Generate Markdown docs from a compiled artifact |
 | `repl` | Interactive shell for testing resolution |
+| `channel` | Claude Code channel-protocol bridge |
+| `dream` | Memory-driven recompilation from session logs |
+| `memex` | Compile a knowledge base (separate from the tool dispatch pipeline) |
+| `app` | Compile and inspect MCP Apps Extension manifests |
+| `rtk` | RTK output-compression setup and tooling |
 
 ## Packages
 
@@ -169,7 +175,7 @@ See the [Architecture doc](./ARCHITECTURE.md) for the full design and the [Refer
 ## Development
 
 ```bash
-npm test          # 274+ specs
+npm test          # ~1,250+ specs across the core runtime, compiler, embeddings, and transports
 npm run dev       # Watch mode
 npm run lint      # Type check
 npm run docs:api  # Generate API reference

@@ -1,5 +1,7 @@
 # Migration Guide: 0.1.0 → 0.2.0
 
+> **Historical document.** This guide is preserved for users upgrading from the original 0.1.0 release. The current published version is 0.5.0; see the [Changelog](./CHANGELOG.md) for changes since 0.2.0. Newer migrations (if any are required) will be added to that file.
+
 This guide covers all changes and new patterns when upgrading from smallchat 0.1.0 to 0.2.0.
 
 ## Quick Summary

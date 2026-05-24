@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- **HTTP transport hardened.** `Access-Control-Allow-Origin: *` is no longer set by default on the MCP HTTP transport. Opt in with `serve --cors-origin <pattern>` (or set `corsOrigin` in `MCPServerConfig`). Same-origin clients (including the in-tree playground) are unaffected.
+- **Request body size limit.** The `POST /mcp` endpoint now rejects bodies larger than 4 MB by default (configurable via `MCPServerConfig.maxBodyBytes` or `serve --max-body-bytes`), returning a JSON-RPC `Parse error` response and HTTP 413. Prevents memory-exhaustion DoS.
+- **Spawned MCP server env isolation.** `spawnMcpProcess` (used by the MCP client / container sandbox) no longer forwards the full parent process environment to child MCP servers. A safe allowlist (`PATH`, `HOME`, `USER`, `LANG`, `LC_*`, `TZ`, `TERM`, `NODE_ENV`, `NODE_OPTIONS`, `SHELL`) is forwarded; everything else must be opted in via the per-server `env` map. Existing `env: { GITHUB_TOKEN: ... }` declarations in MCP configs continue to work. Pass `inheritEnv: true` to restore the old behaviour.
+- **Prototype-pollution guard for manifest parsing.** All manifest and smallchat-config JSON files are now parsed through `safeJsonParse`, which rejects objects containing `__proto__`, `prototype`, or `constructor` keys at any depth.
+- **Path-traversal guard in `smallchat.json`.** Local-manifest dependencies declared with relative paths that escape the config directory are now skipped with a warning rather than silently resolved.
+- **Playground XSS fix.** `@smallchat/playground` now HTML-escapes every value rendered from a loaded toolkit (tool name, provider, selector, resolved selector, error message). A malicious manifest containing `<script>` in a tool name no longer executes in the developer's browser.
+- **`.gitignore` hardened.** Common secret patterns (`.env*`, `*.key`, `*.pem`, etc.) and local SQLite write-ahead files are now ignored by default.
+
+### Fixed
+- **CLI `--version` reports 0.5.0.** Previously hardcoded to `0.1.0` in `src/cli/index.ts`; now read from `package.json`.
+- **MCP server RTK compression path.** `formattedContent` in `tools/call` now keeps the MCP content-array shape after RTK compression instead of collapsing to a raw string (TypeScript build error).
+- **Satellite package dependency name.** `@smallchat/react`, `@smallchat/nextjs`, `@smallchat/testing`, and `@smallchat/playground` now declare a peer dependency on `@smallchat/core ^0.5.0` (the actual published name) instead of the placeholder `smallchat ^0.1.0`. Their source `import` statements were updated accordingly. The example projects under `examples/` were similarly migrated.
+
+### Changed
+- **Docs.** README CLI table now lists all 14 registered commands (`setup`, `init`, `compile`, `serve`, `resolve`, `inspect`, `doctor`, `docs`, `repl`, `channel`, `dream`, `memex`, `app`, `rtk`). README's "274+ specs" claim updated to reflect the current ~1,250-spec suite. `MIGRATION.md` now carries a historical-document banner. Stale planning files (`PLAN-0.4.0.md`, `plan.md`) moved to `docs/archive/`.
+
+### Dependencies
+- `npm audit fix` applied — patches transitive `postcss` (XSS in stringifier) and `qs` (DoS) vulnerabilities pulled in via the docusaurus dev tree. No production dependency changes.
+
 ## [0.5.0] - 2026-04-30
 
 ### Added
