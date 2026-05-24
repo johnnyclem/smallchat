@@ -30,6 +30,8 @@ export const serveCommand = new Command('serve')
   .option('--rtk-path <path>', 'Path to rtk binary (default: resolved from PATH)')
   .option('--rtk-filter-level <level>', 'RTK filter aggressiveness: default | aggressive', 'default')
   .option('--rtk-threshold <bytes>', 'Minimum content size in bytes before RTK filters', '512')
+  .option('--cors-origin <pattern>', 'Allow-Origin value for browser clients (omit to disable CORS)')
+  .option('--max-body-bytes <bytes>', 'Maximum POST body size; requests exceeding this get HTTP 413', String(4 * 1024 * 1024))
   .action(async (options) => {
     const sourcePath = resolve(options.source);
     const port = parseInt(options.port, 10);
@@ -47,6 +49,8 @@ export const serveCommand = new Command('serve')
       rateLimitRPM: parseInt(options.rateLimitRpm, 10),
       enableAudit: options.audit,
       sessionTTLMs: parseFloat(options.sessionTtl) * 60 * 60 * 1000,
+      corsOrigin: options.corsOrigin ?? null,
+      maxBodyBytes: parseInt(options.maxBodyBytes, 10),
       ...(options.rtk && {
         rtkConfig: {
           enabled: true,

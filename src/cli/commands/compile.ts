@@ -1,8 +1,9 @@
 import { Command } from 'commander';
 import { readFileSync, readdirSync, writeFileSync, statSync, existsSync, watch } from 'node:fs';
-import { join, resolve, dirname } from 'node:path';
+import { join, resolve, dirname, relative, isAbsolute } from 'node:path';
 import type { Embedder, VectorIndex, ProviderManifest } from '../../core/types.js';
 import type { SmallChatManifest } from '../../core/manifest.js';
+import { safeJsonParse, PrototypePollutionError } from '../../core/safe-json.js';
 import { ToolCompiler } from '../../compiler/compiler.js';
 import { LocalEmbedder } from '../../embedding/local-embedder.js';
 import { MemoryVectorIndex } from '../../embedding/memory-vector-index.js';
@@ -34,7 +35,9 @@ function detectSourceType(sourcePath: string | undefined): { type: SourceType; p
   // Check if it's a file
   if (existsSync(resolved) && statSync(resolved).isFile()) {
     try {
-      const content = JSON.parse(readFileSync(resolved, 'utf-8'));
+      // Detection only — strip silently so a benign config containing
+      // a stray __proto__ key in deep metadata still gets type-tagged.
+      const content = safeJsonParse(readFileSync(resolved, 'utf-8'), { onPollution: 'strip' });
       if (isMcpConfigFile(content)) {
         return { type: 'mcp-config', path: resolved };
       }
@@ -105,7 +108,7 @@ function loadManifestFiles(files: string[]): ProviderManifest[] {
   for (const file of files) {
     try {
       const content = readFileSync(file, 'utf-8');
-      const manifest = JSON.parse(content) as ProviderManifest;
+      const manifest = safeJsonParse(content) as ProviderManifest;
       if (!Array.isArray(manifest.tools)) {
         // Not a valid manifest (e.g. config file, metadata), skip silently
         continue;
@@ -113,10 +116,23 @@ function loadManifestFiles(files: string[]): ProviderManifest[] {
       manifests.push(manifest);
       console.log(`  ${manifest.id ?? manifest.name}: ${manifest.tools.length} tools`);
     } catch (e) {
+      if (e instanceof PrototypePollutionError) {
+        console.error(`  Error: Refusing to load ${file}: ${e.message}`);
+        continue;
+      }
       console.error(`  Warning: Could not parse ${file}: ${(e as Error).message}`);
     }
   }
   return manifests;
+}
+
+/**
+ * Reject relative paths that escape the configured base directory.
+ * Returns true when the resolved path stays inside `baseDir`.
+ */
+function isWithin(baseDir: string, resolved: string): boolean {
+  const rel = relative(baseDir, resolved);
+  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
 }
 
 // ---------------------------------------------------------------------------
@@ -161,12 +177,15 @@ function findSmallChatManifest(startDir: string): { manifest: SmallChatManifest;
     if (existsSync(candidate)) {
       try {
         const content = readFileSync(candidate, 'utf-8');
-        const manifest = JSON.parse(content) as SmallChatManifest;
+        const manifest = safeJsonParse(content) as SmallChatManifest;
         // Basic validation — must have a name
         if (manifest.name) {
           return { manifest, path: candidate };
         }
-      } catch {
+      } catch (e) {
+        if (e instanceof PrototypePollutionError) {
+          console.error(`  Error: Refusing to load ${candidate}: ${e.message}`);
+        }
         // Invalid JSON, skip
       }
     }
@@ -189,17 +208,26 @@ function resolvePackageDependencies(
   if (manifest.manifests) {
     for (const p of manifest.manifests) {
       const resolved = resolve(manifestDir, p);
+      if (!isWithin(manifestDir, resolved)) {
+        console.warn(`  Warning: skipping manifest path "${p}" — escapes the smallchat.json directory`);
+        continue;
+      }
       if (existsSync(resolved)) {
         if (statSync(resolved).isDirectory()) {
           manifests.push(...loadManifestFiles(findManifestFiles(resolved)));
         } else if (resolved.endsWith('.json')) {
           try {
             const content = readFileSync(resolved, 'utf-8');
-            const m = JSON.parse(content) as ProviderManifest;
+            const m = safeJsonParse(content) as ProviderManifest;
             if (Array.isArray(m.tools)) {
               manifests.push(m);
             }
-          } catch { /* skip invalid */ }
+          } catch (e) {
+            if (e instanceof PrototypePollutionError) {
+              console.error(`  Error: Refusing to load ${resolved}: ${e.message}`);
+            }
+            /* skip invalid */
+          }
         }
       }
     }
@@ -211,10 +239,15 @@ function resolvePackageDependencies(
       // Local file paths start with ./ or ../
       if (specifier.startsWith('./') || specifier.startsWith('../')) {
         const resolved = resolve(manifestDir, specifier);
+        if (!isWithin(manifestDir, resolved)) {
+          console.warn(`  Warning: skipping dependency "${_name}" — path "${specifier}" escapes the smallchat.json directory`);
+          continue;
+        }
         if (existsSync(resolved) && resolved.endsWith('.json')) {
           try {
             const content = readFileSync(resolved, 'utf-8');
-            const m = JSON.parse(content);
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const m = safeJsonParse(content) as any;
             if (Array.isArray(m.tools)) {
               manifests.push(m as ProviderManifest);
             } else if (Array.isArray(m.providers)) {
@@ -233,7 +266,12 @@ function resolvePackageDependencies(
                 }
               }
             }
-          } catch { /* skip invalid */ }
+          } catch (e) {
+            if (e instanceof PrototypePollutionError) {
+              console.error(`  Error: Refusing to load ${resolved}: ${e.message}`);
+            }
+            /* skip invalid */
+          }
         }
       }
       // TODO: registry-based resolution for semver specifiers

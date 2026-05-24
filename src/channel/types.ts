@@ -148,4 +148,10 @@ export interface ChannelServerConfig {
   senderAllowlistFile?: string;
   /** Max payload size in bytes (default: 64KB) */
   maxPayloadSize?: number;
+  /**
+   * Access-Control-Allow-Origin for the HTTP bridge. Omit/null to
+   * disable CORS (the safe default for the 127.0.0.1 bind). Set to
+   * '*' or a specific origin to opt in.
+   */
+  httpBridgeCorsOrigin?: string | null;
 }

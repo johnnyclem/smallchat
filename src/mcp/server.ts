@@ -84,7 +84,22 @@ export interface MCPServerConfig {
    * Requires rtk to be installed: https://github.com/johnnyclem-rdc/rtk
    */
   rtkConfig?: RtkConfig;
+  /**
+   * Access-Control-Allow-Origin value. When undefined or null no CORS
+   * headers are emitted, which is the safe default for the 127.0.0.1
+   * bind. Set to '*' for permissive cross-origin browser access, or to
+   * a specific scheme://host to whitelist one origin.
+   */
+  corsOrigin?: string | null;
+  /**
+   * Maximum POST body size in bytes. Requests larger than this are
+   * rejected with HTTP 413. Defaults to 4 MiB; raise it only for
+   * trusted clients that legitimately send large JSON-RPC payloads.
+   */
+  maxBodyBytes?: number;
 }
+
+const DEFAULT_MAX_BODY_BYTES = 4 * 1024 * 1024;
 
 // ---------------------------------------------------------------------------
 // JSON-RPC types (minimal, used only for request/response shaping)
@@ -203,7 +218,7 @@ export class MCPServer {
   // -------------------------------------------------------------------------
 
   private async handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    setCorsHeaders(res);
+    setCorsHeaders(res, this.config.corsOrigin);
 
     if (req.method === 'OPTIONS') {
       res.writeHead(204);
@@ -282,7 +297,16 @@ export class MCPServer {
   // -------------------------------------------------------------------------
 
   private async handleOAuthToken(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const body = await readBody(req);
+    let body: string;
+    try {
+      body = await readBody(req, this.config.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES);
+    } catch (err) {
+      if (err instanceof PayloadTooLargeError) {
+        sendJson(res, 413, { error: 'payload_too_large', limit: err.limit });
+        return;
+      }
+      throw err;
+    }
     let params: Record<string, string>;
 
     try {
@@ -317,7 +341,21 @@ export class MCPServer {
 
   private async handleJsonRpc(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const startTime = Date.now();
-    const body = await readBody(req);
+    let body: string;
+    try {
+      body = await readBody(req, this.config.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES);
+    } catch (err) {
+      if (err instanceof PayloadTooLargeError) {
+        res.writeHead(413, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          jsonrpc: '2.0',
+          id: null,
+          error: { code: PARSE_ERROR, message: 'Payload too large', data: { limit: err.limit } },
+        } satisfies JsonRpcResponse));
+        return;
+      }
+      throw err;
+    }
     let rpcReq: JsonRpcRequest;
 
     try {
@@ -485,7 +523,7 @@ export class MCPServer {
           : JSON.stringify(formattedContent);
         const { compressed, savedPct, enabled } = await filterContentWithRtk(contentStr, this.config.rtkConfig);
         if (enabled) {
-          formattedContent = compressed;
+          formattedContent = [{ type: 'text', text: compressed }];
           result.metadata = { ...result.metadata, rtkSavedPct: savedPct };
         }
       }
@@ -671,11 +709,13 @@ function getCapabilities(): Record<string, unknown> {
   };
 }
 
-function setCorsHeaders(res: ServerResponse): void {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+function setCorsHeaders(res: ServerResponse, origin: string | null | undefined): void {
+  if (!origin) return;
+  res.setHeader('Access-Control-Allow-Origin', origin);
   res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Accept, Authorization, Mcp-Session-Id');
   res.setHeader('Access-Control-Expose-Headers', 'Mcp-Session-Id');
+  if (origin !== '*') res.setHeader('Vary', 'Origin');
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
@@ -699,11 +739,38 @@ function sendSSE(res: ServerResponse, event: string, data: unknown): void {
   }
 }
 
-function readBody(req: IncomingMessage): Promise<string> {
+class PayloadTooLargeError extends Error {
+  readonly limit: number;
+  constructor(limit: number) {
+    super(`Request body exceeds ${limit} bytes`);
+    this.name = 'PayloadTooLargeError';
+    this.limit = limit;
+  }
+}
+
+function readBody(req: IncomingMessage, maxBytes = DEFAULT_MAX_BODY_BYTES): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    req.on('data', (chunk: Buffer) => chunks.push(chunk));
-    req.on('end', () => resolve(Buffer.concat(chunks).toString()));
-    req.on('error', reject);
+    let received = 0;
+    let aborted = false;
+    req.on('data', (chunk: Buffer) => {
+      if (aborted) return;
+      received += chunk.length;
+      if (received > maxBytes) {
+        aborted = true;
+        // Keep the socket alive so the handler can respond with 413;
+        // pause the stream so we stop buffering further chunks.
+        req.pause();
+        reject(new PayloadTooLargeError(maxBytes));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => {
+      if (!aborted) resolve(Buffer.concat(chunks).toString());
+    });
+    req.on('error', (err) => {
+      if (!aborted) reject(err);
+    });
   });
 }

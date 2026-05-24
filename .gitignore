@@ -15,3 +15,22 @@ dist/
 # Docusaurus
 .docusaurus/
 build/
+
+# Secrets — never commit these
+.env
+.env.local
+.env.*.local
+*.key
+*.pem
+*.p12
+*.pfx
+*.crt
+.credentials
+secrets/
+
+# Local runtime artifacts
+smallchat.db
+smallchat.db-wal
+smallchat.db-shm
+*.db-wal
+*.db-shm

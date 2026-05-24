@@ -34,6 +34,10 @@
     "./importance": {
       "types": "./dist/importance/index.d.ts",
       "import": "./dist/importance/index.js"
+    },
+    "./app": {
+      "types": "./dist/app/index.d.ts",
+      "import": "./dist/app/index.js"
     }
   },
   "bin": {

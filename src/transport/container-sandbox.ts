@@ -30,6 +30,56 @@ export interface SpawnMcpProcessOptions {
   cwd?: string;
   /** Optional container sandbox configuration */
   containerSandbox?: ContainerSandboxConfig;
+  /**
+   * When true, forward the entire parent process environment to the
+   * spawned MCP server. The default is to forward only a small safe
+   * allowlist (PATH, HOME, USER, LANG, LC_*, TZ, TERM, NODE_ENV,
+   * NODE_OPTIONS, SHELL) plus whatever is set in `env`. Use this only
+   * for trusted MCP servers; arbitrary servers can otherwise read
+   * tokens like ANTHROPIC_API_KEY, GITHUB_TOKEN, AWS_*, etc.
+   */
+  inheritEnv?: boolean;
+}
+
+/**
+ * Names of environment variables forwarded to spawned MCP servers
+ * even when `inheritEnv` is false. Keep this list short — anything
+ * that looks like a secret (API_KEY, TOKEN, PASSWORD, SECRET) must
+ * be opted into via the per-server `env` map or `inheritEnv`.
+ */
+export const SAFE_INHERITED_ENV_KEYS: readonly string[] = [
+  'PATH',
+  'HOME',
+  'USER',
+  'LOGNAME',
+  'LANG',
+  'LC_ALL',
+  'LC_CTYPE',
+  'LC_MESSAGES',
+  'TZ',
+  'TERM',
+  'TMPDIR',
+  'SHELL',
+  'NODE_ENV',
+  'NODE_OPTIONS',
+  'PYTHONPATH',
+  'PYTHONHOME',
+];
+
+function pickSafeEnv(source: NodeJS.ProcessEnv): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const key of SAFE_INHERITED_ENV_KEYS) {
+    const v = source[key];
+    if (typeof v === 'string') out[key] = v;
+  }
+  // Also forward LC_* locale variants beyond the explicit list above.
+  for (const key of Object.keys(source)) {
+    if (key.startsWith('LC_') && !(key in out)) {
+      const v = source[key];
+      if (typeof v === 'string') out[key] = v;
+    }
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -50,9 +100,13 @@ export function spawnMcpProcess(options: SpawnMcpProcessOptions): ChildProcess {
     return spawnContainerized(options);
   }
 
+  const baseEnv = options.inheritEnv
+    ? (process.env as Record<string, string>)
+    : pickSafeEnv(process.env);
+
   return spawn(options.command, options.args ?? [], {
     stdio: ['pipe', 'pipe', 'pipe'],
-    env: { ...process.env, ...options.env },
+    env: { ...baseEnv, ...options.env },
     cwd: options.cwd,
   });
 }

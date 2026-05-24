@@ -91,7 +91,7 @@ export const initCommand = new Command('init')
 
 function generateBasicTemplate(projectDir: string): void {
   // Sample tool definition
-  const toolFile = `import type { ToolResult } from 'smallchat';
+  const toolFile = `import type { ToolResult } from '@smallchat/core';
 
 /**
  * A sample greeting tool that demonstrates the basic tool structure.
@@ -115,7 +115,7 @@ export async function echo(args: { message: string }): Promise<ToolResult> {
   writeIfNotExists(join(projectDir, 'tools', 'sample-tools.ts'), toolFile);
 
   // Entry point
-  const entryPoint = `import { ToolRuntime, MemoryVectorIndex, LocalEmbedder } from 'smallchat';
+  const entryPoint = `import { ToolRuntime, MemoryVectorIndex, LocalEmbedder } from '@smallchat/core';
 
 async function main() {
   // Create the runtime with in-memory vector index
@@ -138,7 +138,7 @@ main().catch(console.error);
 }
 
 function generateMcpServerTemplate(projectDir: string): void {
-  const serverFile = `import { MCPServer } from 'smallchat';
+  const serverFile = `import { MCPServer } from '@smallchat/core';
 
 const server = new MCPServer({
   port: 3001,
@@ -161,7 +161,7 @@ server.start().then(() => {
   writeIfNotExists(join(projectDir, 'src', 'server.ts'), serverFile);
 
   // Sample tool
-  const toolFile = `import type { ToolResult } from 'smallchat';
+  const toolFile = `import type { ToolResult } from '@smallchat/core';
 
 export async function fetchUrl(args: { url: string }): Promise<ToolResult> {
   const response = await fetch(args.url);
@@ -185,7 +185,7 @@ export async function currentTime(_args: Record<string, unknown>): Promise<ToolR
 }
 
 function generateAgentTemplate(projectDir: string): void {
-  const agentFile = `import { ToolRuntime, MemoryVectorIndex, LocalEmbedder } from 'smallchat';
+  const agentFile = `import { ToolRuntime, MemoryVectorIndex, LocalEmbedder } from '@smallchat/core';
 
 /**
  * A simple agent loop that takes user input, dispatches to tools,
@@ -235,7 +235,7 @@ agent().catch(console.error);
   writeIfNotExists(join(projectDir, 'src', 'agent.ts'), agentFile);
 
   // Tools for the agent
-  const toolFile = `import type { ToolResult } from 'smallchat';
+  const toolFile = `import type { ToolResult } from '@smallchat/core';
 
 export async function searchDocuments(args: { query: string; limit?: number }): Promise<ToolResult> {
   const limit = args.limit ?? 10;
@@ -272,7 +272,7 @@ function generatePackageJson(name: string, template: string): object {
       dev: 'tsc --watch',
     },
     dependencies: {
-      smallchat: '^0.1.0',
+      '@smallchat/core': '^0.5.0',
     },
     devDependencies: {
       typescript: '^5.7.0',

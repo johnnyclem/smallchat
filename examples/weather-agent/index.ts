@@ -1,5 +1,5 @@
-import { ToolRuntime, MemoryVectorIndex, LocalEmbedder, ToolCompiler } from 'smallchat';
-import type { ProviderManifest } from 'smallchat';
+import { ToolRuntime, MemoryVectorIndex, LocalEmbedder, ToolCompiler } from '@smallchat/core';
+import type { ProviderManifest } from '@smallchat/core';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 

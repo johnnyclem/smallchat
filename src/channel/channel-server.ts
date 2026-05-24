@@ -406,10 +406,14 @@ export class ChannelServer extends EventEmitter {
   }
 
   private async handleHttpRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    // CORS
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Channel-Secret');
+    // CORS — off by default; opt in via config.httpBridgeCorsOrigin.
+    const corsOrigin = this.config.httpBridgeCorsOrigin;
+    if (corsOrigin) {
+      res.setHeader('Access-Control-Allow-Origin', corsOrigin);
+      res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Channel-Secret');
+      if (corsOrigin !== '*') res.setHeader('Vary', 'Origin');
+    }
 
     if (req.method === 'OPTIONS') {
       res.writeHead(204);
