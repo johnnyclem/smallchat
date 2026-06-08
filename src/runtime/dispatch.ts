@@ -115,8 +115,19 @@ export class DispatchContext {
 
   private toolClasses: Map<string, ToolClass> = new Map();
   private protocols: Map<string, ToolProtocol> = new Map();
-  /** All tool IMPs indexed by their selector canonical name */
-  private toolIndex: Map<string, ToolCandidate[]> = new Map();
+  /**
+   * Dispatch index — selector canonical → the classes that declare it.
+   *
+   * The inline-cache analogue for resolution: instead of re-scanning every
+   * registered class for every vector match (O(matches × classes)), the hot
+   * path consults only the classes that actually own the matched selector.
+   * This is what lets the registry scale to thousands of tools.
+   */
+  private selectorToClasses: Map<string, ToolClass[]> = new Map();
+  /** Memoized tool summaries for LLM-powered features; invalidated on registry mutation */
+  private toolSummariesCache: ToolSummary[] | null = null;
+  /** Reentrancy guard so the forwarding chain's decomposition can't loop forever */
+  private inForwardDecompose = false;
 
   constructor(
     selectorTable: SelectorTable,
@@ -151,16 +162,52 @@ export class DispatchContext {
     this.selectorNamespace.assertNoShadowing(toolClass.name, ownSelectors);
 
     this.toolClasses.set(toolClass.name, toolClass);
+    this.indexClass(toolClass);
+  }
 
-    // Index all methods for vector search
-    for (const [canonical, imp] of toolClass.dispatchTable) {
-      const selector = this.selectorTable.get(canonical);
-      if (!selector) continue;
-
-      const candidates = this.toolIndex.get(canonical) ?? [];
-      candidates.push({ imp, confidence: 1.0, selector });
-      this.toolIndex.set(canonical, candidates);
+  /** Index a class's selectors → owning class, and invalidate the summary cache. */
+  private indexClass(toolClass: ToolClass): void {
+    for (const canonical of toolClass.dispatchTable.keys()) {
+      const owners = this.selectorToClasses.get(canonical) ?? [];
+      if (!owners.includes(toolClass)) owners.push(toolClass);
+      this.selectorToClasses.set(canonical, owners);
     }
+    this.toolSummariesCache = null;
+  }
+
+  /**
+   * Rebuild the dispatch index from scratch. Call after a registry mutation
+   * that changes existing dispatch tables (loadCategory, addOverload, swizzle).
+   */
+  reindex(): void {
+    this.selectorToClasses.clear();
+    for (const toolClass of this.toolClasses.values()) this.indexClass(toolClass);
+    this.toolSummariesCache = null;
+  }
+
+  /** The classes that declare a given selector canonical — the resolution candidates. */
+  classesForSelector(canonical: string): ToolClass[] {
+    return this.selectorToClasses.get(canonical) ?? [];
+  }
+
+  /**
+   * Tool summaries for LLM-powered features (verification, decomposition,
+   * refinement). Computed once and memoized; invalidated on registry mutation.
+   */
+  getToolSummaries(): ToolSummary[] {
+    if (this.toolSummariesCache) return this.toolSummariesCache;
+    const summaries: ToolSummary[] = [];
+    for (const toolClass of this.toolClasses.values()) {
+      for (const [, imp] of toolClass.dispatchTable) {
+        summaries.push({
+          name: imp.toolName,
+          description: imp.schema?.description ?? imp.toolName,
+          parameters: imp.schema?.arguments.map(a => a.name),
+        });
+      }
+    }
+    this.toolSummariesCache = summaries;
+    return summaries;
   }
 
   /** Register a protocol */
@@ -236,7 +283,7 @@ export class DispatchContext {
         const matchSelector = this.selectorTable.get(match.id);
         if (!matchSelector) continue;
 
-        for (const toolClass of this.getClasses()) {
+        for (const toolClass of this.classesForSelector(match.id)) {
           const imp = toolClass.resolveSelector(matchSelector);
           if (imp) {
             fallbackSteps.push({
@@ -244,7 +291,7 @@ export class DispatchContext {
               tried: `${match.id} (distance: ${match.distance.toFixed(3)})`,
               result: 'hit',
             });
-            const confidence = 1 - match.distance;
+            const confidence = toConfidence(match.distance);
             this.cache.store(selector, imp, confidence);
             return executeWithArgs(imp, args ?? {});
           }
@@ -258,14 +305,48 @@ export class DispatchContext {
       });
     }
 
-    // Step 3: LLM DISAMBIGUATION — Phase 3 stub
-    // In a full implementation this would call the LLM to interpret the intent,
-    // decompose it into sub-intents, or ask clarifying questions.
-    fallbackSteps.push({
-      strategy: 'llm_disambiguate',
-      tried: 'LLM disambiguation (not yet implemented)',
-      result: 'miss',
-    });
+    // Step 3: LLM DISAMBIGUATION — decompose an unrecognized compound intent.
+    //
+    // This is the genuinely-missing capability at this depth: refinement has
+    // already been tried before forwarding, but decomposition (breaking the
+    // intent into sub-intents and dispatching each through the normal pipeline)
+    // is otherwise only attempted in the LOW tier. The reentrancy guard stops a
+    // pathological LLM from looping forward → decompose → forward forever.
+    if (this.llmClient !== NULL_LLM_CLIENT && this.llmClient.decompose && !this.inForwardDecompose) {
+      const decompResult = await decompose(intent, this.getToolSummaries(), this.llmClient);
+      if (decompResult.decomposed) {
+        this.inForwardDecompose = true;
+        try {
+          const execResult = await executeDecomposition(
+            decompResult,
+            (subIntent, subArgs) => toolkit_dispatch(this, subIntent, subArgs),
+          );
+          fallbackSteps.push({
+            strategy: 'llm_disambiguate',
+            tried: `decompose → ${decompResult.subIntents.length} sub-intents (${decompResult.strategy})`,
+            result: 'hit',
+          });
+          return {
+            content: execResult.content,
+            isError: execResult.isError,
+            metadata: { ...execResult.metadata, fallback: true, fallbackSteps },
+          };
+        } finally {
+          this.inForwardDecompose = false;
+        }
+      }
+      fallbackSteps.push({
+        strategy: 'llm_disambiguate',
+        tried: 'decompose (no sub-intents produced)',
+        result: 'miss',
+      });
+    } else {
+      fallbackSteps.push({
+        strategy: 'llm_disambiguate',
+        tried: this.inForwardDecompose ? 'decompose (skipped — already decomposing)' : 'no llm client',
+        result: 'miss',
+      });
+    }
 
     // Step 4: Return a stub instead of throwing
     const nearest = await this.vectorIndex.search(selector.vector, 3, 0.5);
@@ -332,20 +413,14 @@ type ResolutionOutcome =
     };
 
 /**
- * Build a list of tool summaries for LLM-powered features (Pillars 3 & 4).
+ * Convert a vector distance into a confidence score, clamped to [0, 1].
+ *
+ * Some backends can return a cosine distance greater than 1 (vectors more
+ * than orthogonal); without the clamp that would yield a negative confidence
+ * and corrupt tier computation. Confidence is never negative.
  */
-function collectToolSummaries(context: DispatchContext): ToolSummary[] {
-  const summaries: ToolSummary[] = [];
-  for (const toolClass of context.getClasses()) {
-    for (const [, imp] of toolClass.dispatchTable) {
-      summaries.push({
-        name: imp.toolName,
-        description: imp.schema?.description ?? imp.toolName,
-        parameters: imp.schema?.arguments.map(a => a.name),
-      });
-    }
-  }
-  return summaries;
+function toConfidence(distance: number): number {
+  return Math.max(0, 1 - distance);
 }
 
 /**
@@ -384,7 +459,7 @@ async function resolveToolIMP(
     if (exactPinMatch && exactPinMatch.verdict === 'accept') {
       const pinnedSelector = context.selectorTable.get(exactPinMatch.canonical);
       if (pinnedSelector) {
-        for (const toolClass of context.getClasses()) {
+        for (const toolClass of context.classesForSelector(exactPinMatch.canonical)) {
           const imp = toolClass.resolveSelector(pinnedSelector);
           if (imp) {
             context.cache.store(selector, imp, 1.0);
@@ -445,7 +520,7 @@ async function resolveToolIMP(
     if (context.intentPins.size > 0) {
       const pinCheck = context.intentPins.checkSimilarity(
         match.id,
-        1 - match.distance,
+        toConfidence(match.distance),
         intentCanonical,
       );
       if (pinCheck) {
@@ -453,8 +528,9 @@ async function resolveToolIMP(
       }
     }
 
-    // 3.OBS: OBSERVER — skip known negative examples
-    for (const toolClass of context.getClasses()) {
+    // Consult only the classes that declare this selector (dispatch index),
+    // not the entire registry — O(owners) instead of O(all classes).
+    for (const toolClass of context.classesForSelector(match.id)) {
       // 3a. OVERLOAD RESOLUTION
       if (hasArgs && toolClass.hasOverloads(matchSelector)) {
         const overloadResult = toolClass.validateAndResolveSelectorWithNamedArgs(
@@ -462,7 +538,7 @@ async function resolveToolIMP(
           args,
         );
         if (overloadResult) {
-          const confidence = 1 - match.distance;
+          const confidence = toConfidence(match.distance);
           // Skip negative examples
           if (context.observer.isNegativeExample(intent, overloadResult.imp.toolName)) continue;
           context.cache.store(selector, overloadResult.imp, confidence);
@@ -493,7 +569,7 @@ async function resolveToolIMP(
         if (context.observer.isNegativeExample(intent, imp.toolName)) continue;
         candidates.push({
           imp,
-          confidence: 1 - match.distance,
+          confidence: toConfidence(match.distance),
           selector: matchSelector,
         });
       }
@@ -547,7 +623,7 @@ async function resolveToolIMP(
     // No candidates at all — try refinement (Pillar 4) before forwarding
     const refineT0 = Date.now();
     const nearest = await context.vectorIndex.search(selector.vector, 5, 0.3);
-    const toolSummaries = collectToolSummaries(context);
+    const toolSummaries = context.getToolSummaries();
     const refinementResult = await refine(intent, nearest, toolSummaries, context.llmClient);
     addProofStep(proof, {
       stage: 'refinement',
@@ -630,7 +706,7 @@ async function resolveToolIMP(
       }
       // All candidates failed verification — try refinement
       const nearest = await context.vectorIndex.search(selector.vector, 5, 0.3);
-      const toolSummaries = collectToolSummaries(context);
+      const toolSummaries = context.getToolSummaries();
       const refinementResult = await refine(intent, nearest, toolSummaries, context.llmClient);
       if (refinementResult.refined && refinementResult.refinement) {
         proof.tier = 'none';
@@ -642,7 +718,7 @@ async function resolveToolIMP(
   // LOW tier → Intent decomposition (Pillar 3)
   if (requiresDecomposition(tier)) {
     const decompT0 = Date.now();
-    const toolSummaries = collectToolSummaries(context);
+    const toolSummaries = context.getToolSummaries();
     const decompResult = await decompose(intent, toolSummaries, context.llmClient);
     addProofStep(proof, {
       stage: 'decomposition',
@@ -665,10 +741,16 @@ async function resolveToolIMP(
   }
 
   // NONE tier → Refinement protocol (Pillar 4)
+  //
+  // NOTE: this branch is effectively unreachable for the candidate path. The
+  // vector search floor is `thresholds.low` (and `thresholds.medium` in strict
+  // mode), so any surviving candidate already scores >= low and never computes
+  // to the `none` tier. The candidates-empty case above handles true NONE via
+  // protocol → refine → forward. Kept for completeness and custom thresholds.
   if (requiresRefinement(tier)) {
     const refineT0 = Date.now();
     const nearest = await context.vectorIndex.search(selector.vector, 5, 0.3);
-    const toolSummaries = collectToolSummaries(context);
+    const toolSummaries = context.getToolSummaries();
     const refinementResult = await refine(intent, nearest, toolSummaries, context.llmClient);
     addProofStep(proof, {
       stage: 'refinement',

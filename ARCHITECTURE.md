@@ -4,6 +4,15 @@
 
 smallchat models LLM tool use as message dispatch. The LLM expresses intent. The runtime resolves it to a concrete implementation. The design mirrors the Smalltalk/Objective-C runtime: selectors, dispatch tables, forwarding chains, and method swizzling — applied to tool orchestration.
 
+## Two tiers: the durable engine vs. the token-era optimization layer
+
+The codebase is deliberately split in two, reflecting what lasts and what is contingent:
+
+- **Tier 1 — the tool-inference core (durable).** Everything that turns an intent into a resolved tool: the selector table, vector index, resolution cache, confidence tiers, the serializable resolution proof, and the `verify → decompose → refine → observe` fallback chain. Its value is *selection correctness, determinism, microsecond latency, and auditability* — none of which depend on the price of a token. This tier is importable on its own as `@smallchat/core/inference`.
+- **Tier 2 — optimization satellites (contingent).** Compaction, output compression (RTK), knowledge pre-compilation (`memex`), CRDT memory, importance scoring, and dream recompilation. These exist to reduce token spend — pressing *today*, less so as tokens get cheap. They orbit the core and are tagged `[satellite]` in `src/index.ts`. Nothing in Tier 1 depends on them.
+
+The guiding principle: **token bloat is today's problem that a compiler solves; tool inference is the innovation that survives a future where token costs are nominal.** The sections below describe Tier 1 in detail.
+
 ## Core Layers
 
 ```
