@@ -659,3 +659,151 @@ describe('Intent Pinning — semantic collision mitigation', () => {
     expect(result.content).toBe('deleted');
   });
 });
+
+describe('Inference-core hardening', () => {
+  it('resolves via the dispatch index without consulting non-owning classes', async () => {
+    const context = createContext();
+
+    // Two providers with distinct selectors. github should never be asked to
+    // resolve jira's selector — the index routes the match to its owner only.
+    const github = new ToolClass('github');
+    const ghResolve = vi.spyOn(github, 'resolveSelector');
+    const ghEmbed = await context.embedder.embed('search code repositories');
+    const ghSel = await context.selectorTable.intern(ghEmbed, 'github.search_code');
+    github.addMethod(ghSel, makeIMP('github', 'search_code'));
+    context.registerClass(github);
+
+    const jira = new ToolClass('jira');
+    const jiraEmbed = await context.embedder.embed('create a bug report ticket');
+    const jiraSel = await context.selectorTable.intern(jiraEmbed, 'jira.create_issue');
+    jira.addMethod(jiraSel, makeIMP('jira', 'create_issue', 'issue-created'));
+    context.registerClass(jira);
+
+    ghResolve.mockClear();
+    const result = await toolkit_dispatch(context, 'create a bug report ticket', { title: 'x' });
+
+    expect(result.content).toBe('issue-created');
+    // The non-owning github class must not have been scanned for jira's selector
+    expect(ghResolve).not.toHaveBeenCalled();
+  });
+
+  it('keeps the index correct after loadCategory mutates an existing class', async () => {
+    // Reindexing on registry mutation is exercised through ToolRuntime; here we
+    // assert classesForSelector reflects an addMethod + reindex.
+    const context = createContext();
+    const cls = new ToolClass('files');
+    const embed = await context.embedder.embed('read file contents');
+    const sel = await context.selectorTable.intern(embed, 'files.read');
+    cls.addMethod(sel, makeIMP('files', 'read', 'data'));
+    context.registerClass(cls);
+
+    // Add a second selector to the same class post-registration, then reindex.
+    const embed2 = await context.embedder.embed('write file contents');
+    const sel2 = await context.selectorTable.intern(embed2, 'files.write');
+    cls.addMethod(sel2, makeIMP('files', 'write', 'written'));
+    context.reindex();
+
+    expect(context.classesForSelector('files.write')).toContain(cls);
+    const result = await toolkit_dispatch(context, 'write file contents', { path: '/tmp/x' });
+    expect(result.content).toBe('written');
+  });
+
+  it('memoizes tool summaries until the registry changes', async () => {
+    const context = createContext();
+    const cls = new ToolClass('a');
+    const embed = await context.embedder.embed('do thing one');
+    const sel = await context.selectorTable.intern(embed, 'a.one');
+    cls.addMethod(sel, makeIMP('a', 'one'));
+    context.registerClass(cls);
+
+    const first = context.getToolSummaries();
+    const second = context.getToolSummaries();
+    expect(second).toBe(first); // same reference — cached
+
+    context.reindex();
+    const third = context.getToolSummaries();
+    expect(third).not.toBe(first); // invalidated after mutation
+    expect(third.map(s => s.name)).toContain('one');
+  });
+
+  it('clamps confidence to [0,1] when a backend returns distance > 1', async () => {
+    // Custom vector index that reports an over-orthogonal distance (1.5).
+    const overDistanceIndex = {
+      insert() {},
+      remove() {},
+      size() { return 1; },
+      search() {
+        return [{ id: 'x.tool', distance: 1.5 }];
+      },
+    };
+    const embedder = new LocalEmbedder(64);
+    const selectorTable = new SelectorTable(overDistanceIndex as any, embedder);
+    const cache = new ResolutionCache();
+    const context = new DispatchContext(selectorTable, cache, overDistanceIndex as any, embedder);
+
+    const cls = new ToolClass('x');
+    const embed = await embedder.embed('thing');
+    const sel = await selectorTable.intern(embed, 'x.tool');
+    cls.addMethod(sel, makeIMP('x', 'tool', 'ran'));
+    context.registerClass(cls);
+
+    const result = await toolkit_dispatch(context, 'thing');
+    const proof = (result.metadata as any)?.proof;
+    expect(proof).toBeDefined();
+    // Whatever path is taken, no negative confidence may surface.
+    if (typeof result.metadata?.confidence === 'number') {
+      expect(result.metadata.confidence).toBeGreaterThanOrEqual(0);
+      expect(result.metadata.confidence).toBeLessThanOrEqual(1);
+    }
+    for (const c of (result.metadata?.topCandidates as Array<{ confidence: number }> | undefined) ?? []) {
+      expect(c.confidence).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it('completes the forwarding chain by decomposing an unrecognized intent', async () => {
+    // A stub LLM client that decomposes the unknown intent into two sub-intents
+    // that DO resolve to registered tools.
+    const llmClient = {
+      decompose: async () => ({
+        strategy: 'sequential' as const,
+        subIntents: [
+          { intent: 'read file contents' },
+          { intent: 'send message to channel' },
+        ],
+      }),
+    };
+
+    // A vector index that matches nothing — guarantees the broadened-search
+    // step misses, so forwarding reaches the decomposition step deterministically.
+    const emptyIndex = {
+      insert() {},
+      remove() {},
+      size() { return 0; },
+      search() { return []; },
+    };
+    const embedder = new LocalEmbedder(64);
+    const selectorTable = new SelectorTable(emptyIndex as any, embedder);
+    const cache = new ResolutionCache();
+    const context = new DispatchContext(
+      selectorTable, cache, emptyIndex as any, embedder, undefined, undefined,
+      { llmClient },
+    );
+
+    const files = new ToolClass('files');
+    const fSel = await selectorTable.intern(await embedder.embed('read file contents'), 'files.read');
+    files.addMethod(fSel, makeIMP('files', 'read', 'file-data'));
+    context.registerClass(files);
+
+    // An intent that matches nothing directly — drives resolution to forward().
+    const result = await context.forward(
+      await selectorTable.resolve('xyzzy plugh frobnicate nothing matches'),
+      'xyzzy plugh frobnicate nothing matches',
+    );
+
+    const steps = (result.metadata as any)?.fallbackSteps as Array<{ strategy: string; result: string }>;
+    const llmStep = steps?.find(s => s.strategy === 'llm_disambiguate');
+    expect(llmStep?.result).toBe('hit');
+    expect((result.content as any)?.decomposed).toBe(true);
+    expect((result.content as any)?.results).toHaveLength(2);
+  });
+});

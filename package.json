@@ -1,7 +1,7 @@
 {
   "name": "@smallchat/core",
   "version": "0.5.0",
-  "description": "A message-passing tool compiler inspired by the Smalltalk/Objective-C runtime",
+  "description": "Semantic tool inference: resolve intent to the right tool, deterministically — message-passing dispatch inspired by the Smalltalk/Objective-C runtime",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -10,6 +10,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./inference": {
+      "types": "./dist/inference.d.ts",
+      "import": "./dist/inference.js"
     },
     "./runtime": {
       "types": "./dist/runtime/runtime.d.ts",

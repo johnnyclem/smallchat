@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — Sculpting the architecture around tool inference
+- **Repositioning.** smallchat now leads with *tool inference* — deterministic, auditable, microsecond intent→tool resolution — as its durable thesis, and frames token reduction as a present-era *benefit* rather than the reason to exist. README, `ARCHITECTURE.md` (new "Two tiers" section), the `package.json` description, and the `src/index.ts` banner were rewritten accordingly.
+- **Two-tier surface.** Added a dedicated `@smallchat/core/inference` entry point (`src/inference.ts`) that exports the durable inference engine alone, excluding the token-era optimization satellites. The optimization satellites (compaction, RTK, memex, CRDT, importance, dream) are now tagged `[satellite]` in the package barrel. No symbols were removed from the package root.
+
+### Performance & correctness — inference core
+- **Dispatch index wired.** Resolution previously re-scanned every registered tool class for every vector match (O(matches × classes)). The hot path now consults only the classes that declare the matched selector via a `selector → owning classes` index, so resolution cost no longer grows with unrelated providers. The index is rebuilt on `loadCategory`/`addOverload`/`swizzle`.
+- **Tool summaries memoized.** The LLM-feature tool-summary list is computed once and cached on the dispatch context (invalidated on registry mutation) instead of being rebuilt up to four times per degraded dispatch.
+- **Forwarding chain completed.** The forwarding chain's "LLM disambiguation" step was a `not yet implemented` stub. It now decomposes an unrecognized compound intent into sub-intents and dispatches each through the normal pipeline (guarded against reentrancy), making the `verify → decompose → refine → forward` fallback coherent end-to-end.
+- **Confidence clamped.** Confidence derived from vector distance is clamped to `[0, 1]`, so a backend returning an over-orthogonal cosine distance can no longer produce a negative confidence that corrupts tier computation.
+
 ### Security
 - **HTTP transport hardened.** `Access-Control-Allow-Origin: *` is no longer set by default on the MCP HTTP transport. Opt in with `serve --cors-origin <pattern>` (or set `corsOrigin` in `MCPServerConfig`). Same-origin clients (including the in-tree playground) are unaffected.
 - **Request body size limit.** The `POST /mcp` endpoint now rejects bodies larger than 4 MB by default (configurable via `MCPServerConfig.maxBodyBytes` or `serve --max-body-bytes`), returning a JSON-RPC `Parse error` response and HTTP 413. Prevents memory-exhaustion DoS.

@@ -8,9 +8,11 @@
 
 Your agent has 50 tools. The LLM sees all 50 in its context window every single turn, burning tokens and degrading selection accuracy. You write routing logic, maintain tool registries, and pray the model picks the right one.
 
-**smallchat compiles your tools into a dispatch table.** The LLM expresses intent. The runtime resolves it — semantically, deterministically, in microseconds. No prompt stuffing. No selection lottery.
+**smallchat infers which tool to call.** The LLM expresses intent. The runtime resolves it — semantically, deterministically, in microseconds, with an auditable proof of *why* — and self-heals when nothing matches cleanly. No prompt stuffing. No selection lottery.
 
-> **Dispatch, not retrieval.** smallchat is not a knowledge engine or a RAG layer — it doesn't compile documents or answer questions. It compiles *which tool to call* from a natural-language intent. The data substrate is your agent's tool registry (`.toolkit.json`), not enterprise documents.
+> **Tool inference is the durable idea.** Compiling tools out of the context window saves tokens — a real win *today*. But token prices fall. What does not get cheaper is choosing the *right* tool from thousands, deterministically, in microseconds, with a proof you can audit and govern. smallchat is built so that the token savings are a present-era *benefit* of tool inference, not its reason to exist. Even when tokens cost nothing, the inference engine still earns its place.
+
+> **Dispatch, not retrieval.** smallchat is not a knowledge engine or a RAG layer — it doesn't compile documents or answer questions. It infers *which tool to call* from a natural-language intent. The data substrate is your agent's tool registry (`.toolkit.json`), not enterprise documents.
 
 ```bash
 npx @smallchat/core compile --source ~/.mcp.json
@@ -24,8 +26,10 @@ An agent in production needs two things: **what it knows** and **what it can do*
 
 | Layer | Problem | Example |
 |-------|---------|---------|
-| Knowledge layer | Pre-compile documents and data into governed, answer-shaped artifacts. Reduces tokens by moving retrieval upstream from inference time. | RAG pipelines, enterprise knowledge engines |
-| **Dispatch layer** | **Pre-compile which tool to call from a natural-language intent. Reduces tokens by moving tool-selection upstream from inference time.** | **smallchat** |
+| Knowledge layer | Pre-compile documents and data into governed, answer-shaped artifacts so the agent answers from a resolved source instead of re-deriving it. (Moving retrieval upstream also cuts tokens.) | RAG pipelines, enterprise knowledge engines |
+| **Dispatch layer** | **Infer *which tool to call* from a natural-language intent — semantically, deterministically, in microseconds, with an auditable resolution proof. (Moving tool-selection upstream also cuts tokens.)** | **smallchat** |
+
+> The parenthetical token savings is what sells the idea in 2026. The deterministic, auditable selection is what keeps it useful after that.
 
 smallchat runs **in the agent process** — no SaaS dependency, no external round-trip. Your tool registry lives with your agent.
 
@@ -82,6 +86,15 @@ npx @smallchat/core repl tools.toolkit.json
 ```
 
 ## Use It in Code
+
+For the durable engine and nothing else, import the dedicated entry point — it
+excludes the token-era optimization satellites (compaction, memex, CRDT, …):
+
+```typescript
+import { ToolRuntime, MemoryVectorIndex, LocalEmbedder } from '@smallchat/core/inference';
+```
+
+Or from the package root, which additionally re-exports the satellites:
 
 ```typescript
 import { ToolRuntime, MemoryVectorIndex, LocalEmbedder } from '@smallchat/core';

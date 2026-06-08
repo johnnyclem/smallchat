@@ -1,5 +1,22 @@
-// ToolKit — A Message-Passing Tool Compiler
-// v0.5.0 — "Tool Selection Errors: Solved"
+// smallchat — Semantic Tool Inference
+// v0.5.0 — message-passing dispatch from intent to tool.
+//
+// This package is organized in two tiers:
+//
+//   TIER 1 — TOOL INFERENCE CORE (the durable engine)
+//     Resolving an intent to the right tool: selectors, dispatch tables,
+//     confidence tiers, resolution proofs, the verify → decompose → refine →
+//     observe fallback chain, embeddings, and the MCP serving surface. Its
+//     value does not depend on the price of tokens. Import it alone via
+//     `@smallchat/core/inference`.
+//
+//   TIER 2 — OPTIMIZATION SATELLITES (today's token economics; optional)
+//     Compaction, knowledge pre-compilation (memex), CRDT memory, importance
+//     scoring, and dream recompilation. These reduce token spend — a real
+//     problem now, but one that fades as tokens get cheap. They orbit the
+//     core; they are not the thesis. Each Tier-2 section is tagged below.
+
+// ===== TIER 1 — TOOL INFERENCE CORE (the durable engine) =====
 
 // Core types
 export type {
@@ -181,7 +198,7 @@ export type {
   ChannelMessage,
 } from './channel/index.js';
 
-// Dream — memory-driven tool re-compilation
+// [satellite] Dream — memory-driven tool re-compilation
 export { compileLatest, dream } from './dream/dream-compiler.js';
 export type { CompileLatestOptions } from './dream/dream-compiler.js';
 export { readMemoryFiles, extractToolMentions } from './dream/memory-reader.js';
@@ -209,7 +226,7 @@ export type {
   ArtifactManifest,
 } from './dream/types.js';
 
-// Memex — knowledge base compiler
+// [satellite] Memex — knowledge base compiler
 export {
   compile as memexCompile,
   ingest as memexIngest,
@@ -284,7 +301,7 @@ export type {
   MemexCompileResult,
 } from './memex/types.js';
 
-// Compaction — re-exported from @shorthand/core
+// [satellite] Compaction — token compression, re-exported from @shorthand/core
 export {
   DefaultCompactor,
   estimateTokens,
@@ -414,7 +431,7 @@ export {
   isDockerAvailable,
 } from './transport/index.js';
 
-// CRDT — re-exported from @shorthand/core
+// [satellite] CRDT — multi-agent shared memory, re-exported from @shorthand/core
 export {
   LamportClock,
   compareLamport,

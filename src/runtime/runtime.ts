@@ -146,6 +146,8 @@ export class ToolRuntime {
 
     // Flush cache — new methods may shadow cached resolutions
     this.cache.flush();
+    // Rebuild the dispatch index — categories add selectors to existing classes
+    this.context.reindex();
   }
 
   /**
@@ -164,6 +166,8 @@ export class ToolRuntime {
     toolClass.addOverload(selector, signature, imp, options);
     // Flush cache — overloads change resolution behavior
     this.cache.flush();
+    // Rebuild the dispatch index — addOverload may introduce a new selector
+    this.context.reindex();
   }
 
   /**
@@ -187,6 +191,8 @@ export class ToolRuntime {
 
     // Flush cache entries for this selector — critical!
     this.cache.flushSelector(selector);
+    // Rebuild the dispatch index — the swizzled IMP changes tool summaries
+    this.context.reindex();
 
     return original;
   }
