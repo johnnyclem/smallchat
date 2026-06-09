@@ -55,6 +55,7 @@
     "CHANGELOG.md"
   ],
   "scripts": {
+    "prepare": "npm --prefix shorthand install --no-audit --no-fund && npm --prefix shorthand run build",
     "build": "tsc",
     "test": "vitest run",
     "test:watch": "vitest",

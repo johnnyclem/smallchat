@@ -48,7 +48,6 @@ export class ImportanceDetector {
   private readonly referenceGraph: ReferenceGraph;
 
   private scores: Map<string, ImportanceScore> = new Map();
-  private stateDeltaMagnitudes: number[] = [];
   private maxStateDelta = 0;
   private maxReferenceScore = 0;
 
@@ -82,7 +81,6 @@ export class ImportanceDetector {
   addMessage(message: ConversationMessage): ImportanceScore {
     // --- Signal 1: State delta ---
     const delta = computeStateDelta(message, this.entityGraph);
-    this.stateDeltaMagnitudes.push(delta.magnitude);
     if (delta.magnitude > this.maxStateDelta) {
       this.maxStateDelta = delta.magnitude;
     }
@@ -128,16 +126,12 @@ export class ImportanceDetector {
         ? refScore.weightedScore / this.maxReferenceScore
         : 0;
 
-      const normalizedDelta = this.maxStateDelta > 0
-        ? existing.stateDelta * this.maxStateDelta // un-normalize then re-normalize
-        : 0;
-
       const trajectorySignal = trajectoryPoint
-        ? Math.max(0, trajectoryPoint.zScore) / 3 // normalize z-score to ~[0, 1]
+        ? Math.min(1, Math.max(0, trajectoryPoint.zScore) / 3)
         : 0;
 
       const { importance, dominantSignal } = this.combine(
-        normalizedDelta > 0 ? normalizedDelta / this.maxStateDelta : 0,
+        existing.stateDelta,
         normalizedRef,
         trajectorySignal,
       );
@@ -203,7 +197,6 @@ export class ImportanceDetector {
     this.trajectoryTracker.reset();
     this.referenceGraph.reset();
     this.scores.clear();
-    this.stateDeltaMagnitudes = [];
     this.maxStateDelta = 0;
     this.maxReferenceScore = 0;
   }

@@ -36,7 +36,10 @@ export class DispatchBuilder<TArgs extends Record<string, unknown> = Record<stri
    *   runtime.dispatch("fetch url").withArgs({ url: "https://example.com" }).exec()
    */
   withArgs<T extends Record<string, unknown>>(args: T): DispatchBuilder<T> {
-    return new DispatchBuilder<T>(this._context, this._intent, args);
+    const builder = new DispatchBuilder<T>(this._context, this._intent, args);
+    builder._timeoutMs = this._timeoutMs;
+    builder._metadata = this._metadata;
+    return builder;
   }
 
   /**

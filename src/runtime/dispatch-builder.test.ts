@@ -49,6 +49,23 @@ describe('Feature: Dispatch Builder Fluent API', () => {
       expect(builder2).toBeInstanceOf(DispatchBuilder);
       expect(builder2).not.toBe(builder1);
     });
+
+    it('Given metadata and timeout set before withArgs, When exec is called, Then both carry over to the new builder', async () => {
+      (toolkit_dispatch as ReturnType<typeof vi.fn>).mockResolvedValue({
+        content: 'result',
+        isError: false,
+      });
+
+      const builder = new DispatchBuilder(mockContext, 'intent');
+      const result = await builder
+        .withMetadata({ requestId: 'abc' })
+        .withTimeout(5000)
+        .withArgs({ key: 'value' })
+        .exec();
+
+      expect(toolkit_dispatch).toHaveBeenCalledWith(mockContext, 'intent', { key: 'value' });
+      expect(result.metadata?.requestId).toBe('abc');
+    });
   });
 
   describe('Scenario: Execute with timeout', () => {

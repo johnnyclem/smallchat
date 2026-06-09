@@ -12,6 +12,7 @@ import filesystem from '../manifests/filesystem-manifest.json' with { type: 'jso
 import firebase from '../manifests/firebase-manifest.json' with { type: 'json' };
 import git from '../manifests/git-manifest.json' with { type: 'json' };
 import github from '../manifests/github-manifest.json' with { type: 'json' };
+import githubWithHints from '../manifests/github-with-hints-manifest.json' with { type: 'json' };
 import gitlab from '../manifests/gitlab-manifest.json' with { type: 'json' };
 import googleDrive from '../manifests/google-drive-manifest.json' with { type: 'json' };
 import googleMaps from '../manifests/google-maps-manifest.json' with { type: 'json' };
@@ -59,6 +60,7 @@ export const manifests: Record<string, Manifest> = {
   firebase,
   git,
   github,
+  'github-with-hints': githubWithHints,
   gitlab,
   'google-drive': googleDrive,
   'google-maps': googleMaps,

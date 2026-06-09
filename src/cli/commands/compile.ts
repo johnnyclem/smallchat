@@ -273,8 +273,11 @@ function resolvePackageDependencies(
             /* skip invalid */
           }
         }
+      } else {
+        // Registry-based resolution for semver specifiers is not implemented;
+        // warn instead of silently ignoring the declared dependency.
+        console.warn(`  Warning: skipping dependency "${_name}" — semver specifier "${specifier}" is not supported yet (only local ./ or ../ paths are resolved)`);
       }
-      // TODO: registry-based resolution for semver specifiers
     }
   }
 
