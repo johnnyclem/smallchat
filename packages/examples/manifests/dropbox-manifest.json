@@ -1,0 +1,142 @@
+{
+  "id": "dropbox",
+  "name": "Dropbox",
+  "transportType": "mcp",
+  "description": "File storage, sharing, and collaboration with Dropbox",
+  "auth": {
+    "type": "oauth2",
+    "authorizationUrl": "https://www.dropbox.com/oauth2/authorize",
+    "tokenUrl": "https://api.dropboxapi.com/oauth2/token",
+    "scopes": [
+      "files.metadata.read",
+      "files.metadata.write",
+      "files.content.read",
+      "files.content.write",
+      "sharing.read",
+      "sharing.write"
+    ],
+    "clientId": "${DROPBOX_CLIENT_ID}",
+    "clientSecret": "${DROPBOX_CLIENT_SECRET}"
+  },
+  "tools": [
+    {
+      "name": "search_files",
+      "description": "Search for files and folders in Dropbox",
+      "providerId": "dropbox",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string", "description": "Search query string" },
+          "path": { "type": "string", "description": "Scope search to this folder path" },
+          "maxResults": { "type": "number", "description": "Maximum number of results (default: 100)" },
+          "fileExtensions": { "type": "array", "items": { "type": "string" }, "description": "Filter by file extensions (e.g., ['pdf', 'docx'])" },
+          "fileCategories": { "type": "array", "items": { "type": "string" }, "description": "Filter by category", "enum": ["image", "document", "pdf", "spreadsheet", "presentation", "audio", "video", "folder", "paper", "others"] }
+        },
+        "required": ["query"]
+      }
+    },
+    {
+      "name": "read_file",
+      "description": "Download and read the contents of a file from Dropbox",
+      "providerId": "dropbox",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string", "description": "Path to the file in Dropbox" }
+        },
+        "required": ["path"]
+      }
+    },
+    {
+      "name": "write_file",
+      "description": "Upload or overwrite a file in Dropbox",
+      "providerId": "dropbox",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string", "description": "Destination path in Dropbox" },
+          "content": { "type": "string", "description": "File content to upload" },
+          "mode": { "type": "string", "description": "Write mode", "enum": ["add", "overwrite"] },
+          "autorename": { "type": "boolean", "description": "Automatically rename if conflict" }
+        },
+        "required": ["path", "content"]
+      }
+    },
+    {
+      "name": "list_folder",
+      "description": "List the contents of a folder in Dropbox",
+      "providerId": "dropbox",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string", "description": "Folder path (empty string for root)" },
+          "recursive": { "type": "boolean", "description": "List contents recursively" },
+          "limit": { "type": "number", "description": "Maximum number of entries" },
+          "includeDeleted": { "type": "boolean", "description": "Include deleted entries" }
+        },
+        "required": ["path"]
+      }
+    },
+    {
+      "name": "get_metadata",
+      "description": "Get metadata for a file or folder in Dropbox",
+      "providerId": "dropbox",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string", "description": "Path to the file or folder" },
+          "includeMediaInfo": { "type": "boolean", "description": "Include media-specific info for photos/videos" }
+        },
+        "required": ["path"]
+      }
+    },
+    {
+      "name": "move_file",
+      "description": "Move a file or folder to a new location in Dropbox",
+      "providerId": "dropbox",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "fromPath": { "type": "string", "description": "Current path" },
+          "toPath": { "type": "string", "description": "Destination path" },
+          "autorename": { "type": "boolean", "description": "Automatically rename if conflict" }
+        },
+        "required": ["fromPath", "toPath"]
+      }
+    },
+    {
+      "name": "create_shared_link",
+      "description": "Create a shared link for a file or folder in Dropbox",
+      "providerId": "dropbox",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string", "description": "Path to the file or folder" },
+          "access": { "type": "string", "description": "Access level", "enum": ["viewer", "editor"] },
+          "expiration": { "type": "string", "description": "Expiration date in ISO 8601 format" }
+        },
+        "required": ["path"]
+      }
+    },
+    {
+      "name": "delete_file",
+      "description": "Delete a file or folder from Dropbox",
+      "providerId": "dropbox",
+      "transportType": "mcp",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string", "description": "Path to the file or folder to delete" }
+        },
+        "required": ["path"]
+      }
+    }
+  ]
+}

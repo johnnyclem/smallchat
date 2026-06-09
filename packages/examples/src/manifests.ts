@@ -3,6 +3,7 @@ import aws from '../manifests/aws-manifest.json' with { type: 'json' };
 import azure from '../manifests/azure-manifest.json' with { type: 'json' };
 import braveSearch from '../manifests/brave-search-manifest.json' with { type: 'json' };
 import cloudflare from '../manifests/cloudflare-manifest.json' with { type: 'json' };
+import dropbox from '../manifests/dropbox-manifest.json' with { type: 'json' };
 import elasticsearch from '../manifests/elasticsearch-manifest.json' with { type: 'json' };
 import everart from '../manifests/everart-manifest.json' with { type: 'json' };
 import everything from '../manifests/everything-manifest.json' with { type: 'json' };
@@ -17,12 +18,14 @@ import gitlab from '../manifests/gitlab-manifest.json' with { type: 'json' };
 import googleDrive from '../manifests/google-drive-manifest.json' with { type: 'json' };
 import googleMaps from '../manifests/google-maps-manifest.json' with { type: 'json' };
 import linear from '../manifests/linear-manifest.json' with { type: 'json' };
+import loomMcp from '../manifests/loom-mcp-manifest.json' with { type: 'json' };
 import memory from '../manifests/memory-manifest.json' with { type: 'json' };
 import mongodb from '../manifests/mongodb-manifest.json' with { type: 'json' };
 import notion from '../manifests/notion-manifest.json' with { type: 'json' };
 import postgres from '../manifests/postgres-manifest.json' with { type: 'json' };
 import puppeteer from '../manifests/puppeteer-manifest.json' with { type: 'json' };
 import redis from '../manifests/redis-manifest.json' with { type: 'json' };
+import rtk from '../manifests/rtk-manifest.json' with { type: 'json' };
 import sentry from '../manifests/sentry-manifest.json' with { type: 'json' };
 import sequentialThinking from '../manifests/sequential-thinking-manifest.json' with { type: 'json' };
 import slack from '../manifests/slack-manifest.json' with { type: 'json' };
@@ -51,6 +54,7 @@ export const manifests: Record<string, Manifest> = {
   azure,
   'brave-search': braveSearch,
   cloudflare,
+  dropbox,
   elasticsearch,
   everart,
   everything,
@@ -65,12 +69,14 @@ export const manifests: Record<string, Manifest> = {
   'google-drive': googleDrive,
   'google-maps': googleMaps,
   linear,
+  loom: loomMcp,
   memory,
   mongodb,
   notion,
   postgres,
   puppeteer,
   redis,
+  rtk,
   sentry,
   'sequential-thinking': sequentialThinking,
   slack,

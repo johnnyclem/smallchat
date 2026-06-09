@@ -12,7 +12,9 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch"
@@ -23,9 +25,14 @@
   },
   "devDependencies": {
     "next": "^16.2.1",
-    "@smallchat/core": "^0.5.0",
+    "@smallchat/core": "file:../..",
     "typescript": "^5.7.0"
   },
-  "keywords": ["smallchat", "nextjs", "api-routes", "server-actions"],
+  "keywords": [
+    "smallchat",
+    "nextjs",
+    "api-routes",
+    "server-actions"
+  ],
   "license": "MIT"
 }
