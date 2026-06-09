@@ -156,7 +156,7 @@ export type { McpServerConfig, McpConfigFile, IntrospectionResult } from './mcp/
 
 // MCP Server & Transport Engine
 export { MCPServer } from './mcp/server.js';
-export type { MCPServerConfig } from './mcp/server.js';
+export type { MCPServerConfig, McpApp, McpToolExecutor } from './mcp/server.js';
 export { MCPTransport, getTransport, clearTransports, registerLocalHandler, unregisterLocalHandler } from './mcp/transport.js';
 export type { TransportOptions } from './mcp/transport.js';
 export { SessionStore } from './mcp/session-store.js';

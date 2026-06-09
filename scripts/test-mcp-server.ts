@@ -13,7 +13,11 @@
 import { createServer, type Server } from 'node:http';
 import { readFileSync, mkdirSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { MCPServer } from '../src/mcp/index.js';
+import { SessionManager } from '../src/mcp/session.js';
+import { ToolRegistry, ResourceRegistry, PromptRegistry } from '../src/mcp/registry.js';
+import { SseBroker } from '../src/mcp/sse-broker.js';
+import { McpRouter } from '../src/mcp/router.js';
+import { createHttpHandler } from '../src/mcp/transports/http.js';
 import type { McpTool } from '../src/mcp/types.js';
 import { MODELS, calculateCost, type ModelSpec } from './pricing.js';
 import { writeCSV, writeSummaryReport, type RunResult } from './csv-writer.js';
@@ -413,7 +417,7 @@ function createTestJobs(manifests: ManifestFile[]): TestJob[] {
       // Call tools/list on each session
       const listCalls = await Promise.allSettled(
         sessions
-          .filter((s): s is PromiseFulfilledResult<{ sessionId: string }> => s.status === 'fulfilled')
+          .filter((s) => s.status === 'fulfilled')
           .map((s) => rpcCall(baseUrl, 'tools/list', {}, s.value.sessionId)),
       );
 
@@ -452,21 +456,31 @@ async function main() {
     console.log(`Parsed config: ${Object.keys(servers).length} MCP servers defined`);
   }
 
-  // Start in-process MCP server
-  const mcpServer = new MCPServer({ dbPath: ':memory:' });
+  // Start an in-process instance of the experimental JSON-RPC engine
+  // (router + session manager + SSE broker, wired to an HTTP handler).
+  const sessions = new SessionManager(':memory:');
+  const tools = new ToolRegistry();
+  const resources = new ResourceRegistry();
+  const prompts = new PromptRegistry();
+  const broker = new SseBroker();
+  const serverInfo = { serverName: 'smallchat', serverVersion: '0.5.0', sessionTtlMs: 86_400_000 };
+  const router = new McpRouter(sessions, tools, resources, prompts, broker, serverInfo);
+  sessions.startJanitor(60_000);
 
   // Register all tools from manifests
   let toolCount = 0;
   for (const manifest of manifests) {
     for (const tool of manifest.tools) {
-      mcpServer.registerTool(manifestToolToMcpTool(manifest, tool));
+      tools.register(manifestToolToMcpTool(manifest, tool));
       toolCount++;
     }
   }
   console.log(`Registered ${toolCount} tools`);
 
   // Start HTTP server
-  const httpServer: Server = createServer(mcpServer.createHttpHandler());
+  const httpServer: Server = createServer(
+    createHttpHandler(router, broker, sessions, tools, serverInfo),
+  );
   await new Promise<void>((resolve) => {
     httpServer.listen(args.port, '127.0.0.1', () => resolve());
   });
@@ -563,7 +577,7 @@ async function main() {
 
   // Shutdown
   httpServer.close();
-  mcpServer.close();
+  sessions.close_db();
 
   process.exit(failed > 0 ? 1 : 0);
 }

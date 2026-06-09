@@ -3,88 +3,65 @@ title: MCPServer
 sidebar_label: MCPServer
 ---
 
-import Tabs from '@theme/Tabs';
-import TabItem from '@theme/TabItem';
-
 # MCPServer API Reference
 
-`MCPServer` provides a MCP 2025-11-25 compliant HTTP server. It handles JSON-RPC requests, Server-Sent Events, and the MCP discovery endpoint.
+`MCPServer` is smallchat's production MCP server. It serves a compiled toolkit over JSON-RPC 2.0 + SSE, and also supports programmatic registration of tools and MCP Apps interactive views.
+
+> Looking for Swift? The Swift implementation lives in its own repository: [github.com/johnnyclem/smallchat-swift](https://github.com/johnnyclem/smallchat-swift).
 
 ## Constructor
 
-<Tabs groupId="language">
-<TabItem value="typescript" label="TypeScript">
-
 ```typescript
 import { MCPServer } from '@smallchat/core';
-import type { MCPServerOptions } from '@smallchat/core';
+import type { MCPServerConfig } from '@smallchat/core';
 
 const server = new MCPServer({
-  dbPath: './mcp-sessions.db',   // optional — path for session persistence
-  name: 'my-tools',              // optional — server name in discovery
-  version: '1.0.0',              // optional — version in discovery
+  port: 3001,
+  host: '127.0.0.1',
+  sourcePath: './manifests',     // directory of manifests or a compiled .toolkit artifact
+  dbPath: './smallchat.db',      // optional — SQLite session persistence (default 'smallchat.db')
 });
 ```
 
-</TabItem>
-<TabItem value="swift" label="Swift">
-
-```swift
-import SmallChatMCP
-
-let server = MCPServer(
-    name: "my-tools",
-    version: "1.0.0",
-    dbPath: "./mcp-sessions.db"
-)
-```
-
-</TabItem>
-</Tabs>
-
-### `MCPServerOptions`
-
-<Tabs groupId="language">
-<TabItem value="typescript" label="TypeScript">
+### `MCPServerConfig`
 
 ```typescript
-interface MCPServerOptions {
-  dbPath?: string;      // SQLite database path for session storage
-  name?: string;        // Server name (shown in discovery)
-  version?: string;     // Server version (shown in discovery)
-  basePath?: string;    // URL base path, default '/mcp'
+interface MCPServerConfig {
+  port: number;            // port to listen on
+  host: string;            // host to bind to
+  sourcePath: string;      // source directory or compiled artifact
+  dbPath?: string;         // SQLite database path for sessions
+  enableAuth?: boolean;    // OAuth 2.1 authentication
+  enableRateLimit?: boolean;
+  rateLimitRPM?: number;   // max requests/minute per client (default 600)
+  enableAudit?: boolean;   // in-memory request audit trail
+  sessionTTLMs?: number;   // session TTL (default 24h)
+  rtkConfig?: RtkConfig;   // RTK output compression
+  corsOrigin?: string | null;
+  maxBodyBytes?: number;   // POST body limit (default 4 MiB)
 }
 ```
 
-</TabItem>
-<TabItem value="swift" label="Swift">
+## Lifecycle
 
-```swift
-// In Swift, options are passed directly as init parameters on MCPServer:
-let server = MCPServer(
-    name: "my-tools",          // Server name (shown in discovery)
-    version: "1.0.0",          // Server version (shown in discovery)
-    dbPath: "./mcp-sessions.db" // SQLite database path for session storage
-)
+```typescript
+await server.start();   // loads the toolkit from sourcePath and listens
+await server.stop();    // closes SSE clients, the session DB, and the HTTP server
 ```
-
-</TabItem>
-</Tabs>
 
 ## Registering tools
 
-### `server.registerTool(tool)`
+Tools compiled into the toolkit at `sourcePath` are served automatically and executed through the semantic dispatch runtime. You can register additional tools directly:
 
-Register a single tool:
-
-<Tabs groupId="language">
-<TabItem value="typescript" label="TypeScript">
+### `server.registerTool(tool, executor?)`
 
 ```typescript
-import type { McpTool } from '@smallchat/core';
+import type { McpTool, McpToolExecutor } from '@smallchat/core';
 
 const tool: McpTool = {
+  id: 'github:search_code',
   name: 'search_code',
+  title: 'Search Code',
   description: 'Search for code across GitHub repositories',
   inputSchema: {
     type: 'object',
@@ -93,175 +70,90 @@ const tool: McpTool = {
     },
     required: ['query'],
   },
-  handler: async (args) => {
-    // Your implementation
-    const results = await github.searchCode(args.query);
-    return {
-      content: [{ type: 'text', text: JSON.stringify(results) }],
-    };
-  },
 };
 
-server.registerTool(tool);
+const executor: McpToolExecutor = async (args) => {
+  const results = await github.searchCode(args.query as string);
+  return { content: JSON.stringify(results), isError: false };
+};
+
+server.registerTool(tool, executor);
 ```
 
-</TabItem>
-<TabItem value="swift" label="Swift">
+Registered tools appear in `tools/list` alongside the compiled toolkit. `tools/call` invokes the executor; a tool registered without one returns an explanatory error when called.
 
-```swift
-let tool = McpTool(
-    name: "search_code",
-    description: "Search for code across GitHub repositories",
-    inputSchema: JSONSchema(
-        type: .object,
-        properties: ["query": .init(type: .string, description: "Search query")],
-        required: ["query"]
-    )
-) { args in
-    let results = try await github.searchCode(args["query"] as! String)
-    return McpToolResult(content: [.text(String(describing: results))])
-}
-server.registerTool(tool)
-```
+### `server.registerApp(app)` — MCP Apps
 
-</TabItem>
-</Tabs>
-
-### `McpTool`
-
-<Tabs groupId="language">
-<TabItem value="typescript" label="TypeScript">
+Register a tool together with its interactive HTML view in one call. The tool is stamped with `_meta.ui` so MCP Apps clients can discover the view, and the HTML is served as a `ui://` resource:
 
 ```typescript
-interface McpTool {
-  name: string;
-  description: string;
-  inputSchema: JSONSchemaType;
-  handler: (args: Record<string, unknown>) => Promise<McpToolResult>;
-}
-
-interface McpToolResult {
-  content: Array<{ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }>;
-  isError?: boolean;
-}
+server.registerApp({
+  tool: {
+    id: 'weather:view',
+    name: 'weather_view',
+    title: 'Weather',
+    description: 'Show current weather with an interactive view',
+    inputSchema: { type: 'object', properties: { city: { type: 'string' } } },
+  },
+  uiContent: '<html><body>…</body></html>',  // or async () => Promise<string> for lazy loading
+  uiOptions: { description: 'Weather card' },
+  executor: async (args) => ({ content: await getWeather(args.city as string), isError: false }),
+});
 ```
 
-</TabItem>
-<TabItem value="swift" label="Swift">
+The view is served at `ui://smallchat/weather_view` (override with `uiUri`) with MIME type `text/html;profile=mcp-app`, so hosts render it in a sandboxed iframe.
 
-```swift
-// McpTool is a struct in Swift
-struct McpTool {
-    let name: String
-    let description: String
-    let inputSchema: JSONSchema
-    let handler: ([String: Any]) async throws -> McpToolResult
-}
+### `server.registerUIResource(toolName, content, options?)`
 
-// McpToolResult usage:
-McpToolResult(content: [.text("result string")])
-```
+Register a standalone `ui://` resource without a tool. Returns the canonical URI.
 
-</TabItem>
-</Tabs>
-
-## Creating the HTTP handler
+## Embedding
 
 ### `server.createHttpHandler()`
 
-Returns a standard Node.js `http.RequestListener` / Express-compatible handler (TypeScript) or starts a SwiftNIO server (Swift):
-
-<Tabs groupId="language">
-<TabItem value="typescript" label="TypeScript">
+Returns a standard Node.js `http.RequestListener` for embedding in an existing server instead of calling `start()`:
 
 ```typescript
 import http from 'http';
 
-const handler = server.createHttpHandler();
-const httpServer = http.createServer(handler);
-httpServer.listen(3001, () => {
-  console.log('smallchat MCP server on http://localhost:3001');
-});
+const httpServer = http.createServer(server.createHttpHandler());
+httpServer.listen(3001);
 ```
 
-With Express:
+## Resources and prompts
+
+Handler-based registries are exposed for resources and prompts:
 
 ```typescript
-import express from 'express';
-
-const app = express();
-app.use('/mcp', server.createHttpHandler());
-app.listen(3001);
+server.resources.registerHandler(/* ResourceHandler */);
+server.prompts.registerPrompt(/* StaticPrompt */);
 ```
 
-</TabItem>
-<TabItem value="swift" label="Swift">
-
-```swift
-import NIO
-
-try await server.start(port: 3001)
-print("smallchat MCP server on http://localhost:3001")
-```
-
-> Swift uses SwiftNIO directly rather than Express. You can also integrate with Vapor if you need a full web framework.
-
-</TabItem>
-</Tabs>
-
-## Closing the server
-
-### `server.close()`
-
-Gracefully shut down the server, closing any open SSE connections and the session database:
-
-<Tabs groupId="language">
-<TabItem value="typescript" label="TypeScript">
-
-```typescript
-process.on('SIGTERM', async () => {
-  await server.close();
-  process.exit(0);
-});
-```
-
-</TabItem>
-<TabItem value="swift" label="Swift">
-
-```swift
-// Graceful shutdown with structured concurrency
-try await server.shutdown()
-```
-
-</TabItem>
-</Tabs>
-
-## MCP protocol endpoints
-
-The server mounts the following routes:
+## HTTP endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
+| `POST` | `/` or `/rpc` | JSON-RPC 2.0 — all MCP methods |
 | `GET` | `/.well-known/mcp.json` | Discovery document |
-| `POST` | `/mcp` | JSON-RPC 2.0 — all MCP methods |
-| `GET` | `/mcp/sse` | Server-Sent Events for streaming |
-| `GET` | `/health` | Health check — returns `{ status: "ok" }` |
+| `GET` | `/sse` | Server-Sent Events stream |
+| `GET` | `/health` | Health check |
+| `POST` | `/oauth/token` | OAuth 2.1 token endpoint |
 
 ## Supported JSON-RPC methods
 
 | Method | Description |
 |--------|-------------|
-| `initialize` | Protocol handshake |
-| `tools/list` | List all registered tools |
-| `tools/call` | Invoke a tool by name |
-| `resources/list` | List resources (if any registered) |
-| `prompts/list` | List prompts (if any registered) |
-| `ping` | Keepalive |
+| `initialize` | Protocol handshake (returns `Mcp-Session-Id` header) |
+| `tools/list` | List compiled + registered tools (cursor-paginated) |
+| `tools/call` | Invoke a tool by name (SSE streaming when `Accept: text/event-stream`) |
+| `resources/list` | List resources, including `ui://` app views |
+| `resources/read` | Read a resource (serves `ui://` HTML for MCP Apps) |
+| `resources/templates/list` | List resource templates |
+| `resources/subscribe` / `unsubscribe` | Resource change notifications over SSE |
+| `prompts/list` / `prompts/get` | Prompt registry access |
+| `ping`, `shutdown` | Keepalive / session teardown |
 
 ## MCP constants
-
-<Tabs groupId="language">
-<TabItem value="typescript" label="TypeScript">
 
 ```typescript
 import { MCP_PROTOCOL_VERSIONS, MCP_ERROR } from '@smallchat/core';
@@ -273,97 +165,33 @@ MCP_ERROR.INVALID_REQUEST      // -32600
 MCP_ERROR.METHOD_NOT_FOUND     // -32601
 MCP_ERROR.INVALID_PARAMS       // -32602
 MCP_ERROR.INTERNAL_ERROR       // -32603
-MCP_ERROR.TOOL_NOT_FOUND       // -32001
+MCP_ERROR.TOOL_NOT_FOUND       // -32040
 ```
-
-</TabItem>
-<TabItem value="swift" label="Swift">
-
-```swift
-import SmallChatMCP
-
-MCPProtocolVersions.latest   // "2025-11-25"
-
-MCPError.parseError          // -32700
-MCPError.invalidRequest      // -32600
-MCPError.methodNotFound      // -32601
-MCPError.invalidParams       // -32602
-MCPError.internalError       // -32603
-MCPError.toolNotFound        // -32001
-```
-
-</TabItem>
-</Tabs>
 
 ## Full example
 
-<Tabs groupId="language">
-<TabItem value="typescript" label="TypeScript">
-
 ```typescript
-import { MCPServer, ToolRuntime, LocalEmbedder, MemoryVectorIndex } from '@smallchat/core';
-import http from 'http';
+import { MCPServer } from '@smallchat/core';
 
-// Create the runtime and load tools
-const runtime = new ToolRuntime({
-  embedder: new LocalEmbedder(),
-  vectorIndex: new MemoryVectorIndex(),
+const server = new MCPServer({
+  port: 3001,
+  host: '127.0.0.1',
+  sourcePath: './toolkit.json',   // compiled with `smallchat compile`
 });
-await runtime.load('./tools.json');
 
-// Create the MCP server
-const mcp = new MCPServer({ name: 'my-tools', version: '1.0.0' });
-
-// Bridge runtime tools into the MCP server
-for (const cls of runtime.getClasses()) {
-  for (const method of cls.getMethods()) {
-    mcp.registerTool({
-      name: `${cls.id}.${method.name}`,
-      description: method.description,
-      inputSchema: method.inputSchema,
-      handler: (args) => runtime.dispatch(method.name, args),
-    });
-  }
-}
-
-// Start
-const httpServer = http.createServer(mcp.createHttpHandler());
-httpServer.listen(3001, () => {
-  console.log('Ready on http://localhost:3001');
+// Add a custom tool with an interactive view
+server.registerApp({
+  tool: {
+    id: 'demo:hello',
+    name: 'hello_view',
+    title: 'Hello',
+    description: 'Say hello with a rendered card',
+    inputSchema: { type: 'object', properties: { name: { type: 'string' } } },
+  },
+  uiContent: '<html><body><h1>Hello!</h1></body></html>',
+  executor: async (args) => ({ content: `Hello, ${args.name ?? 'world'}!`, isError: false }),
 });
+
+await server.start();
+// smallchat MCP server listening on http://127.0.0.1:3001
 ```
-
-</TabItem>
-<TabItem value="swift" label="Swift">
-
-```swift
-import SmallChat
-import SmallChatMCP
-
-let runtime = ToolRuntime(
-    vectorIndex: MemoryVectorIndex(),
-    embedder: LocalEmbedder()
-)
-try await runtime.load("./tools.json")
-
-let mcp = MCPServer(name: "my-tools", version: "1.0.0")
-
-for cls in runtime.getClasses() {
-    for method in cls.getMethods() {
-        mcp.registerTool(McpTool(
-            name: "\(cls.id).\(method.name)",
-            description: method.description,
-            inputSchema: method.inputSchema
-        ) { args in
-            let result = try await runtime.dispatch(method.name, args: args)
-            return McpToolResult(content: [.text(String(describing: result.output))])
-        })
-    }
-}
-
-try await mcp.start(port: 3001)
-print("Ready on http://localhost:3001")
-```
-
-</TabItem>
-</Tabs>

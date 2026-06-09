@@ -904,18 +904,36 @@ describe('edge cases', () => {
 // ---------------------------------------------------------------------------
 
 describe('MCPServer class', () => {
-  it('creates server and accepts tool registration', () => {
-    const server = new MCPServer({ dbPath: ':memory:' });
+  const config = { port: 0, host: '127.0.0.1', sourcePath: '', dbPath: ':memory:' };
+
+  it('creates server and accepts tool registration', async () => {
+    const server = new MCPServer(config);
     expect(() => {
       server.registerTool({ id: 'p:t', name: 't', title: 'T', description: 'd', inputSchema: {} });
     }).not.toThrow();
-    server.close();
+    await server.stop();
   });
 
-  it('createHttpHandler returns a function', () => {
-    const server = new MCPServer({ dbPath: ':memory:' });
+  it('createHttpHandler returns a function', async () => {
+    const server = new MCPServer(config);
     const handler = server.createHttpHandler();
     expect(typeof handler).toBe('function');
-    server.close();
+    await server.stop();
+  });
+
+  it('registerApp stamps the tool with _meta.ui and serves the view', async () => {
+    const server = new MCPServer(config);
+    server.registerApp({
+      tool: { id: 'p:weather_view', name: 'weather_view', title: 'Weather', description: 'shows weather', inputSchema: {} },
+      uiContent: '<html><body>weather</body></html>',
+      executor: async () => ({ content: 'sunny', isError: false }),
+    });
+
+    const uri = server.uiResources.getUriForTool('weather_view');
+    expect(uri).toBe('ui://smallchat/weather_view');
+    const content = await server.uiResources.read(uri!);
+    expect(content?.mimeType).toBe('text/html;profile=mcp-app');
+    expect(content?.text).toContain('weather');
+    await server.stop();
   });
 });
