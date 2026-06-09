@@ -34,3 +34,4 @@ smallchat.db-wal
 smallchat.db-shm
 *.db-wal
 *.db-shm
+packages/vscode-extension/out/
