@@ -69,7 +69,7 @@ export function useToolDispatch<T = unknown>(
       setError(null);
 
       try {
-        const res = await runtime.dispatch(intent, args);
+        const res = await runtime.dispatch(intent, args ?? {});
         setResult(res);
         setData(res.content as T);
         setLoading(false);

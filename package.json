@@ -54,8 +54,19 @@
     "LICENSE",
     "CHANGELOG.md"
   ],
+  "workspaces": [
+    "shorthand",
+    "packages/react",
+    "packages/nextjs",
+    "packages/testing",
+    "packages/playground",
+    "packages/examples",
+    "packages/vscode-extension"
+  ],
   "scripts": {
     "build": "tsc",
+    "build:packages": "npm run build --workspaces --if-present",
+    "build:all": "npm run build && npm run build:packages",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "tsc --noEmit",

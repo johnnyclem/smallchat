@@ -1,7 +1,7 @@
 {
   "name": "@shorthand/core",
   "version": "0.1.0",
-  "description": "Progressive context compaction for LLMs — LSM-tree-inspired conversation state management",
+  "description": "Progressive context compaction for LLMs \u2014 LSM-tree-inspired conversation state management",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -28,8 +28,15 @@
       "import": "./dist/embedding/local-embedder.js"
     }
   },
-  "files": ["dist", "models", "README.md", "LICENSE", "CHANGELOG.md"],
+  "files": [
+    "dist",
+    "models",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
   "scripts": {
+    "prepare": "npm run build",
     "build": "tsc",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -37,8 +44,14 @@
     "prepublishOnly": "npm run build"
   },
   "keywords": [
-    "llm", "context-window", "compaction", "crdt", "agent-memory",
-    "importance-detection", "conversation", "token-optimization"
+    "llm",
+    "context-window",
+    "compaction",
+    "crdt",
+    "agent-memory",
+    "importance-detection",
+    "conversation",
+    "token-optimization"
   ],
   "repository": {
     "type": "git",

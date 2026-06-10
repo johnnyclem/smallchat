@@ -17,10 +17,14 @@
 import {
   createServer,
   type IncomingMessage,
+  type RequestListener,
   type ServerResponse,
   type Server,
 } from 'node:http';
 import type { ToolRuntime } from '../runtime/runtime.js';
+import type { ToolResult } from '../core/types.js';
+import type { McpTool, McpUiResourceMeta } from './types.js';
+import { UIResourceRegistry, type UIContentProvider } from './ui-resources.js';
 import { SessionStore, type MCPSession } from './session-store.js';
 import { OAuthManager } from './oauth.js';
 import { ResourceRegistry, ResourceNotFoundError } from './resources.js';
@@ -102,6 +106,39 @@ export interface MCPServerConfig {
 const DEFAULT_MAX_BODY_BYTES = 4 * 1024 * 1024;
 
 // ---------------------------------------------------------------------------
+// Programmatic tool registration (MCP Apps)
+// ---------------------------------------------------------------------------
+
+/** Server-side executor for a programmatically registered tool. */
+export type McpToolExecutor = (
+  args: Record<string, unknown>,
+) => Promise<ToolResult>;
+
+/**
+ * McpApp — a tool + its associated MCP Apps interactive view.
+ *
+ * Passed to MCPServer.registerApp() to atomically register both the tool
+ * and its ui:// resource in a single call.
+ *
+ * Obj-C analogy: McpApp ≈ NSViewController subclass declaration — it bundles
+ * the model (tool) with its view (HTML resource) and declares how they connect.
+ */
+export interface McpApp {
+  tool: McpTool;
+  /** HTML content for the view (string or async loader for lazy loading) */
+  uiContent: UIContentProvider;
+  /** Optional custom uri; defaults to ui://<serverName>/<toolName> */
+  uiUri?: string;
+  /** CSP/permission metadata for the sandboxed iframe */
+  uiOptions?: {
+    description?: string;
+    meta?: McpUiResourceMeta;
+  };
+  /** Optional server-side executor invoked on tools/call */
+  executor?: McpToolExecutor;
+}
+
+// ---------------------------------------------------------------------------
 // JSON-RPC types (minimal, used only for request/response shaping)
 // ---------------------------------------------------------------------------
 
@@ -146,6 +183,13 @@ export class MCPServer {
   private readonly sseClients = new Map<string, SSEClient>();
   private readonly config: MCPServerConfig;
   private sseCounter = 0;
+  /** Registry for MCP Apps ui:// resources */
+  readonly uiResources = new UIResourceRegistry(SERVER_NAME);
+  /** Programmatically registered tools (beyond the compiled artifact), keyed by name */
+  private readonly registeredTools = new Map<
+    string,
+    { tool: McpTool; executor?: McpToolExecutor }
+  >();
 
   constructor(config: MCPServerConfig) {
     this.config = config;
@@ -160,6 +204,73 @@ export class MCPServer {
   get resources(): ResourceRegistry { return this.resourceRegistry; }
   get prompts(): PromptRegistry { return this.promptRegistry; }
   get oauth(): OAuthManager { return this.oauthManager; }
+
+  // -------------------------------------------------------------------------
+  // Programmatic registration (beyond the compiled artifact)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Register a tool directly on the server (in addition to any tools loaded
+   * from the compiled artifact). The optional executor handles tools/call;
+   * without one, calls to this tool return an error explaining it has no
+   * server-side implementation.
+   */
+  registerTool(tool: McpTool, executor?: McpToolExecutor): void {
+    this.registeredTools.set(tool.name, { tool, executor });
+  }
+
+  /**
+   * Register a tool together with its MCP Apps interactive view.
+   *
+   * Atomically registers the McpTool (with _meta.ui populated) and its
+   * ui:// HTML resource so both are available to clients in a single call.
+   *
+   * Obj-C analogy: registerApp() ≈ [UIViewController class] + NIB registration —
+   * it binds the controller (tool) to its view (HTML resource).
+   */
+  registerApp(app: McpApp): void {
+    const uri = this.uiResources.register(app.tool.name, app.uiContent, {
+      description: app.uiOptions?.description,
+      meta: app.uiOptions?.meta,
+      customUri: app.uiUri,
+    });
+
+    // Stamp the tool with _meta.ui so clients can discover the view
+    const toolWithMeta: McpTool = {
+      ...app.tool,
+      _meta: {
+        ...app.tool._meta,
+        ui: {
+          resourceUri: uri,
+          visibility: app.uiOptions?.meta ? ['model', 'app'] : undefined,
+        },
+      },
+    };
+
+    this.registerTool(toolWithMeta, app.executor);
+  }
+
+  /**
+   * Register a standalone ui:// resource (without registering a tool).
+   * Returns the canonical ui:// URI assigned to this resource.
+   */
+  registerUIResource(
+    toolName: string,
+    content: UIContentProvider,
+    options?: { description?: string; meta?: McpUiResourceMeta; customUri?: string },
+  ): string {
+    return this.uiResources.register(toolName, content, options);
+  }
+
+  /**
+   * Returns a Node.js http.RequestListener for embedding this server in an
+   * existing HTTP server (instead of calling start()).
+   */
+  createHttpHandler(): RequestListener {
+    return (req, res) => {
+      void this.handleRequest(req, res);
+    };
+  }
 
   // -------------------------------------------------------------------------
   // Lifecycle
@@ -478,9 +589,14 @@ export class MCPServer {
   // ---- Tools --------------------------------------------------------------
 
   private rpcToolsList(rpcReq: JsonRpcRequest, id: string | number | null, res: ServerResponse): void {
-    if (!this.artifact) { sendRpcOk(res, id, { tools: [] }); return; }
-
-    const allTools = buildToolList(this.artifact);
+    const artifactTools = this.artifact ? buildToolList(this.artifact) : [];
+    const registered = [...this.registeredTools.values()].map(({ tool }) => ({
+      name: tool.name,
+      description: tool.description,
+      inputSchema: tool.inputSchema,
+      ...(tool._meta ? { _meta: tool._meta } : {}),
+    }));
+    const allTools = [...artifactTools, ...registered];
     const cursor = rpcReq.params?.cursor as string | undefined;
     const pageSize = 100;
     const startIndex = cursor ? parseInt(cursor, 10) : 0;
@@ -496,11 +612,6 @@ export class MCPServer {
     wantsStream: boolean,
     res: ServerResponse,
   ): Promise<void> {
-    if (!this.runtime) {
-      sendRpcError(res, id, INTERNAL_ERROR, 'Runtime not initialized');
-      return;
-    }
-
     const toolName = rpcReq.params?.name as string;
     const args = (rpcReq.params?.arguments ?? {}) as Record<string, unknown>;
 
@@ -509,12 +620,30 @@ export class MCPServer {
       return;
     }
 
-    if (wantsStream) {
+    const registered = this.registeredTools.get(toolName);
+
+    if (!registered && !this.runtime) {
+      sendRpcError(res, id, INTERNAL_ERROR, 'Runtime not initialized');
+      return;
+    }
+
+    // Streaming applies only to runtime-dispatched tools; registered tools
+    // respond with a plain JSON-RPC result regardless of the Accept header.
+    if (wantsStream && !registered) {
       return this.rpcToolsCallStreaming(toolName, args, id, res);
     }
 
     try {
-      const result = await this.runtime.dispatch(toolName, args);
+      let result: ToolResult;
+      if (registered) {
+        if (!registered.executor) {
+          sendRpcError(res, id, INVALID_PARAMS, `Tool "${toolName}" is registered without a server-side executor`);
+          return;
+        }
+        result = await registered.executor(args);
+      } else {
+        result = await this.runtime!.dispatch(toolName, args);
+      }
       let formattedContent = formatContent(result);
 
       if (this.config.rtkConfig && this.config.rtkConfig.enabled !== false && !result.isError) {
@@ -610,12 +739,24 @@ export class MCPServer {
   private async rpcResourcesList(rpcReq: JsonRpcRequest, id: string | number | null, res: ServerResponse): Promise<void> {
     const cursor = rpcReq.params?.cursor as string | undefined;
     const result = await this.resourceRegistry.list(cursor);
-    sendRpcOk(res, id, result);
+    // ui:// resources are appended to the first page only (the set is small
+    // and not paginated by the UIResourceRegistry).
+    const uiList = cursor ? [] : this.uiResources.list();
+    sendRpcOk(res, id, uiList.length > 0
+      ? { ...result, resources: [...result.resources, ...uiList] }
+      : result);
   }
 
   private async rpcResourcesRead(rpcReq: JsonRpcRequest, id: string | number | null, res: ServerResponse): Promise<void> {
     const uri = rpcReq.params?.uri as string;
     if (!uri) { sendRpcError(res, id, INVALID_PARAMS, 'Missing resource URI'); return; }
+
+    if (uri.startsWith('ui://')) {
+      const content = await this.uiResources.read(uri);
+      if (!content) { sendRpcError(res, id, INVALID_PARAMS, `Unknown ui:// resource: ${uri}`); return; }
+      sendRpcOk(res, id, { contents: [content] });
+      return;
+    }
 
     try {
       const content = await this.resourceRegistry.read(uri);

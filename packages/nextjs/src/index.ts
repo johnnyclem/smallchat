@@ -65,7 +65,7 @@ export function createDispatchHandler(options?: { runtime?: ToolRuntime }) {
     }
 
     try {
-      const result = await runtime.dispatch(body.intent, body.args);
+      const result = await runtime.dispatch(body.intent, body.args ?? {});
       return Response.json(result);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

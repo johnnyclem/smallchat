@@ -342,12 +342,14 @@ export class McpRouter {
       });
     }
 
-    // Non-streaming: not yet implemented (would need actual execution pipeline)
-    return rpcOk(id, {
-      invocationId,
-      status: 'ok',
-      result: { note: 'Non-streaming tool execution not yet implemented' },
-    });
+    // Non-streaming execution is not supported: the router has no execution
+    // pipeline of its own (tool execution happens via the SSE broker). Reject
+    // explicitly rather than returning a fake success.
+    return rpcError(
+      id,
+      MCP_ERROR.INVALID_PARAMS,
+      `Unsupported stream.mode "${String(streamMode)}" — only "sse" is supported`,
+    );
   }
 
   // ---------------------------------------------------------------------------

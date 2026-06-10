@@ -534,7 +534,7 @@ async function runCompileFromConfig(
   }
 
   const output = {
-    version: '0.1.0',
+    version: '0.5.0',
     timestamp: new Date().toISOString(),
     embedding: {
       model: embedderLabel.includes('ONNX') ? 'all-MiniLM-L6-v2' : 'hash-based',
