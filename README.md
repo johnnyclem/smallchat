@@ -187,6 +187,16 @@ See the [Architecture doc](./ARCHITECTURE.md) for the full design and the [Refer
 | [LoomMCP integration](./packages/docs/docs/integrations/loom-mcp.md) | Pair smallchat with LoomMCP for semantic dispatch over symbol-level retrieval |
 | [Changelog](./CHANGELOG.md) | Release history |
 
+## Ecosystem
+
+smallchat is one of four related projects by the same author (AgentVault, SmallChat, Stenographer,
+Short-Hand) exploring a layered agent runtime — durable execution, tool dispatch, conversation
+memory, and context compaction as separate concerns. See
+[`docs/ecosystem/executive-summary.md`](./docs/ecosystem/executive-summary.md) and
+[`docs/ecosystem/engineering-guide.md`](./docs/ecosystem/engineering-guide.md) for what's actually
+wired up today (notably: Short-Hand's compaction and CRDT modules are vendored directly into this
+package) versus what's still aspirational.
+
 ## Development
 
 ```bash
