@@ -58,6 +58,9 @@ describe('refine', () => {
     // Intents are derived from selector IDs with colons replaced by spaces
     expect(result.refinement!.options[0].intent).toBe('vendor.github.search_code');
     expect(result.refinement!.narrowedIntents).toHaveLength(2);
+    // Heuristic options carry the selector id so the caller can reinforce the choice
+    expect(result.refinement!.options[0].selectorId).toBe('vendor.github.search_code');
+    expect(result.refinement!.options[1].selectorId).toBe('vendor.github.list_repos');
   });
 
   it('falls back to heuristic when LLM returns empty options', async () => {

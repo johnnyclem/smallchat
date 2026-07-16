@@ -20,6 +20,8 @@
  * and can return an error without touching the embedder.
  */
 
+import { cosineSimilarity } from './vector-math.js';
+
 export interface SemanticRateLimiterOptions {
   /** Sliding window duration in milliseconds (default: 60_000) */
   windowMs?: number;
@@ -222,20 +224,4 @@ export class SemanticRateLimiter {
  * Cosine similarity between two Float32Arrays.
  * Returns value in [-1, 1] — but for normalized embeddings, [0, 1].
  */
-function cosineSimilarity(a: Float32Array, b: Float32Array): number {
-  if (a.length !== b.length) return 0;
-
-  let dot = 0;
-  let normA = 0;
-  let normB = 0;
-
-  for (let i = 0; i < a.length; i++) {
-    dot += a[i] * b[i];
-    normA += a[i] * a[i];
-    normB += b[i] * b[i];
-  }
-
-  const denom = Math.sqrt(normA) * Math.sqrt(normB);
-  if (denom === 0) return 0;
-  return dot / denom;
-}
+// cosineSimilarity now lives in ./vector-math.js (single source of truth).

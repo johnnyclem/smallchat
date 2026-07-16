@@ -100,6 +100,7 @@ export { SelectorTable, canonicalize, VectorFloodError } from './core/selector-t
 export { SelectorNamespace, SelectorShadowingError } from './core/selector-namespace.js';
 export type { CoreSelectorEntry } from './core/selector-namespace.js';
 export { ResolutionCache, computeSchemaFingerprint } from './core/resolution-cache.js';
+export { cosineSimilarity } from './core/vector-math.js';
 export { SemanticRateLimiter } from './core/semantic-rate-limiter.js';
 export type { SemanticRateLimiterOptions, FloodingMetrics } from './core/semantic-rate-limiter.js';
 export { ToolClass, ToolProxy } from './core/tool-class.js';
@@ -130,6 +131,15 @@ export type { DecompositionResult, DecompositionOptions } from './runtime/decomp
 // 0.4.0: Refinement Protocol (Pillar 4)
 export { refine, buildRefinementResult } from './runtime/refinement.js';
 export type { RefinementResult } from './runtime/refinement.js';
+
+// Pillar 4b: Semantic Map — learned dispatch preferences from resolved refinements
+export { SemanticMap } from './runtime/semantic-map.js';
+export type {
+  LearnedPreference,
+  SemanticMapMatch,
+  SemanticMapOptions,
+  SerializedSemanticMap,
+} from './runtime/semantic-map.js';
 
 // 0.4.0: Observation & Adaptation (Pillar 5)
 export { DispatchObserver } from './runtime/observer.js';

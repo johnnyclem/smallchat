@@ -19,6 +19,8 @@ import { decompose, executeDecomposition } from './decomposition.js';
 import { refine, buildRefinementResult } from './refinement.js';
 import { DispatchObserver } from './observer.js';
 import type { ObserverOptions } from './observer.js';
+import { SemanticMap } from './semantic-map.js';
+import type { SemanticMapOptions, LearnedPreference } from './semantic-map.js';
 
 /**
  * UnrecognizedIntent — doesNotRecognizeSelector: equivalent.
@@ -90,6 +92,10 @@ export interface DispatchConfig {
   thresholds?: TierThresholds;
   /** Observer options for Pillar 5 */
   observerOptions?: ObserverOptions;
+  /** Pre-built semantic map (Pillar 4b) — e.g. restored from persistence */
+  semanticMap?: SemanticMap;
+  /** Options for the semantic map, when one is not supplied */
+  semanticMapOptions?: SemanticMapOptions;
 }
 
 /**
@@ -109,6 +115,7 @@ export class DispatchContext {
   readonly selectorNamespace: SelectorNamespace;
   readonly intentPins: IntentPinRegistry;
   readonly observer: DispatchObserver;
+  readonly semanticMap: SemanticMap;
   readonly llmClient: LLMClient;
   readonly strict: boolean;
   readonly thresholds: TierThresholds;
@@ -148,6 +155,8 @@ export class DispatchContext {
     this.strict = dispatchConfig?.strict ?? false;
     this.thresholds = dispatchConfig?.thresholds ?? { ...DEFAULT_THRESHOLDS };
     this.observer = new DispatchObserver(dispatchConfig?.observerOptions);
+    this.semanticMap = dispatchConfig?.semanticMap
+      ?? new SemanticMap(dispatchConfig?.semanticMapOptions);
   }
 
   /**
@@ -188,6 +197,35 @@ export class DispatchContext {
   /** The classes that declare a given selector canonical — the resolution candidates. */
   classesForSelector(canonical: string): ToolClass[] {
     return this.selectorToClasses.get(canonical) ?? [];
+  }
+
+  /**
+   * Resolve a canonical selector id to a concrete IMP + selector, if any
+   * registered class still owns it. Used by the semantic map to turn a learned
+   * preference back into an executable dispatch. Returns null if the selector
+   * has since been unregistered (a stale learned preference).
+   */
+  resolveLearnedSelector(selectorId: string): { imp: ToolIMP; selector: ToolSelector } | null {
+    const selector = this.selectorTable.get(selectorId);
+    if (!selector) return null;
+    for (const toolClass of this.classesForSelector(selectorId)) {
+      const imp = toolClass.resolveSelector(selector);
+      if (imp) return { imp, selector };
+    }
+    return null;
+  }
+
+  /**
+   * Reinforce a learned dispatch preference (Pillar 4b).
+   *
+   * Called when the user resolves a refinement by choosing one of the deferred
+   * options. Embeds the original (unresolvable) intent and records a mapping to
+   * the chosen selector so that the exact intent resolves instantly next time,
+   * and *similar* intents get a confidence boost toward the same selector.
+   */
+  async reinforceRefinement(originalIntent: string, selectorId: string): Promise<LearnedPreference> {
+    const selector = await this.selectorTable.resolve(originalIntent);
+    return this.semanticMap.reinforce(canonicalize(originalIntent), selector.vector, selectorId);
   }
 
   /**
@@ -486,6 +524,42 @@ async function resolveToolIMP(
     }
   }
 
+  // 1b. SEMANTIC MAP — exact fast-path for a previously-disambiguated intent.
+  //
+  // If the user has taught us this exact intent before (by resolving a
+  // refinement), resolve straight to the selector they chose. This is what
+  // stops smallchat from re-asking the same question every time: defer once,
+  // remember forever.
+  if (context.semanticMap.size > 0) {
+    const smT0 = Date.now();
+    const learned = context.semanticMap.lookupExact(intentCanonical);
+    if (learned) {
+      const resolved = context.resolveLearnedSelector(learned.selectorId);
+      if (resolved && !context.observer.isNegativeExample(intent, resolved.imp.toolName)) {
+        const confidence = context.semanticMap.exactConfidence;
+        context.cache.store(selector, resolved.imp, confidence);
+        const tier = computeTier(confidence, context.thresholds);
+        addProofStep(proof, {
+          stage: 'semantic_map',
+          input: intentCanonical,
+          output: learned.selectorId,
+          decision: `Learned preference (exact, ${learned.reinforcements}× reinforced) → ${resolved.imp.toolName} at ${confidence.toFixed(3)} (${tier})`,
+        }, Date.now() - smT0);
+        proof.tier = tier;
+        proof.resolvedTool = resolved.imp.toolName;
+        return {
+          kind: 'resolved',
+          imp: resolved.imp,
+          confidence,
+          tier,
+          selector: resolved.selector,
+          candidates: [],
+          proof,
+        };
+      }
+    }
+  }
+
   // 2. CHECK CACHE (the inline cache / method cache)
   const hasArgs = args && Object.keys(args).length > 0;
   if (!hasArgs) {
@@ -582,6 +656,38 @@ async function resolveToolIMP(
     output: candidates.map(c => ({ tool: c.imp.toolName, confidence: c.confidence.toFixed(3) })),
     decision: `Vector search found ${candidates.length} candidates`,
   }, Date.now() - searchT0);
+
+  // 3b. SEMANTIC MAP — similar-intent boost.
+  //
+  // A near-miss the user *previously* disambiguated should not fall back to
+  // "ask again". If this intent is similar to one the user has already resolved,
+  // boost the learned selector's confidence — enough to lift it out of the NONE
+  // zone and often to dispatch it directly. The learned selector may score below
+  // the vector-search floor (that's why it was a near-miss), so we inject it as
+  // a candidate when it isn't already present.
+  if (context.semanticMap.size > 0) {
+    const smT0 = Date.now();
+    const smMatch = context.semanticMap.lookupSimilar(selector.vector);
+    if (smMatch) {
+      const resolved = context.resolveLearnedSelector(smMatch.preference.selectorId);
+      if (resolved && !context.observer.isNegativeExample(intent, resolved.imp.toolName)) {
+        const existing = candidates.find(c => c.selector.canonical === smMatch.preference.selectorId);
+        const base = existing ? existing.confidence : smMatch.similarity;
+        const boosted = Math.min(context.semanticMap.boostCeiling, base + smMatch.boost);
+        if (existing) {
+          existing.confidence = boosted;
+        } else {
+          candidates.push({ imp: resolved.imp, confidence: boosted, selector: resolved.selector });
+        }
+        addProofStep(proof, {
+          stage: 'semantic_map',
+          input: { intent, similarity: smMatch.similarity.toFixed(3) },
+          output: smMatch.preference.selectorId,
+          decision: `Learned preference (similar, ${smMatch.preference.reinforcements}× reinforced) ${existing ? 'boosted' : 'injected'} ${resolved.imp.toolName} → ${boosted.toFixed(3)} (+${smMatch.boost.toFixed(3)})`,
+        }, Date.now() - smT0);
+      }
+    }
+  }
 
   // Also check cache for non-overloaded case when args were provided
   if (hasArgs) {
