@@ -56,6 +56,13 @@ export interface ToolRefinementNeeded {
     label: string;
     intent: string;
     confidence: number;
+    /**
+     * Canonical selector id this option resolves to, when known (heuristic
+     * refinement from vector matches always carries it; LLM-suggested rewrites
+     * may not). Callers pass it back to `runtime.resolveRefinement()` so the
+     * user's choice is reinforced against the exact selector.
+     */
+    selectorId?: string;
   }>;
   narrowedIntents: string[];
 }

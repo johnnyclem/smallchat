@@ -807,3 +807,99 @@ describe('Inference-core hardening', () => {
     expect((result.content as any)?.results).toHaveLength(2);
   });
 });
+
+describe('semantic map — learned refinement resolution (Pillar 4b)', () => {
+  async function contextWithTool(
+    toolEmbedText: string,
+    selectorId: string,
+    opts?: import('./semantic-map.js').SemanticMapOptions,
+  ) {
+    const embedder = new LocalEmbedder(64);
+    const vectorIndex = new MemoryVectorIndex();
+    const selectorTable = new SelectorTable(vectorIndex, embedder);
+    const cache = new ResolutionCache();
+    const context = new DispatchContext(
+      selectorTable, cache, vectorIndex, embedder, undefined, undefined,
+      { semanticMapOptions: opts },
+    );
+
+    const cls = new ToolClass('contexta');
+    const selector = await selectorTable.intern(await embedder.embed(toolEmbedText), selectorId);
+    cls.addMethod(selector, makeIMP('contexta', 'list_tasks', 'list_tasks:executed'));
+    context.registerClass(cls);
+    return context;
+  }
+
+  it('resolves an exact previously-disambiguated intent via the fast-path', async () => {
+    const context = await contextWithTool('deploy production database cluster', 'contexta:list_tasks');
+
+    // User disambiguates: this intent maps to contexta:list_tasks.
+    await context.reinforceRefinement('quarterly revenue overview', 'contexta:list_tasks');
+
+    // After learning: the exact intent resolves straight to the chosen tool via
+    // the semantic-map fast-path (before vector search), at the exact tier.
+    const after = await toolkit_dispatch(context, 'quarterly revenue overview');
+    expect(after.content).toBe('list_tasks:executed');
+
+    const proof = after.metadata!.proof as any;
+    // The very first proof step is the semantic-map exact resolution.
+    const smStep = proof.steps.find((s: any) => s.stage === 'semantic_map');
+    expect(smStep).toBeDefined();
+    expect(smStep.output).toBe('contexta:list_tasks');
+    expect(String(smStep.decision)).toContain('exact');
+    expect(after.metadata!.tier).toBe('exact');
+  });
+
+  it('boosts a similar (non-identical) intent toward the learned selector', async () => {
+    // Threshold lowered so a partial-word-overlap intent clears the similar bar.
+    // Tool vector is unrelated, so only the learned intent vector can surface it.
+    const context = await contextWithTool('deploy production database cluster', 'contexta:list_tasks', {
+      similarityThreshold: 0.5,
+    });
+
+    await context.reinforceRefinement('list all tasks', 'contexta:list_tasks');
+
+    // Different canonical form ("list tasks now" vs "list tasks"), similar vector.
+    const result = await toolkit_dispatch(context, 'list tasks now');
+    expect(result.content).toBe('list_tasks:executed');
+
+    const proof = result.metadata!.proof as any;
+    const smStep = proof.steps.find((s: any) => s.stage === 'semantic_map');
+    expect(smStep).toBeDefined();
+    expect(String(smStep.decision)).toContain('injected');
+  });
+
+  it('does not fire for an unrelated intent after learning', async () => {
+    const context = await contextWithTool('deploy production database cluster', 'contexta:list_tasks', {
+      similarityThreshold: 0.85,
+    });
+    await context.reinforceRefinement('list all tasks', 'contexta:list_tasks');
+
+    // Semantically unrelated — must not be hijacked by the learned preference.
+    const result = await toolkit_dispatch(context, 'encrypt the backup archive');
+    expect(result.content).not.toBe('list_tasks:executed');
+  });
+
+  it('records the mapping so size grows on reinforcement', async () => {
+    const context = await contextWithTool('deploy production database cluster', 'contexta:list_tasks');
+    expect(context.semanticMap.size).toBe(0);
+    const pref = await context.reinforceRefinement('quarterly revenue overview', 'contexta:list_tasks');
+    expect(context.semanticMap.size).toBe(1);
+    expect(pref.selectorId).toBe('contexta:list_tasks');
+    // The stored key is the canonicalized intent.
+    expect(context.semanticMap.lookupExact(pref.intentCanonical)).not.toBeNull();
+  });
+
+  it('ignores a learned preference whose selector was unregistered (stale)', async () => {
+    const context = await contextWithTool('deploy production database cluster', 'contexta:list_tasks');
+    // Reinforce a selector that does not exist in the registry.
+    await context.reinforceRefinement('quarterly revenue overview', 'ghost:missing_tool');
+
+    const result = await toolkit_dispatch(context, 'quarterly revenue overview');
+    // A stale preference must not force resolution — no semantic_map proof step
+    // is emitted because the selector can't be resolved to an executable IMP.
+    const proof = result.metadata!.proof as any;
+    const smStep = proof.steps.find((s: any) => s.stage === 'semantic_map');
+    expect(smStep).toBeUndefined();
+  });
+});

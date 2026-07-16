@@ -66,6 +66,9 @@ export async function refine(
       label: formatSelectorLabel(match.id),
       intent: match.id.replace(/:/g, ' '),
       confidence: 1 - match.distance,
+      // The vector-index id IS the canonical selector id — carry it so the
+      // caller can reinforce the user's choice against the exact selector.
+      selectorId: match.id,
     }));
 
     return {

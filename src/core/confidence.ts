@@ -68,7 +68,7 @@ export interface ResolutionProof {
 }
 
 export interface ProofStep {
-  stage: 'cache' | 'intent_pin' | 'vector_search' | 'overload'
+  stage: 'cache' | 'intent_pin' | 'semantic_map' | 'vector_search' | 'overload'
        | 'verification' | 'decomposition' | 'refinement'
        | 'protocol' | 'forwarding' | 'fallback';
   input: unknown;

@@ -53,6 +53,17 @@ Maps a single selector to multiple signatures, resolved by argument types and ar
 
 The hot path. `toolkit_dispatch(context, intent, args)` embeds the intent, searches the selector table, walks the class hierarchy, checks overloads, and invokes the resolved IMP.
 
+### Refinement + Semantic Map (`src/runtime/refinement.ts`, `src/runtime/semantic-map.ts`)
+
+When confidence is NONE, dispatch does not guess — it *defers*. The refinement protocol returns a `tool_refinement_needed` result: "I couldn't find an exact match. Did you mean one of these?" with the nearest candidates. Each option carries its `selectorId`.
+
+The Semantic Map closes the loop. When the user picks an option (`runtime.resolveRefinement(originalIntent, choice)`), the choice is recorded as a learned preference — the original intent's embedding mapped to the chosen selector. Two things follow:
+
+1. **Exact fast-path** — the identical intent later resolves straight to the learned selector, before vector search, at the EXACT tier. The system never re-asks a question it has already been answered.
+2. **Similarity boost** — a *similar* future intent (cosine ≥ threshold to a remembered one) gets a confidence boost toward the learned selector, scaled by similarity and how many times the mapping has been reinforced. A near-miss that would otherwise defer again is lifted into a confident dispatch.
+
+Both paths add a `semantic_map` step to the resolution proof, so the learned influence is auditable. The map is the positive-signal mirror of the observer's negative examples (below), and it is serializable (`SemanticMap.toJSON()` / `fromJSON`) so a host can persist learning across sessions.
+
 ### Compiler (`src/compiler/compiler.ts`)
 
 Parse → Embed → Link pipeline. Reads tool definitions, computes semantic embeddings, groups tools into classes, and emits a compiled artifact. Optional Phase 2.5 generates semantic overloads by grouping tools above a similarity threshold.

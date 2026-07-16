@@ -8,8 +8,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ToolRuntime } from './runtime.js';
 import { ToolClass, ToolProxy } from '../core/tool-class.js';
-import type { Embedder, VectorIndex, ToolSelector, ToolIMP, ToolProtocol } from '../core/types.js';
+import type { Embedder, VectorIndex, ToolSelector, ToolIMP, ToolProtocol, ToolResult } from '../core/types.js';
 import { SelectorNamespace, SelectorShadowingError } from '../core/selector-namespace.js';
+import { LocalEmbedder } from '../embedding/local-embedder.js';
+import { MemoryVectorIndex } from '../embedding/memory-vector-index.js';
 
 /** Minimal mock embedder */
 function createMockEmbedder(): Embedder {
@@ -497,5 +499,77 @@ describe('Feature: Selector Shadowing Prevention', () => {
 
       expect(() => customRuntime.registerClass(cls)).toThrow(SelectorShadowingError);
     });
+  });
+});
+
+describe('Feature: Refinement resolution & the semantic map (Pillar 4b)', () => {
+  async function runtimeWithTool(toolEmbedText: string, selectorId: string) {
+    const embedder = new LocalEmbedder(64);
+    const runtime = new ToolRuntime(new MemoryVectorIndex(), embedder, {
+      semanticMapOptions: { similarityThreshold: 0.5 },
+    });
+    const cls = new ToolClass('contexta');
+    const selector = await runtime.selectorTable.intern(await embedder.embed(toolEmbedText), selectorId);
+    const imp: ToolIMP = {
+      providerId: 'contexta',
+      toolName: 'list_tasks',
+      transportType: 'local',
+      schema: null,
+      schemaLoader: async () => ({ name: 'list_tasks', description: '', inputSchema: { type: 'object' }, arguments: [] }),
+      execute: async () => ({ content: 'list_tasks:executed' }),
+      constraints: { required: [], optional: [], validate: () => ({ valid: true, errors: [] }) },
+    };
+    cls.addMethod(selector, imp);
+    runtime.registerClass(cls);
+    return runtime;
+  }
+
+  it('resolveRefinement executes the chosen tool and records the preference', async () => {
+    const runtime = await runtimeWithTool('deploy production database cluster', 'contexta:list_tasks');
+
+    // The user picked "contexta:list_tasks" from the deferred options.
+    const result = await runtime.resolveRefinement('quarterly revenue overview', 'contexta:list_tasks');
+    expect(result.content).toBe('list_tasks:executed');
+
+    // The choice is now learned.
+    expect(runtime.semanticMap.size).toBe(1);
+
+    // ...and the exact intent resolves without deferring again.
+    const proof = (result.metadata!.proof as any);
+    expect(proof.steps.some((s: any) => s.stage === 'semantic_map')).toBe(true);
+  });
+
+  it('accepts the full option object as the choice', async () => {
+    const runtime = await runtimeWithTool('deploy production database cluster', 'contexta:list_tasks');
+    const result = await runtime.resolveRefinement(
+      'quarterly revenue overview',
+      { label: 'List Tasks', intent: 'list tasks', confidence: 0.5, selectorId: 'contexta:list_tasks' },
+    );
+    expect(result.content).toBe('list_tasks:executed');
+    expect(runtime.semanticMap.size).toBe(1);
+  });
+
+  it('a later similar intent is boosted toward the learned selector', async () => {
+    const runtime = await runtimeWithTool('deploy production database cluster', 'contexta:list_tasks');
+    await runtime.resolveRefinement('list all tasks', 'contexta:list_tasks');
+
+    // Different phrasing, same intent — resolves via the learned preference.
+    const result: ToolResult = await (runtime.dispatch('list tasks now', {}) as Promise<ToolResult>);
+    expect(result.content).toBe('list_tasks:executed');
+  });
+
+  it('reinforceRefinement records without executing', async () => {
+    const runtime = await runtimeWithTool('deploy production database cluster', 'contexta:list_tasks');
+    const pref = await runtime.reinforceRefinement('quarterly revenue overview', 'contexta:list_tasks');
+    expect(pref.reinforcements).toBe(1);
+    expect(runtime.semanticMap.size).toBe(1);
+  });
+
+  it('survives a serialize/restore round-trip via SemanticMap', async () => {
+    const runtime = await runtimeWithTool('deploy production database cluster', 'contexta:list_tasks');
+    await runtime.reinforceRefinement('quarterly revenue overview', 'contexta:list_tasks');
+    const snapshot = runtime.semanticMap.toJSON();
+    expect(snapshot.preferences).toHaveLength(1);
+    expect(snapshot.preferences[0].selectorId).toBe('contexta:list_tasks');
   });
 });

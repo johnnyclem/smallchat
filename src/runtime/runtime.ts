@@ -10,6 +10,7 @@ import { DispatchBuilder } from './dispatch-builder.js';
 import { SelectorNamespace } from '../core/selector-namespace.js';
 import type { LLMClient } from '../core/llm-client.js';
 import type { DispatchObserver } from './observer.js';
+import type { SemanticMap, SemanticMapOptions, LearnedPreference } from './semantic-map.js';
 import type { ConfidenceTier, ResolutionProof, TierThresholds } from '../core/confidence.js';
 
 /**
@@ -59,6 +60,8 @@ export class ToolRuntime {
       strict: options?.strict,
       thresholds: options?.thresholds,
       observerOptions: options?.observerOptions,
+      semanticMap: options?.semanticMap,
+      semanticMapOptions: options?.semanticMapOptions,
     };
 
     this.context = new DispatchContext(
@@ -79,6 +82,15 @@ export class ToolRuntime {
   /** Get the dispatch observer for inspection and diagnostics */
   get observer(): DispatchObserver {
     return this.context.observer;
+  }
+
+  /**
+   * Get the semantic map — learned dispatch preferences from resolved
+   * refinements (Pillar 4b). Inspect it for diagnostics, or serialize it
+   * (`runtime.semanticMap.toJSON()`) to persist learning across sessions.
+   */
+  get semanticMap(): SemanticMap {
+    return this.context.semanticMap;
   }
 
   /** Whether strict mode is enabled */
@@ -218,6 +230,52 @@ export class ToolRuntime {
       return toolkit_dispatch(this.context, intent, args);
     }
     return new DispatchBuilder(this.context, intent);
+  }
+
+  /**
+   * Resolve a refinement by the user's real-time choice (Pillar 4b).
+   *
+   * When smallchat defers ("Did you mean one of these?"), the caller presents
+   * the options and the user picks one. Pass the original intent and the chosen
+   * option back here. This does two things at once:
+   *
+   *   1. Executes the chosen selector — the dispatch the user actually wanted.
+   *   2. Reinforces the semantic map — so the exact intent resolves instantly
+   *      next time, and *similar* intents get a confidence boost toward the same
+   *      selector. Deferring to the user costs one click; it never costs two.
+   *
+   * `choice` is either a canonical selector id (as carried on
+   * `ToolRefinementNeeded.options[n].selectorId`) or the option object itself.
+   * When only a narrowed intent is available (some LLM-suggested rewrites carry
+   * no selector id), the narrowed intent is dispatched without reinforcement —
+   * there is no single selector to bind the preference to.
+   */
+  async resolveRefinement(
+    originalIntent: string,
+    choice: string | { selectorId?: string; intent?: string },
+    args?: Record<string, unknown>,
+  ): Promise<ToolResult> {
+    const selectorId = typeof choice === 'string' ? choice : choice.selectorId;
+    const narrowedIntent = typeof choice === 'string' ? undefined : choice.intent;
+
+    if (selectorId) {
+      // Learn first, then dispatch — the exact fast-path now resolves the
+      // original intent straight to the selector the user chose.
+      await this.context.reinforceRefinement(originalIntent, selectorId);
+      return toolkit_dispatch(this.context, originalIntent, args);
+    }
+
+    // No selector to bind to — dispatch the narrowed rewrite as-is.
+    return toolkit_dispatch(this.context, narrowedIntent ?? originalIntent, args);
+  }
+
+  /**
+   * Directly reinforce a learned dispatch preference without executing it.
+   * Lower-level than `resolveRefinement`; use when the host has already run the
+   * tool and only wants to record the mapping.
+   */
+  reinforceRefinement(originalIntent: string, selectorId: string): Promise<LearnedPreference> {
+    return this.context.reinforceRefinement(originalIntent, selectorId);
   }
 
   /**
@@ -414,4 +472,8 @@ export interface RuntimeOptions {
   thresholds?: TierThresholds;
   /** 0.4.0: Observer options for dispatch learning */
   observerOptions?: import('./observer.js').ObserverOptions;
+  /** Pillar 4b: pre-built semantic map (e.g. restored from persistence via SemanticMap.fromJSON) */
+  semanticMap?: SemanticMap;
+  /** Pillar 4b: options for the semantic map, when one is not supplied */
+  semanticMapOptions?: SemanticMapOptions;
 }

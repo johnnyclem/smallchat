@@ -133,6 +133,7 @@ Plus everything from 0.4.0:
 - **Pre-flight verification** — `respondsToSelector:` gate between resolution and execution
 - **Intent decomposition** — `doesNotUnderstand:` handler breaks complex intents into sub-intents
 - **Refinement protocol** — `forwardInvocation:` dialogue for NONE-confidence dispatches
+- **Semantic map** — when the user resolves a refinement, that choice is learned: the exact intent resolves instantly next time, and *similar* intents get a confidence boost toward the same tool. Defer once, remember forever.
 - **Observation & adaptation** — KVO-inspired observer adapts thresholds in real time
 
 See the full [Changelog](./CHANGELOG.md) for details.

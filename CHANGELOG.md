@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Semantic map: learned refinement resolution (Pillar 4b)
+- **Deferring to the user is now a one-time cost, not a recurring tax.** The refinement protocol already turns a NONE-confidence dispatch into a dialogue ("I couldn't find an exact match. Did you mean one of these?") rather than guessing. What was missing was memory: every ambiguous intent re-asked the same question forever. The new `SemanticMap` (`src/runtime/semantic-map.ts`) records the user's choice when they resolve a refinement and reinforces it as a durable dispatch preference.
+- **Exact fast-path.** A previously-disambiguated intent now resolves straight to the selector the user chose — before vector search, at the EXACT tier. The same question is never asked twice.
+- **Similarity boost.** A *similar* future intent (cosine ≥ `similarityThreshold`, default 0.85) gets a confidence boost toward the learned selector, scaled by both similarity and how many times the mapping has been reinforced (saturating at `maxBoost`, default 0.30). A near-miss the user once clarified is lifted into a confident dispatch instead of deferring again.
+- **New runtime API.** `runtime.resolveRefinement(originalIntent, choice)` takes the user's real-time selection, executes the chosen tool, *and* learns the mapping in one call. `choice` is a selector id or the refinement option object. `runtime.reinforceRefinement(intent, selectorId)` records without executing. `runtime.semanticMap` exposes the store for inspection; `SemanticMap.toJSON()` / `fromJSON()` persist learning across sessions (seed via `RuntimeOptions.semanticMap` / `semanticMapOptions`).
+- **Auditable.** Refinement options now carry a `selectorId`, and both learned-resolution paths emit a `semantic_map` step in the resolution proof, so a learned influence on a dispatch is always visible and governable.
+- **Consolidation.** Extracted the thrice-duplicated `cosineSimilarity` into `src/core/vector-math.ts` (now the single source of truth, used by the semantic map and semantic rate limiter).
+
 ### Changed — Sculpting the architecture around tool inference
 - **Repositioning.** smallchat now leads with *tool inference* — deterministic, auditable, microsecond intent→tool resolution — as its durable thesis, and frames token reduction as a present-era *benefit* rather than the reason to exist. README, `ARCHITECTURE.md` (new "Two tiers" section), the `package.json` description, and the `src/index.ts` banner were rewritten accordingly.
 - **Two-tier surface.** Added a dedicated `@smallchat/core/inference` entry point (`src/inference.ts`) that exports the durable inference engine alone, excluding the token-era optimization satellites. The optimization satellites (compaction, RTK, memex, CRDT, importance, dream) are now tagged `[satellite]` in the package barrel. No symbols were removed from the package root.
