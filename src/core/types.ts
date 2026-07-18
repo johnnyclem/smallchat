@@ -27,6 +27,16 @@ export interface ToolSelector {
 
   /** Number of expected argument slots */
   arity: number;
+
+  /**
+   * Where this selector came from: a compiled tool (or alias) vs. a runtime
+   * intent resolved via SelectorTable.resolve(). Intent selectors share the
+   * interning table and vector index with tool selectors for cache-hit
+   * purposes, but have no owning ToolClass and must never be surfaced as
+   * dispatchable tools or refinement options. Defaults to 'tool' when
+   * omitted (selectors interned directly via intern() predate this field).
+   */
+  provenance?: 'tool' | 'intent';
 }
 
 // ---------------------------------------------------------------------------

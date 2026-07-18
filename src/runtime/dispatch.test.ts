@@ -903,3 +903,160 @@ describe('semantic map — learned refinement resolution (Pillar 4b)', () => {
     expect(smStep).toBeUndefined();
   });
 });
+
+// Regression coverage for the HyperVault field report (#2): after the very
+// first dispatch, the resolved intent used to get interned into the same
+// selector table / vector index as compiled tools, so it could come back as
+// a phantom "tool" — either enumerated via selectorTable.all(), or offered
+// by refine() as the top "did you mean?" option (matching itself at ~1.0).
+describe('selector table pollution — resolved intents must not surface as tools', () => {
+  it('does not list a previously-resolved intent via selectorTable.all()', async () => {
+    const context = createContext();
+    const cls = new ToolClass('workspace');
+    const embedding = await context.embedder.embed('list my workspaces');
+    const selector = await context.selectorTable.intern(embedding, 'list:workspaces');
+    cls.addMethod(selector, makeIMP('workspace', 'list_workspaces', 'workspaces!'));
+    context.registerClass(cls);
+
+    // An intent unrelated to any registered tool — forces the resolve() path
+    // to intern it, which is exactly what happened in production.
+    await toolkit_dispatch(context, 'search for projects in my workspace');
+
+    const canonical = 'search:projects:workspace';
+    expect(context.selectorTable.all().some(s => s.canonical === canonical)).toBe(false);
+    // It's still tracked (for cache-hit purposes), just not as a "tool".
+    expect(context.selectorTable.get(canonical)).toBeDefined();
+  });
+
+  it('never offers the caller\'s own intent as a refinement option', async () => {
+    const context = createContext();
+    const cls = new ToolClass('workspace');
+    const embedding = await context.embedder.embed('list my workspaces');
+    const selector = await context.selectorTable.intern(embedding, 'list:workspaces');
+    cls.addMethod(selector, makeIMP('workspace', 'list_workspaces', 'workspaces!'));
+    context.registerClass(cls);
+
+    const intent = 'search for projects in my workspace';
+
+    // First dispatch interns the intent into the shared vector index.
+    const first = await toolkit_dispatch(context, intent);
+    const firstRefinement = (first as any).refinement;
+    if (firstRefinement) {
+      expect(
+        firstRefinement.options.some((o: any) => o.selectorId === 'search:projects:workspace'),
+      ).toBe(false);
+    }
+
+    // Second dispatch of the *exact same* intent: before the fix, the intent
+    // now matches itself at ~1.0 similarity and becomes the top "did you
+    // mean?" suggestion, or gets dispatched as a dead tool with no owning
+    // ToolClass — either way, a caller acting on it fails with "no longer in
+    // the toolkit".
+    const second = await toolkit_dispatch(context, intent);
+    const secondRefinement = (second as any).refinement;
+    if (secondRefinement) {
+      expect(
+        secondRefinement.options.some((o: any) => o.selectorId === 'search:projects:workspace'),
+      ).toBe(false);
+    }
+    expect(context.selectorTable.get('search:projects:workspace')?.provenance).toBe('intent');
+  });
+});
+
+// Regression coverage for the HyperVault field report (#3): without an
+// LLMClient, MEDIUM verification is schema-only and LOW decomposition can't
+// run, so both tiers silently fell through to "dispatch best match" — a
+// footgun for write/destructive tools on a 0.60-confidence mismatch.
+describe('requireLLMForSubHighDispatch — sub-HIGH tiers without an LLM client', () => {
+  // A fake vector index that reports a fixed distance, so the resulting
+  // confidence (and tier) is deterministic regardless of the embedder.
+  function fixedDistanceIndex(distance: number, id = 'write.delete_record') {
+    return {
+      insert() {},
+      remove() {},
+      size() { return 1; },
+      search() {
+        return [{ id, distance }];
+      },
+    };
+  }
+
+  it('defaults to auto-dispatching a LOW-confidence match (prior behavior)', async () => {
+    const index = fixedDistanceIndex(0.35); // confidence 0.65 → LOW tier
+    const embedder = new LocalEmbedder(64);
+    const selectorTable = new SelectorTable(index as any, embedder);
+    const cache = new ResolutionCache();
+    const context = new DispatchContext(selectorTable, cache, index as any, embedder);
+
+    const cls = new ToolClass('write');
+    const sel = await selectorTable.intern(await embedder.embed('delete a record'), 'write.delete_record');
+    cls.addMethod(sel, makeIMP('write', 'delete_record', 'deleted!'));
+    context.registerClass(cls);
+
+    const result = await toolkit_dispatch(context, 'delete a record');
+    expect(result.content).toBe('deleted!');
+    expect(result.metadata?.tier).toBe('low');
+  });
+
+  it('defers to refinement instead of auto-dispatching when the flag is set', async () => {
+    const index = fixedDistanceIndex(0.35); // confidence 0.65 → LOW tier
+    const embedder = new LocalEmbedder(64);
+    const selectorTable = new SelectorTable(index as any, embedder);
+    const cache = new ResolutionCache();
+    const context = new DispatchContext(
+      selectorTable, cache, index as any, embedder, undefined, undefined,
+      { requireLLMForSubHighDispatch: true },
+    );
+
+    const cls = new ToolClass('write');
+    const sel = await selectorTable.intern(await embedder.embed('delete a record'), 'write.delete_record');
+    cls.addMethod(sel, makeIMP('write', 'delete_record', 'deleted!'));
+    context.registerClass(cls);
+
+    const result = await toolkit_dispatch(context, 'delete a record');
+    expect(result.content).not.toBe('deleted!');
+    expect((result as any).refinement).toBeDefined();
+  });
+
+  it('does not affect HIGH/EXACT tier dispatch when the flag is set', async () => {
+    const index = fixedDistanceIndex(0.02); // confidence 0.98 → EXACT tier
+    const embedder = new LocalEmbedder(64);
+    const selectorTable = new SelectorTable(index as any, embedder);
+    const cache = new ResolutionCache();
+    const context = new DispatchContext(
+      selectorTable, cache, index as any, embedder, undefined, undefined,
+      { requireLLMForSubHighDispatch: true },
+    );
+
+    const cls = new ToolClass('write');
+    const sel = await selectorTable.intern(await embedder.embed('delete a record'), 'write.delete_record');
+    cls.addMethod(sel, makeIMP('write', 'delete_record', 'deleted!'));
+    context.registerClass(cls);
+
+    const result = await toolkit_dispatch(context, 'delete a record');
+    expect(result.content).toBe('deleted!');
+  });
+
+  it('has no effect when an LLMClient is configured', async () => {
+    const index = fixedDistanceIndex(0.35); // confidence 0.65 → LOW tier
+    const embedder = new LocalEmbedder(64);
+    const selectorTable = new SelectorTable(index as any, embedder);
+    const cache = new ResolutionCache();
+    const llmClient = {
+      microCheck: async () => ({ pass: true, confidence: 1 }),
+      decompose: async () => ({ decomposed: false, subIntents: [], strategy: 'none' as const }),
+    };
+    const context = new DispatchContext(
+      selectorTable, cache, index as any, embedder, undefined, undefined,
+      { requireLLMForSubHighDispatch: true, llmClient: llmClient as any },
+    );
+
+    const cls = new ToolClass('write');
+    const sel = await selectorTable.intern(await embedder.embed('delete a record'), 'write.delete_record');
+    cls.addMethod(sel, makeIMP('write', 'delete_record', 'deleted!'));
+    context.registerClass(cls);
+
+    const result = await toolkit_dispatch(context, 'delete a record');
+    expect(result.content).toBe('deleted!');
+  });
+});

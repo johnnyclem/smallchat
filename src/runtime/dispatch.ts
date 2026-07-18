@@ -96,6 +96,16 @@ export interface DispatchConfig {
   semanticMap?: SemanticMap;
   /** Options for the semantic map, when one is not supplied */
   semanticMapOptions?: SemanticMapOptions;
+  /**
+   * When true, and no LLMClient is configured, resolutions that land in the
+   * MEDIUM or LOW confidence tiers defer to the refinement protocol (ask the
+   * user) instead of auto-dispatching the best vector match. Without an
+   * LLMClient, verification degrades to schema-only and decomposition can't
+   * run, so both tiers otherwise fall through to execution — safe for
+   * read-only tools, a footgun for write/destructive ones. Defaults to
+   * false to preserve prior behavior.
+   */
+  requireLLMForSubHighDispatch?: boolean;
 }
 
 /**
@@ -119,6 +129,7 @@ export class DispatchContext {
   readonly llmClient: LLMClient;
   readonly strict: boolean;
   readonly thresholds: TierThresholds;
+  readonly requireLLMForSubHighDispatch: boolean;
 
   private toolClasses: Map<string, ToolClass> = new Map();
   private protocols: Map<string, ToolProtocol> = new Map();
@@ -154,6 +165,7 @@ export class DispatchContext {
     this.llmClient = dispatchConfig?.llmClient ?? NULL_LLM_CLIENT;
     this.strict = dispatchConfig?.strict ?? false;
     this.thresholds = dispatchConfig?.thresholds ?? { ...DEFAULT_THRESHOLDS };
+    this.requireLLMForSubHighDispatch = dispatchConfig?.requireLLMForSubHighDispatch ?? false;
     this.observer = new DispatchObserver(dispatchConfig?.observerOptions);
     this.semanticMap = dispatchConfig?.semanticMap
       ?? new SemanticMap(dispatchConfig?.semanticMapOptions);
@@ -314,7 +326,7 @@ export class DispatchContext {
     }
 
     // Step 2: BROADENED SEARCH — lower threshold to find near-misses
-    const broadMatches = await this.vectorIndex.search(selector.vector, 5, 0.5);
+    const broadMatches = await this.selectorTable.searchTools(selector.vector, 5, 0.5);
     if (broadMatches.length > 0) {
       // Try to resolve the best broad match
       for (const match of broadMatches) {
@@ -387,7 +399,7 @@ export class DispatchContext {
     }
 
     // Step 4: Return a stub instead of throwing
-    const nearest = await this.vectorIndex.search(selector.vector, 3, 0.5);
+    const nearest = await this.selectorTable.searchTools(selector.vector, 3, 0.5);
 
     const fallbackResult: FallbackChainResult = {
       tool: 'unknown',
@@ -583,7 +595,7 @@ async function resolveToolIMP(
   // Use the LOW threshold as the vector search floor — we handle all tiers
   const searchT0 = Date.now();
   const searchThreshold = context.strict ? context.thresholds.medium : context.thresholds.low;
-  const matches = await context.vectorIndex.search(selector.vector, 5, searchThreshold);
+  const matches = await context.selectorTable.searchTools(selector.vector, 5, searchThreshold);
   const candidates: ToolCandidate[] = [];
 
   for (const match of matches) {
@@ -728,7 +740,7 @@ async function resolveToolIMP(
 
     // No candidates at all — try refinement (Pillar 4) before forwarding
     const refineT0 = Date.now();
-    const nearest = await context.vectorIndex.search(selector.vector, 5, 0.3);
+    const nearest = await context.selectorTable.searchTools(selector.vector, 5, 0.3);
     const toolSummaries = context.getToolSummaries();
     const refinementResult = await refine(intent, nearest, toolSummaries, context.llmClient);
     addProofStep(proof, {
@@ -767,6 +779,47 @@ async function resolveToolIMP(
   const best = candidates[0];
   const tier = computeTier(best.confidence, context.thresholds);
   proof.tier = tier;
+
+  // Without an LLMClient, MEDIUM verification degrades to schema-only (a
+  // near pass-through) and LOW decomposition can't run at all — both tiers
+  // fall through to "dispatch best match" by default, which silently
+  // auto-executes anything scoring above the LOW floor. That's a footgun for
+  // write/destructive tools: a 0.60 mismatch auto-runs with no human in the
+  // loop. Opt in via `requireLLMForSubHighDispatch` to make that combination
+  // (no LLM + sub-HIGH confidence) defer to the user instead.
+  if (
+    context.requireLLMForSubHighDispatch &&
+    context.llmClient === NULL_LLM_CLIENT &&
+    tier !== 'exact' &&
+    tier !== 'high'
+  ) {
+    const refineT0 = Date.now();
+    const nearest = await context.selectorTable.searchTools(selector.vector, 5, 0.3);
+    const toolSummaries = context.getToolSummaries();
+    const refinementResult = await refine(intent, nearest, toolSummaries, context.llmClient);
+    addProofStep(proof, {
+      stage: 'refinement',
+      input: intent,
+      output: refinementResult.refined ? 'options generated' : 'no options',
+      decision: `No LLM client configured — refusing to auto-dispatch a ${tier}-confidence match (requireLLMForSubHighDispatch)`,
+    }, Date.now() - refineT0);
+
+    if (refinementResult.refined && refinementResult.refinement) {
+      proof.tier = 'none';
+      return { kind: 'refined', result: buildRefinementResult(refinementResult.refinement), proof };
+    }
+
+    const fwdT0 = Date.now();
+    const result = await context.forward(selector, intent, args);
+    addProofStep(proof, {
+      stage: 'forwarding',
+      input: intent,
+      output: 'forwarded',
+      decision: 'No refinement options — forwarded instead of auto-dispatching without an LLM client',
+    }, Date.now() - fwdT0);
+    proof.tier = 'none';
+    return { kind: 'forwarded', result, proof };
+  }
 
   // -----------------------------------------------------------------------
   // CONFIDENCE-TIERED BRANCHING (0.4.0 core logic)
@@ -811,7 +864,7 @@ async function resolveToolIMP(
         }
       }
       // All candidates failed verification — try refinement
-      const nearest = await context.vectorIndex.search(selector.vector, 5, 0.3);
+      const nearest = await context.selectorTable.searchTools(selector.vector, 5, 0.3);
       const toolSummaries = context.getToolSummaries();
       const refinementResult = await refine(intent, nearest, toolSummaries, context.llmClient);
       if (refinementResult.refined && refinementResult.refinement) {
@@ -855,7 +908,7 @@ async function resolveToolIMP(
   // protocol → refine → forward. Kept for completeness and custom thresholds.
   if (requiresRefinement(tier)) {
     const refineT0 = Date.now();
-    const nearest = await context.vectorIndex.search(selector.vector, 5, 0.3);
+    const nearest = await context.selectorTable.searchTools(selector.vector, 5, 0.3);
     const toolSummaries = context.getToolSummaries();
     const refinementResult = await refine(intent, nearest, toolSummaries, context.llmClient);
     addProofStep(proof, {
