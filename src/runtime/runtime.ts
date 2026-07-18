@@ -51,6 +51,7 @@ export class ToolRuntime {
       embedder,
       options?.selectorThreshold ?? 0.95,
       this.cache.rateLimiter,
+      options?.maxIntentEntries,
     );
 
     this.selectorNamespace = options?.selectorNamespace ?? new SelectorNamespace();
@@ -62,6 +63,7 @@ export class ToolRuntime {
       observerOptions: options?.observerOptions,
       semanticMap: options?.semanticMap,
       semanticMapOptions: options?.semanticMapOptions,
+      requireLLMForSubHighDispatch: options?.requireLLMForSubHighDispatch,
     };
 
     this.context = new DispatchContext(
@@ -476,4 +478,18 @@ export interface RuntimeOptions {
   semanticMap?: SemanticMap;
   /** Pillar 4b: options for the semantic map, when one is not supplied */
   semanticMapOptions?: SemanticMapOptions;
+  /**
+   * Cap on how many runtime-resolved intent selectors the SelectorTable
+   * retains (LRU eviction). Distinct from compiled tool selectors, which
+   * are never evicted. Defaults to 500; raise it for long-lived processes
+   * that see high intent diversity, or lower it to bound memory more
+   * aggressively in memory-constrained deployments.
+   */
+  maxIntentEntries?: number;
+  /**
+   * When true, and no LLMClient is configured, MEDIUM/LOW confidence
+   * resolutions defer to the refinement protocol instead of auto-dispatching
+   * the best vector match. See DispatchConfig for details. Defaults to false.
+   */
+  requireLLMForSubHighDispatch?: boolean;
 }

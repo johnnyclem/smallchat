@@ -73,4 +73,81 @@ describe('SelectorTable', () => {
     const all = table.all();
     expect(all).toHaveLength(2);
   });
+
+  // Regression coverage for the HyperVault field report: SelectorTable.resolve()
+  // (the runtime intent-resolution path) used to intern into the exact same
+  // map/vector index as compiled tool selectors, so a user's own intent would
+  // show up as a phantom "tool" in all() and as a self-match in vector search.
+  describe('intent/tool selector separation', () => {
+    it('tags selectors created via resolve() as intent provenance', async () => {
+      const table = createTable();
+      const sel = await table.resolve('search for projects in my workspace');
+      expect(sel.provenance).toBe('intent');
+    });
+
+    it('tags selectors created via intern() as tool provenance by default', async () => {
+      const table = createTable();
+      const embedding = new Float32Array(64).fill(0.1);
+      const sel = await table.intern(embedding, 'search:projects:workspace');
+      expect(sel.provenance).toBe('tool');
+    });
+
+    it('excludes resolved intents from all() by default', async () => {
+      const table = createTable();
+      const toolEmbedding = new Float32Array(64);
+      toolEmbedding[0] = 1.0;
+      await table.intern(toolEmbedding, 'create:project');
+
+      await table.resolve('search for projects in my workspace');
+
+      const tools = table.all();
+      expect(tools.map(s => s.canonical)).toEqual(['create:project']);
+      expect(tools.some(s => s.canonical === 'search:projects:workspace')).toBe(false);
+    });
+
+    it('includes intent selectors from all() only when explicitly requested', async () => {
+      const table = createTable();
+      await table.resolve('search for projects in my workspace');
+
+      expect(table.all()).toHaveLength(0);
+      expect(table.all({ includeIntents: true })).toHaveLength(1);
+    });
+
+    it('searchTools() does not return the caller\'s own resolved intent as a match', async () => {
+      const table = createTable();
+      const toolEmbedding = new Float32Array(64);
+      toolEmbedding[0] = 1.0;
+      const toolSel = await table.intern(toolEmbedding, 'create:project');
+
+      // Resolving the intent interns it into the same vector index a tool
+      // search will consult — this used to make the intent match itself at
+      // ~1.0 similarity and surface as a "did you mean?" option.
+      const intentSel = await table.resolve('search for projects in my workspace');
+
+      const matches = await table.searchTools(intentSel.vector, 5, 0.0);
+      expect(matches.some(m => m.id === 'search:projects:workspace')).toBe(false);
+      // A genuinely similar tool selector must still be found by tool search.
+      expect(matches.some(m => m.id === toolSel.canonical)).toBe(true);
+      // Sanity check: the raw (unfiltered) index does return the intent —
+      // proving searchTools() is doing real filtering, not just an empty index.
+      const rawMatches = await table.nearest(intentSel.vector, 5, 0.0);
+      expect(rawMatches.some(m => m.id === 'search:projects:workspace')).toBe(true);
+    });
+
+    it('bounds the number of retained intent selectors via LRU eviction', async () => {
+      const embedder = new LocalEmbedder(64);
+      const index = new MemoryVectorIndex();
+      const table = new SelectorTable(index, embedder, 0.95, undefined, 3);
+
+      await table.resolve('first distinct intent alpha');
+      await table.resolve('second distinct intent bravo');
+      await table.resolve('third distinct intent charlie');
+      await table.resolve('fourth distinct intent delta');
+
+      const withIntents = table.all({ includeIntents: true });
+      expect(withIntents).toHaveLength(3);
+      expect(withIntents.some(s => s.canonical.includes('first'))).toBe(false);
+      expect(withIntents.some(s => s.canonical.includes('delta'))).toBe(true);
+    });
+  });
 });

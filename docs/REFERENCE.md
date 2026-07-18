@@ -69,6 +69,37 @@ When no exact dispatch match is found, the runtime attempts graceful degradation
 
 Results include `fallbackSteps` metadata so callers know the resolution path taken.
 
+## Dispatching Without an LLMClient
+
+`LLMClient` is optional — verification, decomposition, and refinement all
+degrade gracefully without one. But "gracefully" means the MEDIUM tier's
+verification becomes schema-only and the LOW tier's decomposition can't run
+at all, so by default **both tiers fall through to executing the best
+vector match**, auto-firing a tool on as little as 0.60 confidence with no
+human in the loop. That's fine for read-only tools; it's a real risk for
+write/destructive ones if you haven't wired an `LLMClient`.
+
+Set `RuntimeOptions.requireLLMForSubHighDispatch: true` to make MEDIUM/LOW
+resolutions defer to the refinement protocol (ask the user) instead of
+auto-dispatching whenever no `LLMClient` is configured. It's off by default
+to preserve prior behavior, and has no effect once you wire in an
+`LLMClient` — verification and decomposition then run for real instead of
+degrading.
+
+## Selector Table: Tools vs. Intents
+
+`SelectorTable` interns two different things into the same table: compiled
+tool selectors (from `ToolCompiler`) and runtime intent selectors (from
+`SelectorTable.resolve()`, called on every dispatch). Intent selectors have
+no owning `ToolClass` and are tagged `provenance: 'intent'` — they're
+excluded from `selectorTable.all()` and from `searchTools()` by default, so
+a user's own previously-resolved query never comes back as a phantom "tool"
+or a refinement "did you mean?" suggestion. Pass `{ includeIntents: true }`
+to `all()` for diagnostics. Intent selectors are also LRU-bounded
+(`RuntimeOptions.maxIntentEntries`, default 500) since a long-lived process
+resolves an unbounded number of distinct intents over its lifetime; compiled
+tool selectors are never evicted.
+
 ## Embeddings & Vector Search
 
 smallchat provides two embedding strategies and two vector index backends:
@@ -81,6 +112,28 @@ smallchat provides two embedding strategies and two vector index backends:
 | **SqliteVectorIndex** | sqlite-vec with persistent storage | Production, large tool sets |
 
 The ONNX model ships with the package in `models/` (quantized, ~30MB).
+
+> **Bundling in serverless / edge runtimes.** `ONNXEmbedder` falls back from
+> `onnxruntime-node` to `onnxruntime-web` when the native addon isn't
+> available (e.g. Vercel functions, which exclude it over the function-size
+> limit). The web backend's node entry loads its WASM glue
+> (`ort-wasm-*.mjs`) through a computed `import()` that most bundlers'
+> file tracers can't follow, so it's easy to ship a function that's missing
+> the glue next to the `.wasm` binaries — the failure is silent, degrading
+> to `LocalEmbedder` (lexical-only dispatch) rather than throwing. If you
+> bundle for a serverless/edge target, explicitly force-include
+> `onnxruntime-web`'s `dist/ort-wasm*.mjs` and `dist/*.wasm` alongside your
+> traced files, and surface embedder load failures to your own logs/UI
+> rather than relying on the default silent degradation.
+>
+> **Threshold calibration.** `DEFAULT_THRESHOLDS` (`exact .95 / high .85 /
+> medium .75 / low .60`, `src/core/confidence.ts`) were tuned against a
+> higher-contrast embedding space. In production against all-MiniLM-L6-v2
+> over a CRUD-heavy, 70+-tool MCP toolkit, clear correct-tool paraphrases
+> commonly scored only 0.60–0.74 — landing in the LOW tier for nearly every
+> real match. If you see the same pattern, consider passing a lower/wider
+> `RuntimeOptions.thresholds` tuned to your embedder and toolkit shape
+> rather than assuming the defaults are miscalibrated dispatch.
 
 ## Compile Sources
 
