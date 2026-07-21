@@ -39,11 +39,13 @@ An agent backed by any knowledge engine still has to decide whether to run a que
 
 ## Quick Start
 
-Get up and running in under a minute:
+Get up and running in under a minute, from source:
 
 ```bash
-# Install smallchat
-npm install -g @smallchat/core
+git clone https://github.com/johnnyclem/smallchat.git
+cd smallchat
+npm install && npm run build
+npm link
 
 # Run the interactive setup wizard
 smallchat setup
@@ -57,8 +59,21 @@ The setup wizard will:
 That's it — your agent now dispatches tools semantically instead of stuffing them all into the context window.
 
 > **Prefer non-interactive mode?** Run `smallchat setup --no-interactive` to auto-detect and compile without prompts.
+>
+> **Published on npm?** `@smallchat/core` is on the registry, but currently pinned at `0.1.0` — well behind this repo (`0.5.0`, plus the unreleased work in [What's New](#whats-new) below), and missing commands like `setup`, `doctor`, `memex`, and `rtk` entirely. Build from source as shown above until a fresh version ships; watch [CHANGELOG.md](./CHANGELOG.md) for the publish.
 
 ## Install
+
+**From source** (recommended until the npm package catches up — see the note above):
+
+```bash
+git clone https://github.com/johnnyclem/smallchat.git
+cd smallchat
+npm install
+npm run build
+```
+
+**From npm** (currently `0.1.0` only):
 
 ```bash
 npm install @smallchat/core
@@ -72,20 +87,22 @@ Requires Node.js >= 20.
 
 ```bash
 # Compile tools from your MCP servers
-npx @smallchat/core compile --source ~/.mcp.json
+smallchat compile --source ~/.mcp.json
 
 # Ask it a question — see which tool it picks and why
-npx @smallchat/core resolve tools.toolkit.json "search for code"
+smallchat resolve tools.toolkit.json "search for code"
 
 # Start an MCP-compatible server
-npx @smallchat/core serve --source ./manifests --port 3001
+smallchat serve --source ./manifests --port 3001
 
 # Scaffold a new project
-npx @smallchat/core init my-app --template agent
+smallchat init my-app --template agent
 
 # Interactive REPL
-npx @smallchat/core repl tools.toolkit.json
+smallchat repl tools.toolkit.json
 ```
+
+(Assumes the `npm link` step from [Quick Start](#quick-start). Swap in `npx @smallchat/core@0.1.0` if you're deliberately targeting the currently-published package instead — most of the commands above post-date it.)
 
 ## Use It in Code
 
@@ -120,20 +137,29 @@ for await (const token of runtime.inferenceStream('find flights', { to: 'NYC' })
 }
 ```
 
-## What's New in 0.5.0
+## What's New
+
+**Unreleased on `main`** (ahead of the last tagged release, 0.5.0):
+
+- **Semantic map** — when the user resolves a refinement, that choice is learned: the exact intent resolves instantly next time, and *similar* intents get a confidence boost toward the same tool. Defer once, remember forever.
+- **Selector-table pollution fix** — resolved intents no longer leak into the tool list or shadow real tools in "did you mean?" suggestions; intent entries are now LRU-bounded instead of retained forever.
+- **`requireLLMForSubHighDispatch` guard** — opt-in flag to stop MEDIUM/LOW-confidence dispatches from auto-firing a tool when no `LLMClient` is configured.
+- **Security hardening** — CORS is no longer wide-open by default on the MCP HTTP transport, request bodies are capped at 4 MB, spawned MCP servers get an env allowlist instead of the full parent environment, manifest parsing guards against prototype pollution and path traversal, and the playground HTML-escapes toolkit content.
+- **Dispatch performance** — a selector → owning-class index removes the O(matches × classes) rescan on every resolution; tool summaries are memoized instead of rebuilt per dispatch.
+
+### 0.5.0
 
 - **LoomMCP integration guide** — Compile [LoomMCP](https://muhnehh.github.io/loom-mcp/)'s 17 MCP tools through smallchat for semantic dispatch on top of exact-symbol retrieval. See the [LoomMCP integration page](./packages/docs/docs/integrations/loom-mcp.md).
 - **Synchronized package versions** — Every workspace package is now aligned at 0.5.0.
 - **Refreshed runtime version metadata** — MCP server, channel server, MCP client, REPL banner, and compiled artifacts now report 0.5.0.
 
-Plus everything from 0.4.0:
+### 0.4.0 — the core dispatch pillars
 
 - **Confidence-tiered dispatch** — Every dispatch returns EXACT/HIGH/MEDIUM/LOW/NONE and branches accordingly
 - **Resolution proof** — Serializable trace documenting why a tool was chosen
 - **Pre-flight verification** — `respondsToSelector:` gate between resolution and execution
 - **Intent decomposition** — `doesNotUnderstand:` handler breaks complex intents into sub-intents
 - **Refinement protocol** — `forwardInvocation:` dialogue for NONE-confidence dispatches
-- **Semantic map** — when the user resolves a refinement, that choice is learned: the exact intent resolves instantly next time, and *similar* intents get a confidence boost toward the same tool. Defer once, remember forever.
 - **Observation & adaptation** — KVO-inspired observer adapts thresholds in real time
 
 See the full [Changelog](./CHANGELOG.md) for details.
@@ -167,14 +193,14 @@ See the [Architecture doc](./ARCHITECTURE.md) for the full design and the [Refer
 
 ## Packages
 
-| Package | Description |
-|---------|-------------|
-| `@smallchat/core` | Core runtime, compiler, MCP server, CLI |
-| `@smallchat/react` | React hooks: `useToolDispatch`, `useToolStream`, `SmallchatProvider` |
-| `@smallchat/nextjs` | Next.js App Router helpers |
-| `@smallchat/testing` | `MockEmbedder`, `MockVectorIndex`, assertion helpers |
-| `smallchat-vscode` | VS Code syntax highlighting, manifest schema validation, snippets |
-| `@smallchat/playground` | Browser-based resolution chain visualizer |
+| Package | Description | On npm? |
+|---------|-------------|---------|
+| `@smallchat/core` | Core runtime, compiler, MCP server, CLI | Yes, pinned at `0.1.0` (source is ahead — see [What's New](#whats-new)) |
+| `@smallchat/react` | React hooks: `useToolDispatch`, `useToolStream`, `SmallchatProvider` | Not yet — build from source |
+| `@smallchat/nextjs` | Next.js App Router helpers | Not yet — build from source |
+| `@smallchat/testing` | `MockEmbedder`, `MockVectorIndex`, assertion helpers | Not yet — build from source |
+| `smallchat-vscode` | VS Code syntax highlighting, manifest schema validation, snippets | Not yet — build from source |
+| `@smallchat/playground` | Browser-based resolution chain visualizer | Not yet — build from source |
 
 ## Documentation
 
@@ -209,4 +235,4 @@ npm run docs:api  # Generate API reference
 
 ## License
 
-MIT
+[MIT](./LICENSE)
