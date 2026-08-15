@@ -58,3 +58,31 @@ jobs:
       # install-time-only postinstall script).
       - name: Audit (critical)
         run: npm audit --audit-level=critical
+
+  docs:
+    name: Docs site (build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/docs
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: packages/docs/package-lock.json
+
+      # packages/docs carries its own package-lock.json and is not part
+      # of the root npm workspace, so it needs its own install/build/audit
+      # here rather than being covered by the jobs above.
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Audit (critical)
+        run: npm audit --audit-level=critical

@@ -89,6 +89,12 @@ specific reason rather than oversight:
   maintainer's behalf. The CI workflow added in this pass tests both Node 20
   and 22, so whenever that floor decision is made, CI will immediately
   surface any fallout.
+- **`packages/docs`'s remaining 22 `npm audit` findings.** All require
+  forcing `@docusaurus/preset-classic` to `3.10.2` while `@docusaurus/core`
+  stays pinned at `3.6.3` (a mismatched, out-of-range pair) — not safe to
+  take piecemeal. Needs a coordinated bump of all four `@docusaurus/*`
+  packages together, verified with a real `docusaurus build`, as its own
+  change.
 - **Stray nested lockfiles in `shorthand/` and `packages/examples/` (#15).**
   Both were touched as recently as the "adopt workspaces" commit, meaning
   someone deliberately kept them post-migration — plausibly because
@@ -113,11 +119,24 @@ specific reason rather than oversight:
   floor bump within the existing semver range or a transitive lockfile
   update; no direct dependency's major version changed and no public API
   this project exposes changed.
-- **Remaining `npm audit` finding:** `adm-zip <0.6.0` via `onnxruntime-node`.
-  Accepted risk (see Critical/High table above, #6). CI's audit job is
-  intentionally gated at `--audit-level=critical` rather than `high` so this
-  known, accepted finding doesn't produce permanent false-red CI; a genuinely
-  new critical vulnerability will still fail the build.
+- **Remaining `npm audit` finding (root):** `adm-zip <0.6.0` via
+  `onnxruntime-node`. Accepted risk (see Critical/High table above, #6).
+  CI's audit job is intentionally gated at `--audit-level=critical` rather
+  than `high` so this known, accepted finding doesn't produce permanent
+  false-red CI; a genuinely new critical vulnerability will still fail the
+  build.
+- **`packages/docs` was a blind spot.** It carries its own `package-lock.json`
+  and isn't part of the root npm workspace, so none of the above touched it
+  — confirmed by GitHub reporting 106 total repo vulnerabilities on push
+  against the 13 `npm audit` found at root. Running `npm audit fix` there
+  too resolved 22 of 44 (both critical findings included), and separately
+  surfaced that `docusaurus build` was already broken on a pre-existing bad
+  link (`docs/integrations/index.md` → `./loom-mcp`, which the page's
+  `slug: /integrations` override resolves incorrectly) — fixed alongside.
+  Added a `docs` job to CI so both the dependency audit and the build are
+  now checked for this package too. The remaining 22 findings there need a
+  coordinated Docusaurus 3.6→3.10 upgrade — see
+  [Deferred](#deferred--not-fixed-and-why).
 
 ## Remaining Technical Debt & Recommended Next Steps
 
@@ -154,6 +173,8 @@ workflow would actually pass before being added.
 ## Commit Log (this audit)
 
 ```
+6866756 fix(docs): resolve 22 of 44 docs-site vulnerabilities, fix broken link
+bc3f9b3 docs: add structured audit report and CHANGELOG entries
 050a4bb chore: small hygiene fixes (.gitignore, README doc drift, repo URL typo)
 641aa91 ci: add GitHub Actions workflow (lint, test, build, dependency audit)
 782aa21 fix(core,mcp): harden SCDictionary.unwrap() and use safeJsonParse in artifact.ts
@@ -162,3 +183,7 @@ abc2be0 fix(channel): auth-gate /sse, constant-time secret check, escape content
 a69533a fix(mcp): close auth/rate-limit gaps on the MCP HTTP server
 f0ef437 fix(deps): resolve critical vitest CVE and 11 transitive high/moderate vulns
 ```
+
+(plus a follow-up commit adding CI coverage for `packages/docs` and
+recording the docs-site findings above, made after this list was
+initially written)
