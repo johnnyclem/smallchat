@@ -233,4 +233,28 @@ describe('ChannelServer HTTP bridge', () => {
     });
     expect(goodResponse.status).toBe(200);
   });
+
+  it('enforces shared secret on GET /sse too (not just POST /event)', async () => {
+    server = new ChannelServer({
+      channelName: 'sse-secret-test',
+      httpBridge: true,
+      httpBridgePort: PORT + 4,
+      httpBridgeHost: '127.0.0.1',
+      httpBridgeSecret: 'my-secret-token',
+    });
+
+    await server.start();
+
+    const badResponse = await fetch(`http://127.0.0.1:${PORT + 4}/sse`, {
+      headers: { Accept: 'text/event-stream' },
+    });
+    expect(badResponse.status).toBe(401);
+    await badResponse.body?.cancel();
+
+    const goodResponse = await fetch(`http://127.0.0.1:${PORT + 4}/sse`, {
+      headers: { 'X-Channel-Secret': 'my-secret-token', Accept: 'text/event-stream' },
+    });
+    expect(goodResponse.status).toBe(200);
+    await goodResponse.body?.cancel();
+  });
 });

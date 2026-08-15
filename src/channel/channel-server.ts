@@ -17,6 +17,7 @@
 
 import { createInterface, type Interface } from 'node:readline';
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
+import { timingSafeEqual } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import type {
   ChannelEvent,
@@ -428,9 +429,12 @@ export class ChannelServer extends EventEmitter {
       const provided = req.headers['x-channel-secret'] as string
         ?? req.headers['authorization']?.replace(/^Bearer\s+/i, '');
 
-      if (provided !== this.config.httpBridgeSecret) {
-        // SSE and health don't require auth
-        if (url !== '/sse' && url !== '/health') {
+      if (!timingSafeEqualStrings(provided, this.config.httpBridgeSecret)) {
+        // Only /health stays open for liveness checks. /sse must be
+        // authenticated too — it streams channel events and pending
+        // tool-approval requests, so leaving it exempt would hand any
+        // local client a live feed of that traffic.
+        if (url !== '/health') {
           res.writeHead(401, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'Unauthorized' }));
           return;
@@ -605,6 +609,19 @@ export class ChannelServer extends EventEmitter {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Constant-time comparison of the caller-supplied secret against the
+ * configured one, so a mismatch can't be timed to recover the secret
+ * byte-by-byte. `provided` may be undefined (no header sent at all).
+ */
+function timingSafeEqualStrings(provided: string | undefined, expected: string): boolean {
+  if (provided === undefined) return false;
+  const bufA = Buffer.from(provided);
+  const bufB = Buffer.from(expected);
+  if (bufA.length !== bufB.length) return false;
+  return timingSafeEqual(bufA, bufB);
+}
 
 function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
