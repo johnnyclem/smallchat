@@ -11,6 +11,8 @@ Package.resolved
 # Node.js
 node_modules/
 dist/
+*.log
+coverage/
 
 # Docusaurus
 .docusaurus/
