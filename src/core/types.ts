@@ -145,6 +145,37 @@ export interface ToolIMP {
 }
 
 // ---------------------------------------------------------------------------
+// ToolTransport — the abstraction ToolProxy executes through
+// ---------------------------------------------------------------------------
+//
+// This is a type-only boundary: it lets ToolProxy (part of the durable,
+// transport-agnostic inference core re-exported from `@smallchat/core/inference`)
+// describe "how to reach a tool" without statically importing a concrete
+// transport implementation (e.g. src/mcp/transport.ts's MCPTransport, which
+// carries HTTP/JSON-RPC/SSE wire-protocol code). Concrete transports satisfy
+// this interface structurally; callers that construct a ToolProxy (the
+// compiler, the MCP artifact loader) inject a ToolTransportFactory that
+// creates one.
+
+export interface ToolTransport {
+  execute(toolName: string, args: Record<string, unknown>): Promise<ToolResult>;
+  executeStream(toolName: string, args: Record<string, unknown>): AsyncGenerator<ToolResult>;
+  executeInference(toolName: string, args: Record<string, unknown>): AsyncGenerator<InferenceDelta>;
+}
+
+export interface ToolTransportConnectionOptions {
+  transportType: TransportType;
+  endpoint?: string;
+  headers?: Record<string, string>;
+}
+
+/** Creates (or looks up a cached) ToolTransport for a given provider. */
+export type ToolTransportFactory = (
+  providerId: string,
+  options: ToolTransportConnectionOptions,
+) => ToolTransport;
+
+// ---------------------------------------------------------------------------
 // Method = Selector + IMP
 // ---------------------------------------------------------------------------
 

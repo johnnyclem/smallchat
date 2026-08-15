@@ -81,7 +81,8 @@ specific reason rather than oversight:
   directly, which is a real (if not huge) refactor touching a load-bearing
   class. Per this audit's brief to prefer small, reviewable, non-speculative
   changes, this is better done as its own scoped PR with its own review,
-  not folded into a security-audit branch.
+  not folded into a security-audit branch. **Update: done, see
+  [Follow-up](#follow-up-deferred-items-addressed-second-pass).**
 - **`commander`/`better-sqlite3` major bumps (#14).** Both now require
   Node ≥22, which would silently raise this project's declared
   `engines.node: >=20.0.0` floor — a real breaking change for any consumer
@@ -135,9 +136,25 @@ were revisited in a follow-up pass after the first PR merged:
   tooling dependencies, not shipped in the static site users receive; there
   is nothing further to do here until Docusaurus itself updates that
   dependency chain upstream.
-- Remaining items (`ToolClass`/transport layering, `src/importance/` fork
-  consolidation, `commander`/`better-sqlite3` majors) — see updates further
-  below as each is addressed.
+- **`ToolClass`/`ToolProxy` transport layering (#13) — resolved.** Added a
+  `ToolTransport` interface (plus `ToolTransportConnectionOptions` and a
+  `ToolTransportFactory` type) to `src/core/types.ts`, purely structural —
+  zero runtime import. `ToolProxy` no longer imports `MCPTransport`/
+  `getTransport` from `mcp/transport.ts` at all; its constructor now takes
+  an optional `transportFactory` and returns a clear "no transport
+  configured" error result (instead of silently reaching into a concrete
+  implementation) when none was injected. The two call sites that construct
+  `ToolProxy` — `compiler.ts`'s `createIMP` and `mcp/artifact.ts`'s
+  `hydrateRuntime` — now explicitly pass `getTransport` from
+  `mcp/transport.ts`, preserving identical existing behavior. Verified the
+  fix is real (not just moved) by grepping the built `dist/inference.js`,
+  `dist/core/*.js`, and `dist/runtime/*.js` for any reference to
+  `mcp/transport` — none — and added `src/inference.test.ts`, a source-scan
+  regression test that fails if any core/runtime file statically imports
+  `mcp/transport.ts` again.
+- Remaining items (`src/importance/` fork consolidation,
+  `commander`/`better-sqlite3` majors) — see updates further below as each
+  is addressed.
 
 ## Dependency Upgrade Summary
 
@@ -176,8 +193,8 @@ Roughly in priority order:
 
 1. **Decide the Node floor**, then take the `commander`/`better-sqlite3`
    major bumps (both are otherwise routine).
-2. **Scope a `ToolProxy` transport-abstraction refactor** to fix the
-   Tier-1/Tier-2 layering violation (#13) as its own PR.
+2. ~~Scope a `ToolProxy` transport-abstraction refactor~~ — done, see
+   [Follow-up](#follow-up-deferred-items-addressed-second-pass).
 3. **Test coverage:** `src/app/` (MCP Apps compile/runtime pipeline, ~1,160
    lines) still has no tests; `src/memex/resolver.ts`'s primary `resolve()`
    function is untested (only its `computeTier()` helper is); `LocalEmbedder`

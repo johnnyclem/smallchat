@@ -143,4 +143,61 @@ describe('ToolProxy', () => {
     const result = await proxy.execute({}); // Missing required 'query'
     expect(result.isError).toBe(true);
   });
+
+  it('returns a clear error instead of executing when no transportFactory was injected', async () => {
+    const proxy = new ToolProxy(
+      'test',
+      'my_tool',
+      'local',
+      async () => ({ name: 'my_tool', description: '', inputSchema: { type: 'object' }, arguments: [] }),
+    );
+
+    const result = await proxy.execute({});
+
+    expect(result.isError).toBe(true);
+    expect(String(result.metadata?.error)).toContain('no transport configured');
+
+    const streamed: unknown[] = [];
+    for await (const chunk of proxy.executeStream({})) streamed.push(chunk);
+    expect(streamed).toHaveLength(1);
+    expect((streamed[0] as { isError?: boolean }).isError).toBe(true);
+
+    const inferred: unknown[] = [];
+    for await (const delta of proxy.executeInference({})) inferred.push(delta);
+    expect(inferred).toHaveLength(0);
+  });
+
+  it('routes execution through an injected transportFactory', async () => {
+    let sawToolName: string | undefined;
+    let sawProviderId: string | undefined;
+    const proxy = new ToolProxy(
+      'test',
+      'my_tool',
+      'local',
+      async () => ({ name: 'my_tool', description: '', inputSchema: { type: 'object' }, arguments: [] }),
+      undefined,
+      undefined,
+      (providerId) => {
+        sawProviderId = providerId;
+        return {
+          execute: async (toolName) => {
+            sawToolName = toolName;
+            return { content: 'ok', isError: false };
+          },
+          executeStream: async function* (toolName) {
+            yield { content: `stream:${toolName}`, isError: false };
+          },
+          executeInference: async function* () {
+            yield { text: 'x' };
+          },
+        };
+      },
+    );
+
+    const result = await proxy.execute({});
+    expect(result.isError).toBe(false);
+    expect(result.content).toBe('ok');
+    expect(sawProviderId).toBe('test');
+    expect(sawToolName).toBe('my_tool');
+  });
 });

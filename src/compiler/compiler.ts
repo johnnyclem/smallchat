@@ -23,6 +23,7 @@ import type { SCTypeDescriptor, SCParameterSlot } from '../core/sc-types.js';
 import { parseMCPManifest, applyManifestOverrides, type ParsedTool } from './parser.js';
 import type { SmallChatManifest } from '../core/manifest.js';
 import { AppCompiler } from '../app/app-compiler.js';
+import { getTransport } from '../mcp/transport.js';
 
 /**
  * ToolCompiler — the build-time tool that produces dispatch tables,
@@ -379,6 +380,8 @@ export class ToolCompiler {
         arguments: tool.arguments,
       }),
       constraints,
+      undefined,
+      getTransport,
     );
   }
 

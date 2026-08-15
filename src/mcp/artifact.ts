@@ -16,6 +16,7 @@ import { MemoryVectorIndex } from '../embedding/memory-vector-index.js';
 import { SqliteVectorIndex } from '../embedding/sqlite-vector-index.js';
 import { SqliteArtifactStore } from './sqlite-artifact.js';
 import { safeJsonParse } from '../core/safe-json.js';
+import { getTransport } from './transport.js';
 
 // ---------------------------------------------------------------------------
 // Serialized artifact shape
@@ -142,6 +143,8 @@ async function hydrateRuntime(runtime: ToolRuntime, artifact: SerializedArtifact
           optional: [],
           validate: () => ({ valid: true, errors: [] }),
         },
+        undefined,
+        getTransport,
       );
 
       toolClass.addMethod(selector, proxy);
