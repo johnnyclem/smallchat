@@ -6,6 +6,8 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
+import { createServer, request as httpRequest, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { MCPServer } from './index.js';
 import { SessionManager } from './session.js';
 import { ToolRegistry, ResourceRegistry, PromptRegistry } from './registry.js';
@@ -935,5 +937,149 @@ describe('MCPServer class', () => {
     expect(content?.mimeType).toBe('text/html;profile=mcp-app');
     expect(content?.text).toContain('weather');
     await server.stop();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// MCPServer HTTP-level security regressions
+// ---------------------------------------------------------------------------
+
+describe('MCPServer HTTP security', () => {
+  async function startTestServer(
+    overrides: Record<string, unknown> = {},
+  ): Promise<{ server: MCPServer; httpServer: Server; port: number }> {
+    const server = new MCPServer({
+      port: 0, host: '127.0.0.1', sourcePath: '', dbPath: ':memory:',
+      ...overrides,
+    });
+    const httpServer = createServer(server.createHttpHandler());
+    await new Promise<void>((resolve) => httpServer.listen(0, '127.0.0.1', resolve));
+    const port = (httpServer.address() as AddressInfo).port;
+    return { server, httpServer, port };
+  }
+
+  async function stopTestServer(server: MCPServer, httpServer: Server): Promise<void> {
+    await server.stop();
+    await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+  }
+
+  function httpPost(
+    port: number,
+    path: string,
+    body: string,
+    headers: Record<string, string> = {},
+  ): Promise<{ status: number; body: string }> {
+    return new Promise((resolve, reject) => {
+      const req = httpRequest(
+        { host: '127.0.0.1', port, path, method: 'POST', headers: { 'Content-Length': Buffer.byteLength(body), ...headers } },
+        (res) => {
+          let chunks = '';
+          res.on('data', (c) => { chunks += c; });
+          res.on('end', () => resolve({ status: res.statusCode ?? 0, body: chunks }));
+        },
+      );
+      req.on('error', reject);
+      req.write(body);
+      req.end();
+    });
+  }
+
+  function postJsonRpc(port: number, payload: unknown, headers: Record<string, string> = {}) {
+    return httpPost(port, '/', JSON.stringify(payload), { 'Content-Type': 'application/json', ...headers })
+      .then((r) => ({ status: r.status, json: JSON.parse(r.body) }));
+  }
+
+  function connectSSE(
+    port: number,
+    headers: Record<string, string> = {},
+  ): Promise<{ status: number; getBuffer: () => string; close: () => void }> {
+    return new Promise((resolve, reject) => {
+      const req = httpRequest({ host: '127.0.0.1', port, path: '/sse', method: 'GET', headers }, (res) => {
+        let buffer = '';
+        res.on('data', (c) => { buffer += c; });
+        resolve({ status: res.statusCode ?? 0, getBuffer: () => buffer, close: () => req.destroy() });
+      });
+      req.on('error', reject);
+      req.end();
+    });
+  }
+
+  it('GET /sse requires a bearer token when auth is enabled', async () => {
+    const { server, httpServer, port } = await startTestServer({ enableAuth: true });
+    try {
+      const noAuth = await connectSSE(port);
+      expect(noAuth.status).toBe(401);
+      noAuth.close();
+
+      server.oauth.registerClient({ clientId: 'c1', clientSecret: 's1', name: 'Test' });
+      const token = server.oauth.issueToken('c1', 's1');
+      expect(token).not.toBeNull();
+
+      const withAuth = await connectSSE(port, { Authorization: `Bearer ${token!.accessToken}` });
+      expect(withAuth.status).toBe(200);
+      withAuth.close();
+    } finally {
+      await stopTestServer(server, httpServer);
+    }
+  });
+
+  it('resource update notifications only reach the subscribing session, not every SSE client', async () => {
+    const { server, httpServer, port } = await startTestServer();
+    try {
+      const initA = await postJsonRpc(port, { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} });
+      const sessionA = (initA.json.result as { sessionId: string }).sessionId;
+      const initB = await postJsonRpc(port, { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} });
+      const sessionB = (initB.json.result as { sessionId: string }).sessionId;
+      expect(sessionA).not.toBe(sessionB);
+
+      const clientA = await connectSSE(port, { 'Mcp-Session-Id': sessionA });
+      const clientB = await connectSSE(port, { 'Mcp-Session-Id': sessionB });
+
+      await postJsonRpc(
+        port,
+        { jsonrpc: '2.0', id: 2, method: 'resources/subscribe', params: { uri: 'test://foo' } },
+        { 'Mcp-Session-Id': sessionA },
+      );
+
+      server.resources.notifyChange({ type: 'updated', uri: 'test://foo', timestamp: new Date().toISOString() });
+      await new Promise((r) => setTimeout(r, 100));
+
+      expect(clientA.getBuffer()).toContain('notifications/resources/updated');
+      expect(clientB.getBuffer()).not.toContain('notifications/resources/updated');
+
+      clientA.close();
+      clientB.close();
+    } finally {
+      await stopTestServer(server, httpServer);
+    }
+  });
+
+  it('rate limiter cannot be bypassed by spoofing a fresh Mcp-Session-Id per request', async () => {
+    const { server, httpServer, port } = await startTestServer({ enableRateLimit: true, rateLimitRPM: 3 });
+    try {
+      for (let i = 0; i < 3; i++) {
+        const res = await postJsonRpc(port, { jsonrpc: '2.0', id: i, method: 'ping' }, { 'Mcp-Session-Id': `unverified-fake-${i}` });
+        expect(res.json.error).toBeUndefined();
+      }
+      const limited = await postJsonRpc(port, { jsonrpc: '2.0', id: 99, method: 'ping' }, { 'Mcp-Session-Id': 'unverified-fake-99' });
+      expect(limited.json.error?.message).toBe('Rate limit exceeded');
+    } finally {
+      await stopTestServer(server, httpServer);
+    }
+  });
+
+  it('POST /oauth/token is rate-limited even when enableRateLimit is not set', async () => {
+    const { server, httpServer, port } = await startTestServer();
+    try {
+      server.oauth.registerClient({ clientId: 'c1', clientSecret: 'correct-secret', name: 'Test' });
+      const form = 'grant_type=client_credentials&client_id=c1&client_secret=wrong-secret';
+      let last: { status: number; body: string } | undefined;
+      for (let i = 0; i < 21; i++) {
+        last = await httpPost(port, '/oauth/token', form, { 'Content-Type': 'application/x-www-form-urlencoded' });
+      }
+      expect(last!.status).toBe(429);
+    } finally {
+      await stopTestServer(server, httpServer);
+    }
   });
 });

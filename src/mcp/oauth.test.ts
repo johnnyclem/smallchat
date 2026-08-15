@@ -40,6 +40,17 @@ describe('OAuthManager', () => {
       expect(oauth.authenticateClient('test-client', 'wrong')).toBeNull();
       expect(oauth.authenticateClient('unknown', 'secret123')).toBeNull();
     });
+
+    it('rejects credentials of very different lengths without throwing (constant-time compare)', () => {
+      oauth.registerClient({
+        clientId: 'test-client',
+        clientSecret: 'secret123',
+        name: 'Test',
+      });
+      expect(() => oauth.authenticateClient('test-client', '')).not.toThrow();
+      expect(oauth.authenticateClient('test-client', '')).toBeNull();
+      expect(oauth.authenticateClient('test-client', 'x'.repeat(500))).toBeNull();
+    });
   });
 
   describe('token issuance', () => {
