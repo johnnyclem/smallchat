@@ -227,7 +227,8 @@ package) versus what's still aspirational.
 ## Development
 
 ```bash
-npm test          # ~1,150+ specs across the core runtime, compiler, embeddings, and transports
+npm test          # ~1,100+ specs across the core runtime, compiler, embeddings, and transports
+npm test --workspace=shorthand  # ~260 specs for the vendored compaction/CRDT/importance modules
 npm run dev       # Watch mode
 npm run lint      # Type check
 npm run docs:api  # Generate API reference
