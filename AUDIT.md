@@ -107,7 +107,8 @@ specific reason rather than oversight:
 - **`src/importance/` vs `shorthand/src/importance/` fork (#21).** Already
   identified and scoped in `docs/ecosystem/engineering-guide.md` as a
   "Phase 0" item with its own analysis. Redoing that analysis here would
-  duplicate, not add to, existing tracked work.
+  duplicate, not add to, existing tracked work. **Update: done, see
+  [Follow-up](#follow-up-deferred-items-addressed-second-pass).**
 
 ## Follow-up: Deferred Items Addressed (second pass)
 
@@ -152,9 +153,32 @@ were revisited in a follow-up pass after the first PR merged:
   `mcp/transport` — none — and added `src/inference.test.ts`, a source-scan
   regression test that fails if any core/runtime file statically imports
   `mcp/transport.ts` again.
-- Remaining items (`src/importance/` fork consolidation,
-  `commander`/`better-sqlite3` majors) — see updates further below as each
-  is addressed.
+- **`src/importance/` vs `shorthand/src/importance/` fork (#21) —
+  resolved.** `diff -rq` on the two directories showed every file byte-
+  identical except `types.ts`: the local copy defined its own narrower
+  `ConversationMessage` interface instead of importing the canonical one
+  (with a `'tool'` role option, `timestamp: string | number`, and
+  `normalizeTimestamp`) that `shorthand/src/importance/types.ts` already
+  imports from `@shorthand/core`'s shared types. Also confirmed
+  `src/compaction/` and `src/crdt/` — the two satellites PR #58 actually
+  finished extracting — have no local directory at all; `src/importance/`
+  was the one left as a stale duplicate. Replaced it with a thin re-export
+  of `@shorthand/core/importance` (same pattern `src/index.ts` already uses
+  for compaction/CRDT), deleting the five duplicated implementation files
+  and their tests. The `@smallchat/core/importance` public subpath is
+  unchanged — same exported names, same behavior — so this is non-breaking
+  for anyone consuming it.
+
+  While making this change, found that root CI (added earlier in this
+  audit) never actually ran `shorthand/`'s own test suite — root
+  `vitest.config.ts` only globs the root `src/`, and nothing wired
+  `shorthand`'s ~260 specs (compaction, CRDT, importance) into `npm test`
+  or CI. This had been true even before this change (deleting the local
+  importance duplicate just made the gap visible, it didn't create it).
+  Added an explicit `npm test --workspace=shorthand` step to CI's `test`
+  job to close it.
+- Remaining item (`commander`/`better-sqlite3` majors) — see the update
+  further below.
 
 ## Dependency Upgrade Summary
 
@@ -200,11 +224,10 @@ Roughly in priority order:
    function is untested (only its `computeTier()` helper is); `LocalEmbedder`
    (the placeholder hash-based embedder referenced in QUICKSTART.md) has no
    tests.
-4. **Consolidate `src/importance/` with `@shorthand/core/importance`**
-   per `docs/ecosystem/engineering-guide.md`'s existing analysis.
-5. **Un-nest the stray lockfiles** in `shorthand/` and `packages/examples/`
-   once their independent-publish requirements (if any) are confirmed, or
-   document why they're intentionally separate.
+4. ~~Consolidate `src/importance/` with `@shorthand/core/importance`~~ —
+   done, see [Follow-up](#follow-up-deferred-items-addressed-second-pass).
+5. ~~Un-nest the stray lockfiles~~ — done, see
+   [Follow-up](#follow-up-deferred-items-addressed-second-pass).
 6. **Consider Git LFS** for the committed ONNX model files, or at minimum
    document the convention in ARCHITECTURE.md/README.md.
 7. **Prune stale entries** from the rate limiter's and connection pool's
