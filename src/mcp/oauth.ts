@@ -1,4 +1,4 @@
-import { randomUUID, createHash } from 'node:crypto';
+import { randomUUID, createHash, timingSafeEqual } from 'node:crypto';
 
 /**
  * OAuth 2.1 client credentials flow with scoped tokens.
@@ -112,7 +112,7 @@ export class OAuthManager {
     const client = this.clients.get(clientId);
     if (!client || !client.active) return null;
 
-    if (client.clientSecretHash !== hashSecret(clientSecret)) {
+    if (!timingSafeEqualStrings(client.clientSecretHash, hashSecret(clientSecret))) {
       return null;
     }
 
@@ -340,4 +340,18 @@ function hashSecret(secret: string): string {
   return createHash('sha256')
     .update(secret)
     .digest('hex');
+}
+
+/**
+ * Constant-time string comparison, guarding against timing attacks on
+ * secret-hash equality checks. Both inputs are hex-encoded SHA-256
+ * digests, so they're equal-length in practice, but the length check
+ * keeps this safe for any input `timingSafeEqual` would otherwise throw
+ * on.
+ */
+function timingSafeEqualStrings(a: string, b: string): boolean {
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) return false;
+  return timingSafeEqual(bufA, bufB);
 }

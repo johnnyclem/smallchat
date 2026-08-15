@@ -137,7 +137,7 @@ export function serializeChannelTag(
     }
   }
 
-  return `<channel ${attrs.join(' ')}>\n${content}\n</channel>`;
+  return `<channel ${attrs.join(' ')}>\n${escapeXmlText(content)}\n</channel>`;
 }
 
 /**
@@ -147,6 +147,23 @@ function escapeXmlAttr(str: string): string {
   return str
     .replace(/&/g, '&amp;')
     .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+/**
+ * Escape a string for use as XML element text content.
+ *
+ * Without this, a sender could embed a literal `</channel>` followed by a
+ * forged `<channel source="trusted">` in `content` and have the LLM read it
+ * as a second, spoofed channel event — undermining the provenance that
+ * `source="..."` is supposed to convey. Escaping `<`/`>`/`&` prevents
+ * `content` from ever being parsed as tag markup by a consumer reading
+ * this text.
+ */
+function escapeXmlText(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
 }

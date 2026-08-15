@@ -244,7 +244,14 @@ export class SCDictionary extends SCObject {
   }
 
   override unwrap(): Record<string, unknown> {
-    const result: Record<string, unknown> = {};
+    // Object.create(null) rather than {} — a "__proto__" key (the entries
+    // map has no key restrictions) would otherwise be interpreted as a
+    // prototype assignment by the bracket-notation set below instead of an
+    // own data property, i.e. prototype pollution. No current caller feeds
+    // untrusted keys into SCDictionary, but unwrap() is the boundary where
+    // this stops being an internal invariant and becomes a JS object
+    // anyone can read, so it's hardened here rather than left to callers.
+    const result: Record<string, unknown> = Object.create(null);
     for (const [key, value] of this.entries) {
       result[key] = value.unwrap();
     }

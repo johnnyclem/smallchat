@@ -179,6 +179,12 @@ export class MCPServer {
   private readonly resourceRegistry: ResourceRegistry;
   private readonly promptRegistry: PromptRegistry;
   private readonly rateLimiter: RateLimiter;
+  /**
+   * Dedicated, always-on limiter for POST /oauth/token, independent of
+   * `config.enableRateLimit`. Credential-guessing protection on the token
+   * endpoint should not be opt-in the way general API throttling is.
+   */
+  private readonly oauthRateLimiter: RateLimiter;
   private readonly auditLog: AuditLog;
   private readonly sseClients = new Map<string, SSEClient>();
   private readonly config: MCPServerConfig;
@@ -197,6 +203,7 @@ export class MCPServer {
     this.resourceRegistry = new ResourceRegistry();
     this.promptRegistry = new PromptRegistry();
     this.rateLimiter = new RateLimiter(config.rateLimitRPM ?? 600);
+    this.oauthRateLimiter = new RateLimiter(20);
     this.auditLog = new AuditLog();
     this.sessionStore = new SessionStore(config.dbPath ?? 'smallchat.db');
   }
@@ -383,6 +390,14 @@ export class MCPServer {
   }
 
   private handleSSE(req: IncomingMessage, res: ServerResponse): void {
+    if (this.config.enableAuth) {
+      const auth = this.oauthManager.extractBearerToken(req.headers.authorization);
+      if (!auth.active) {
+        sendJson(res, 401, { error: 'Authentication required' });
+        return;
+      }
+    }
+
     const clientId = `sse_${++this.sseCounter}`;
     const sessionId = req.headers['mcp-session-id'] as string | undefined;
 
@@ -408,6 +423,12 @@ export class MCPServer {
   // -------------------------------------------------------------------------
 
   private async handleOAuthToken(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const clientKey = req.socket.remoteAddress ?? 'unknown';
+    if (!this.oauthRateLimiter.check(clientKey)) {
+      sendJson(res, 429, { error: 'rate_limited' });
+      return;
+    }
+
     let body: string;
     try {
       body = await readBody(req, this.config.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES);
@@ -495,7 +516,15 @@ export class MCPServer {
 
     // Rate limit guard
     if (this.config.enableRateLimit) {
-      const clientKey = sessionId ?? req.socket.remoteAddress ?? 'unknown';
+      // The Mcp-Session-Id header is client-supplied and unverified; only
+      // key the limiter on it once we know it names a real session,
+      // otherwise a client can mint a fresh limiter bucket on every
+      // request by sending an arbitrary new header value. Falling back to
+      // the socket's remote address keeps unauthenticated/pre-session
+      // traffic bounded too.
+      const clientKey = (sessionId && this.sessionStore.get(sessionId))
+        ? sessionId
+        : req.socket.remoteAddress ?? 'unknown';
       if (!this.rateLimiter.check(clientKey)) {
         sendRpcError(res, id, -32000, 'Rate limit exceeded');
         return;
@@ -784,7 +813,12 @@ export class MCPServer {
 
     const subId = this.resourceRegistry.subscribe(uri, (event) => {
       for (const client of this.sseClients.values()) {
-        if (!sessionId || client.sessionId === sessionId) {
+        // Only fan out to SSE connections belonging to the subscribing
+        // session — matching only on equality (rather than treating a
+        // missing sessionId as "broadcast to everyone") prevents one
+        // client's resource-update notifications from leaking to every
+        // other connected client.
+        if (client.sessionId === sessionId) {
           sendSSE(client.response, 'message', {
             jsonrpc: '2.0', method: 'notifications/resources/updated', params: { uri: event.uri },
           });

@@ -12,6 +12,6 @@ smallchat compiles any MCP-compatible toolset into a semantic dispatch table. Th
 
 | Integration | What it does | Why pair with smallchat |
 |---|---|---|
-| [LoomMCP](./loom-mcp) | Symbol-graph retrieval over a codebase (~97% token reduction). | LoomMCP exposes 17 tools — smallchat keeps them out of the model's context window and dispatches them by intent. |
+| [LoomMCP](/docs/integrations/loom-mcp) | Symbol-graph retrieval over a codebase (~97% token reduction). | LoomMCP exposes 17 tools — smallchat keeps them out of the model's context window and dispatches them by intent. |
 
 More integrations are on the way. If you've wired smallchat up to an MCP server you'd like to see documented here, open a PR.

@@ -175,6 +175,22 @@ describe('SCDictionary', () => {
     dict.setObject('b', new SCData({ y: 2 }));
     expect(dict.unwrap()).toEqual({ a: { x: 1 }, b: { y: 2 } });
   });
+
+  it('unwrap is immune to prototype pollution via a "__proto__" key', () => {
+    const dict = new SCDictionary();
+    dict.setObject('__proto__', new SCData({ polluted: true }));
+    dict.setObject('safe', new SCData('ok'));
+
+    const unwrapped = dict.unwrap();
+
+    // The key was set as an own property, not interpreted as a prototype
+    // assignment — it must not leak onto Object.prototype for every other
+    // object in the process.
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+    expect(Object.getPrototypeOf(unwrapped)).toBeNull();
+    expect(Object.prototype.hasOwnProperty.call(unwrapped, '__proto__')).toBe(true);
+    expect((unwrapped as Record<string, unknown>).safe).toBe('ok');
+  });
 });
 
 describe('wrapValue / unwrapValue', () => {

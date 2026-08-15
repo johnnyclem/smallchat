@@ -15,6 +15,7 @@ import { LocalEmbedder } from '../embedding/local-embedder.js';
 import { MemoryVectorIndex } from '../embedding/memory-vector-index.js';
 import { SqliteVectorIndex } from '../embedding/sqlite-vector-index.js';
 import { SqliteArtifactStore } from './sqlite-artifact.js';
+import { safeJsonParse } from '../core/safe-json.js';
 
 // ---------------------------------------------------------------------------
 // Serialized artifact shape
@@ -78,7 +79,7 @@ export async function loadRuntime(
 
   if (sourcePath.endsWith('.json') && !isDirectory(sourcePath)) {
     const content = readFileSync(sourcePath, 'utf-8');
-    artifact = JSON.parse(content);
+    artifact = safeJsonParse(content, { onPollution: 'strip' }) as SerializedArtifact;
   } else {
     const manifests = findManifests(sourcePath);
 
@@ -164,9 +165,9 @@ export function findManifests(dir: string): ProviderManifest[] {
         const stat = statSync(full);
         if (stat.isFile() && entry.endsWith('.json')) {
           try {
-            manifests.push(JSON.parse(readFileSync(full, 'utf-8')));
+            manifests.push(safeJsonParse(readFileSync(full, 'utf-8')) as ProviderManifest);
           } catch {
-            /* skip invalid */
+            /* skip invalid (including prototype-pollution payloads) */
           }
         } else if (stat.isDirectory()) {
           walk(full);
