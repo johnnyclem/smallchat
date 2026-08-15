@@ -94,18 +94,50 @@ specific reason rather than oversight:
   stays pinned at `3.6.3` (a mismatched, out-of-range pair) — not safe to
   take piecemeal. Needs a coordinated bump of all four `@docusaurus/*`
   packages together, verified with a real `docusaurus build`, as its own
-  change.
+  change. **Update: done, see [Follow-up](#follow-up-deferred-items-addressed-second-pass).**
 - **Stray nested lockfiles in `shorthand/` and `packages/examples/` (#15).**
   Both were touched as recently as the "adopt workspaces" commit, meaning
   someone deliberately kept them post-migration — plausibly because
   `shorthand` is also published standalone as `@shorthand/core` outside this
   monorepo and needs its own lockfile for that independent pipeline. Removing
   them without confirming that intent risked breaking a workflow this audit
-  can't see from the repo alone.
+  can't see from the repo alone. **Update: investigated and resolved, see
+  [Follow-up](#follow-up-deferred-items-addressed-second-pass).**
 - **`src/importance/` vs `shorthand/src/importance/` fork (#21).** Already
   identified and scoped in `docs/ecosystem/engineering-guide.md` as a
   "Phase 0" item with its own analysis. Redoing that analysis here would
   duplicate, not add to, existing tracked work.
+
+## Follow-up: Deferred Items Addressed (second pass)
+
+The five items in [Deferred / Not Fixed](#deferred--not-fixed-and-why) above
+were revisited in a follow-up pass after the first PR merged:
+
+- **Stray nested lockfiles (#15) — resolved.** Investigated both open
+  questions directly: `@shorthand/core` is not published to npm at all
+  (registry 404), and `@smallchat/examples`, while published, doesn't need a
+  lockfile for that (publishing doesn't consume one). More importantly,
+  `npm install` run inside either directory doesn't update its local
+  lockfile — npm defers to the workspace root — so neither file was being
+  maintained by any normal workflow. This had already caused real drift:
+  `shorthand/package-lock.json` still resolved `vitest@3.2.4`, the exact
+  version with the critical CVE fixed at the root in the first pass,
+  invisible to root-level `npm audit`/CI. Both lockfiles removed.
+- **`packages/docs` remaining 22 findings — mostly resolved.** Bumped all
+  four `@docusaurus/*` packages together to `3.10.2` (from `3.6.3`),
+  verified with a real `docusaurus build`, and fixed a config deprecation
+  warning (`onBrokenMarkdownLinks` → `markdown.hooks.onBrokenMarkdownLinks`)
+  the bump surfaced. `npm audit fix` at the new version resolves down to 24
+  (6 moderate, 18 high) — `serialize-javascript`/`uuid`/`sockjs`/
+  `webpack-dev-server` transitively via `@docusaurus/bundler`'s webpack
+  tooling, with **no fix available** even at Docusaurus's current latest
+  release (confirmed via `npm audit`'s own output). These are build/dev-time
+  tooling dependencies, not shipped in the static site users receive; there
+  is nothing further to do here until Docusaurus itself updates that
+  dependency chain upstream.
+- Remaining items (`ToolClass`/transport layering, `src/importance/` fork
+  consolidation, `commander`/`better-sqlite3` majors) — see updates further
+  below as each is addressed.
 
 ## Dependency Upgrade Summary
 
