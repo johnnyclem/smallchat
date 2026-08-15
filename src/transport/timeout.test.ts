@@ -37,6 +37,14 @@ describe('Feature: Timeout Management', () => {
     });
   });
 
+  describe('Scenario: Operation ignores the provided signal entirely', () => {
+    it('Given an operation that never resolves and never checks the signal, When the timeout elapses, Then withTimeout still rejects with TransportTimeoutError instead of hanging forever', async () => {
+      await expect(
+        withTimeout(() => new Promise(() => {}), 10),
+      ).rejects.toThrow(TransportTimeoutError);
+    });
+  });
+
   describe('Scenario: Operation uses the provided signal', () => {
     it('Given an operation that checks the signal, When withTimeout is called, Then the signal is passed through', async () => {
       let receivedSignal: AbortSignal | undefined;

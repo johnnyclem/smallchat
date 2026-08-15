@@ -34,13 +34,25 @@ export async function withTimeout<T>(
     }
   }
 
-  const timer = setTimeout(() => {
-    controller.abort(new TransportTimeoutError(timeoutMs));
-  }, timeoutMs);
+  let timer: ReturnType<typeof setTimeout>;
+  // Racing against a timer (rather than only calling controller.abort() and
+  // awaiting `fn(signal)` directly) matters because not every `fn` actually
+  // observes the AbortSignal it's handed — a handler that never checks
+  // `signal.aborted` and never rejects would otherwise leave the caller
+  // awaiting forever past `timeoutMs`. Racing guarantees this function
+  // settles on time regardless of whether `fn` cooperates; the abandoned
+  // `fn(signal)` promise keeps running in the background (JS has no true
+  // cancellation), but callers stop waiting on it.
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      const timeoutError = new TransportTimeoutError(timeoutMs);
+      controller.abort(timeoutError);
+      reject(timeoutError);
+    }, timeoutMs);
+  });
 
   try {
-    const result = await fn(signal);
-    return result;
+    return await Promise.race([fn(signal), timeoutPromise]);
   } catch (err) {
     if (err instanceof DOMException && err.name === 'AbortError') {
       // Check if it was our timeout or an external abort
@@ -50,7 +62,7 @@ export async function withTimeout<T>(
     }
     throw err;
   } finally {
-    clearTimeout(timer);
+    clearTimeout(timer!);
   }
 }
 

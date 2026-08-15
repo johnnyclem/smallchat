@@ -230,14 +230,26 @@ export interface LocalTransportConfig {
   /** Map of tool name → handler function */
   handlers?: Map<string, LocalHandler>;
 
-  /** Enable sandboxing for untrusted code */
+  /**
+   * Enforce an execution timeout and error isolation around each handler
+   * call. This is NOT a security sandbox for untrusted code — see
+   * SandboxConfig below.
+   */
   sandbox?: SandboxConfig;
 }
 
 export type LocalHandler = (args: Record<string, unknown>) => Promise<ToolResult>;
 
 export interface SandboxConfig {
-  /** Enable sandbox isolation */
+  /**
+   * Enable timeout enforcement and error isolation around handler calls.
+   *
+   * Despite the name, this does NOT isolate the capabilities of the
+   * handler function itself — `LocalHandler`s are plain JS closures that
+   * keep full access to require/process/fs/network regardless of this
+   * setting. Do not register untrusted code as a handler expecting this
+   * to contain it; use a separate process or worker_threads for that.
+   */
   enabled: boolean;
   /** Execution timeout in ms (default: 5000) */
   timeoutMs?: number;

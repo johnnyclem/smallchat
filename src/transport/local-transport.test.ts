@@ -156,4 +156,53 @@ describe('Feature: Local Function Transport', () => {
       expect(output.metadata?.durationMs).toBeGreaterThanOrEqual(40);
     });
   });
+
+  describe('Scenario: sandbox.enabled provides timeout + error isolation only', () => {
+    it('Given sandbox enabled with a handler that runs fine, When execute is called, Then the real result is returned', async () => {
+      const sandboxed = new LocalTransport({ sandbox: { enabled: true } });
+      sandboxed.registerHandler('ok', async (args) => ({ content: `got ${args.n}` }));
+
+      const output = await sandboxed.execute({ toolName: 'ok', args: { n: 42 } });
+
+      expect(output.isError).toBe(false);
+      expect(output.content).toBe('got 42');
+    });
+
+    it('Given sandbox enabled with a handler that hangs, When execute is called, Then it is killed by the timeout', async () => {
+      const sandboxed = new LocalTransport({ sandbox: { enabled: true, timeoutMs: 50 } });
+      sandboxed.registerHandler('hang', () => new Promise(() => {})); // never resolves
+
+      const output = await sandboxed.execute({ toolName: 'hang', args: {} });
+
+      expect(output.isError).toBe(true);
+    });
+
+    it('Given sandbox enabled, When a handler throws, Then the error is caught rather than crashing the caller', async () => {
+      const sandboxed = new LocalTransport({ sandbox: { enabled: true } });
+      sandboxed.registerHandler('boom', async () => {
+        throw new Error('sandboxed handler exploded');
+      });
+
+      const output = await sandboxed.execute({ toolName: 'boom', args: {} });
+
+      expect(output.isError).toBe(true);
+      expect(output.metadata?.error).toContain('sandboxed handler exploded');
+    });
+
+    it('Given sandbox enabled, When a handler closes over process/require, Then it still has full access (documents the non-isolation, not a desired property)', async () => {
+      // This is a regression guard on the DOCUMENTATION, not a feature test:
+      // sandbox.enabled only bounds execution time and isolates errors. It
+      // must never silently start actually isolating handler capabilities
+      // in a way that makes this assertion flip without the JSDoc/comments
+      // in local-transport.ts and types.ts being updated to match.
+      const sandboxed = new LocalTransport({ sandbox: { enabled: true } });
+      sandboxed.registerHandler('reads-env', async () => ({
+        content: typeof process !== 'undefined' && typeof process.env === 'object',
+      }));
+
+      const output = await sandboxed.execute({ toolName: 'reads-env', args: {} });
+
+      expect(output.content).toBe(true);
+    });
+  });
 });

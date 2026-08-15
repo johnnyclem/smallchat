@@ -20,6 +20,7 @@ import { errorToOutput, SandboxError } from './errors.js';
 import { withTimeout } from './timeout.js';
 
 let localTransportCounter = 0;
+let hasWarnedAboutSandboxScope = false;
 
 export class LocalTransport implements ITransport {
   readonly id: string;
@@ -108,21 +109,39 @@ export class LocalTransport implements ITransport {
   // ---------------------------------------------------------------------------
 
   /**
-   * Execute a handler in a sandboxed context using Node.js vm module.
+   * Run a handler through a `node:vm` context with an enforced timeout.
    *
-   * Phase 1 sandbox provides:
-   *   - Execution timeout enforcement
-   *   - Restricted global scope (no require, no process, no fs)
-   *   - Error isolation
-   *
-   * For production use with untrusted code, consider isolated-vm or
-   * a separate worker_threads implementation.
+   * IMPORTANT — this does NOT isolate the handler's own code. `handler` is
+   * a plain JS function reference registered via `registerHandler()`; it
+   * keeps the full closure/module scope (require, process, fs, network,
+   * etc.) it was defined with regardless of which vm context later calls
+   * it. `vm.createContext` only sandboxes code compiled fresh inside that
+   * context (the tiny wrapper script below) — it cannot retroactively
+   * strip capabilities from a function object that already closed over
+   * the outer scope. So `sandbox.enabled` gives you:
+   *   - Execution timeout enforcement (via `vm.Script`'s `timeout` option)
+   *   - Error isolation (a throwing handler can't crash the caller)
+   * ...and nothing more. It is NOT a security boundary for handlers you
+   * don't trust — do not register untrusted code as a `LocalHandler` and
+   * rely on this to contain it. For untrusted code, use a separate
+   * process/worker_threads with OS-level isolation, or isolated-vm.
    */
   private async executeSandboxed(
     handler: LocalHandler,
     args: Record<string, unknown>,
     timeoutMs: number,
   ): Promise<TransportOutput> {
+    if (!hasWarnedAboutSandboxScope) {
+      hasWarnedAboutSandboxScope = true;
+      console.warn(
+        '[smallchat] LocalTransport sandbox.enabled only enforces an execution ' +
+        'timeout and isolates errors — it does NOT restrict the capabilities of ' +
+        'the registered handler function itself (require/process/fs remain ' +
+        'reachable via its closure). Do not treat this as a security boundary ' +
+        'for untrusted handler code.',
+      );
+    }
+
     try {
       // Use dynamic import so vm is only loaded when sandboxing is enabled
       const vm = await import('node:vm');
@@ -171,7 +190,24 @@ export class LocalTransport implements ITransport {
         timeout: timeoutMs,
       }) as Promise<void>;
 
-      await promise;
+      // vm's own `timeout` option only bounds *synchronous* execution
+      // inside the script; the wrapper below returns its promise almost
+      // immediately (the synchronous part is just kicking off the async
+      // IIFE), so a handler that awaits something that never resolves
+      // would otherwise hang past timeoutMs undetected. Race it too, the
+      // same way the non-sandboxed path does via withTimeout().
+      let timer: ReturnType<typeof setTimeout>;
+      const timeoutGuard = new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`Script execution timed out after ${timeoutMs}ms`)),
+          timeoutMs,
+        );
+      });
+      try {
+        await Promise.race([promise, timeoutGuard]);
+      } finally {
+        clearTimeout(timer!);
+      }
 
       const result = sandbox.__result__ as { content: unknown; isError?: boolean; metadata?: Record<string, unknown> } | undefined;
 
