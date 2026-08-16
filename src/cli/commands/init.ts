@@ -279,7 +279,7 @@ function generatePackageJson(name: string, template: string): object {
       '@types/node': '^22.0.0',
     },
     engines: {
-      node: '>=20.0.0',
+      node: '>=22.0.0',
     },
   };
 

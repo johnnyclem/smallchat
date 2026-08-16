@@ -27,7 +27,7 @@
     "@docusaurus/types": "3.10.2"
   },
   "engines": {
-    "node": ">=20.0"
+    "node": ">=22.0.0"
   },
   "browserslist": {
     "production": [">0.5%", "not dead", "not op_mini all"],

@@ -79,7 +79,7 @@ npm run build
 npm install @smallchat/core
 ```
 
-Requires Node.js >= 20.
+Requires Node.js >= 22.
 
 > **Swift:** the Swift implementation lives in its own repository — [github.com/johnnyclem/smallchat-swift](https://github.com/johnnyclem/smallchat-swift).
 

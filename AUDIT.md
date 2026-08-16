@@ -89,7 +89,8 @@ specific reason rather than oversight:
   still on Node 20, and one this audit isn't positioned to decide on the
   maintainer's behalf. The CI workflow added in this pass tests both Node 20
   and 22, so whenever that floor decision is made, CI will immediately
-  surface any fallout.
+  surface any fallout. **Update: maintainer chose to raise the floor, see
+  [Follow-up](#follow-up-deferred-items-addressed-second-pass).**
 - **`packages/docs`'s remaining 22 `npm audit` findings.** All require
   forcing `@docusaurus/preset-classic` to `3.10.2` while `@docusaurus/core`
   stays pinned at `3.6.3` (a mismatched, out-of-range pair) — not safe to
@@ -177,8 +178,30 @@ were revisited in a follow-up pass after the first PR merged:
   importance duplicate just made the gap visible, it didn't create it).
   Added an explicit `npm test --workspace=shorthand` step to CI's `test`
   job to close it.
-- Remaining item (`commander`/`better-sqlite3` majors) — see the update
-  further below.
+- **`commander`/`better-sqlite3` major bumps (#14) — resolved, with an
+  explicit maintainer decision on the Node floor.** Asked directly rather
+  than deciding unilaterally: raise `engines.node` to `>=22.0.0`, or hold at
+  `>=20.0.0` and skip the bumps. Maintainer chose to raise the floor.
+  Bumped `commander` (`^13.0.0` → `^15.0.0`), `better-sqlite3` (`^11.0.0` →
+  `^13.0.3`), and `@types/better-sqlite3` (`^7.6.12` → `^9.6.0`) in root
+  `package.json`; `better-sqlite3` and `vitest` (`^3.0.0` → `^3.2.7`, the
+  latter previously inconsistent — see the earlier dependency-CVE pass) in
+  `shorthand/package.json` too, so the whole workspace resolves to a single
+  deduped copy of each instead of two divergent ones. `engines.node` raised
+  to `>=22.0.0` everywhere it was declared (root, `shorthand/`,
+  `packages/examples/`, `packages/docs/`), and in the `package.json`
+  template `smallchat init` scaffolds for new projects (which depend on
+  `@smallchat/core` and would otherwise inherit a floor that's already
+  wrong). CI's `test` matrix dropped Node 20 in favor of `['22', '24']`;
+  the `audit` and `docs` jobs' single Node version moved from `'20'` to
+  `'22'`. `README.md`'s "Requires Node.js >= 20" updated to `>= 22`.
+
+  Verified beyond typecheck/tests: built and ran the actual CLI
+  (`smallchat --help`, `smallchat doctor`) against the new
+  `better-sqlite3@13`/`commander@15` — help text renders correctly and
+  `doctor` confirms `better-sqlite3 + sqlite-vec: working`, since a
+  `better-sqlite3` major bump is exactly the kind of change a type-check
+  alone wouldn't catch a native-binding or CLI-formatting regression in.
 
 ## Dependency Upgrade Summary
 
@@ -215,8 +238,10 @@ were revisited in a follow-up pass after the first PR merged:
 
 Roughly in priority order:
 
-1. **Decide the Node floor**, then take the `commander`/`better-sqlite3`
-   major bumps (both are otherwise routine).
+1. ~~Decide the Node floor, then take the `commander`/`better-sqlite3`
+   major bumps~~ — done, see
+   [Follow-up](#follow-up-deferred-items-addressed-second-pass). Floor is
+   now Node >=22.
 2. ~~Scope a `ToolProxy` transport-abstraction refactor~~ — done, see
    [Follow-up](#follow-up-deferred-items-addressed-second-pass).
 3. **Test coverage:** `src/app/` (MCP Apps compile/runtime pipeline, ~1,160

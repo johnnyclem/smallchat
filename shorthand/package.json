@@ -63,14 +63,14 @@
     "@types/better-sqlite3": "^7.6.12",
     "@types/node": "^22.0.0",
     "typescript": "^5.7.0",
-    "vitest": "^3.0.0"
+    "vitest": "^3.2.7"
   },
   "dependencies": {
-    "better-sqlite3": "^11.0.0",
+    "better-sqlite3": "^13.0.3",
     "onnxruntime-node": "^1.20.0",
     "sqlite-vec": "^0.1.7"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.0.0"
   }
 }
