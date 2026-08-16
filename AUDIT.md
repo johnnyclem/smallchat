@@ -70,8 +70,12 @@ rationale (see [Deferred / Not Fixed](#deferred--not-fixed-and-why)).
 
 ## Deferred / Not Fixed (and why)
 
-A few real findings were deliberately **not** acted on in this pass, each for a
-specific reason rather than oversight:
+A few real findings were deliberately **not** acted on in the first pass,
+each for a specific reason rather than oversight. All five were revisited
+in a follow-up pass and are now resolved — see
+[Follow-up](#follow-up-deferred-items-addressed-second-pass) — but the
+original reasoning for deferring each is kept below since it's still the
+right record of *why* they weren't folded into the first PR:
 
 - **`ToolClass`/`ToolProxy` importing MCP transport code (#13).** This is a
   genuine layering violation — the "durable, transport-agnostic" Tier-1
@@ -81,31 +85,127 @@ specific reason rather than oversight:
   directly, which is a real (if not huge) refactor touching a load-bearing
   class. Per this audit's brief to prefer small, reviewable, non-speculative
   changes, this is better done as its own scoped PR with its own review,
-  not folded into a security-audit branch.
+  not folded into a security-audit branch. **Update: done, see
+  [Follow-up](#follow-up-deferred-items-addressed-second-pass).**
 - **`commander`/`better-sqlite3` major bumps (#14).** Both now require
   Node ≥22, which would silently raise this project's declared
   `engines.node: >=20.0.0` floor — a real breaking change for any consumer
   still on Node 20, and one this audit isn't positioned to decide on the
   maintainer's behalf. The CI workflow added in this pass tests both Node 20
   and 22, so whenever that floor decision is made, CI will immediately
-  surface any fallout.
+  surface any fallout. **Update: maintainer chose to raise the floor, see
+  [Follow-up](#follow-up-deferred-items-addressed-second-pass).**
 - **`packages/docs`'s remaining 22 `npm audit` findings.** All require
   forcing `@docusaurus/preset-classic` to `3.10.2` while `@docusaurus/core`
   stays pinned at `3.6.3` (a mismatched, out-of-range pair) — not safe to
   take piecemeal. Needs a coordinated bump of all four `@docusaurus/*`
   packages together, verified with a real `docusaurus build`, as its own
-  change.
+  change. **Update: done, see [Follow-up](#follow-up-deferred-items-addressed-second-pass).**
 - **Stray nested lockfiles in `shorthand/` and `packages/examples/` (#15).**
   Both were touched as recently as the "adopt workspaces" commit, meaning
   someone deliberately kept them post-migration — plausibly because
   `shorthand` is also published standalone as `@shorthand/core` outside this
   monorepo and needs its own lockfile for that independent pipeline. Removing
   them without confirming that intent risked breaking a workflow this audit
-  can't see from the repo alone.
+  can't see from the repo alone. **Update: investigated and resolved, see
+  [Follow-up](#follow-up-deferred-items-addressed-second-pass).**
 - **`src/importance/` vs `shorthand/src/importance/` fork (#21).** Already
   identified and scoped in `docs/ecosystem/engineering-guide.md` as a
   "Phase 0" item with its own analysis. Redoing that analysis here would
-  duplicate, not add to, existing tracked work.
+  duplicate, not add to, existing tracked work. **Update: done, see
+  [Follow-up](#follow-up-deferred-items-addressed-second-pass).**
+
+## Follow-up: Deferred Items Addressed (second pass)
+
+The five items in [Deferred / Not Fixed](#deferred--not-fixed-and-why) above
+were revisited in a follow-up pass after the first PR merged:
+
+- **Stray nested lockfiles (#15) — resolved.** Investigated both open
+  questions directly: `@shorthand/core` is not published to npm at all
+  (registry 404), and `@smallchat/examples`, while published, doesn't need a
+  lockfile for that (publishing doesn't consume one). More importantly,
+  `npm install` run inside either directory doesn't update its local
+  lockfile — npm defers to the workspace root — so neither file was being
+  maintained by any normal workflow. This had already caused real drift:
+  `shorthand/package-lock.json` still resolved `vitest@3.2.4`, the exact
+  version with the critical CVE fixed at the root in the first pass,
+  invisible to root-level `npm audit`/CI. Both lockfiles removed.
+- **`packages/docs` remaining 22 findings — mostly resolved.** Bumped all
+  four `@docusaurus/*` packages together to `3.10.2` (from `3.6.3`),
+  verified with a real `docusaurus build`, and fixed a config deprecation
+  warning (`onBrokenMarkdownLinks` → `markdown.hooks.onBrokenMarkdownLinks`)
+  the bump surfaced. `npm audit fix` at the new version resolves down to 24
+  (6 moderate, 18 high) — `serialize-javascript`/`uuid`/`sockjs`/
+  `webpack-dev-server` transitively via `@docusaurus/bundler`'s webpack
+  tooling, with **no fix available** even at Docusaurus's current latest
+  release (confirmed via `npm audit`'s own output). These are build/dev-time
+  tooling dependencies, not shipped in the static site users receive; there
+  is nothing further to do here until Docusaurus itself updates that
+  dependency chain upstream.
+- **`ToolClass`/`ToolProxy` transport layering (#13) — resolved.** Added a
+  `ToolTransport` interface (plus `ToolTransportConnectionOptions` and a
+  `ToolTransportFactory` type) to `src/core/types.ts`, purely structural —
+  zero runtime import. `ToolProxy` no longer imports `MCPTransport`/
+  `getTransport` from `mcp/transport.ts` at all; its constructor now takes
+  an optional `transportFactory` and returns a clear "no transport
+  configured" error result (instead of silently reaching into a concrete
+  implementation) when none was injected. The two call sites that construct
+  `ToolProxy` — `compiler.ts`'s `createIMP` and `mcp/artifact.ts`'s
+  `hydrateRuntime` — now explicitly pass `getTransport` from
+  `mcp/transport.ts`, preserving identical existing behavior. Verified the
+  fix is real (not just moved) by grepping the built `dist/inference.js`,
+  `dist/core/*.js`, and `dist/runtime/*.js` for any reference to
+  `mcp/transport` — none — and added `src/inference.test.ts`, a source-scan
+  regression test that fails if any core/runtime file statically imports
+  `mcp/transport.ts` again.
+- **`src/importance/` vs `shorthand/src/importance/` fork (#21) —
+  resolved.** `diff -rq` on the two directories showed every file byte-
+  identical except `types.ts`: the local copy defined its own narrower
+  `ConversationMessage` interface instead of importing the canonical one
+  (with a `'tool'` role option, `timestamp: string | number`, and
+  `normalizeTimestamp`) that `shorthand/src/importance/types.ts` already
+  imports from `@shorthand/core`'s shared types. Also confirmed
+  `src/compaction/` and `src/crdt/` — the two satellites PR #58 actually
+  finished extracting — have no local directory at all; `src/importance/`
+  was the one left as a stale duplicate. Replaced it with a thin re-export
+  of `@shorthand/core/importance` (same pattern `src/index.ts` already uses
+  for compaction/CRDT), deleting the five duplicated implementation files
+  and their tests. The `@smallchat/core/importance` public subpath is
+  unchanged — same exported names, same behavior — so this is non-breaking
+  for anyone consuming it.
+
+  While making this change, found that root CI (added earlier in this
+  audit) never actually ran `shorthand/`'s own test suite — root
+  `vitest.config.ts` only globs the root `src/`, and nothing wired
+  `shorthand`'s ~260 specs (compaction, CRDT, importance) into `npm test`
+  or CI. This had been true even before this change (deleting the local
+  importance duplicate just made the gap visible, it didn't create it).
+  Added an explicit `npm test --workspace=shorthand` step to CI's `test`
+  job to close it.
+- **`commander`/`better-sqlite3` major bumps (#14) — resolved, with an
+  explicit maintainer decision on the Node floor.** Asked directly rather
+  than deciding unilaterally: raise `engines.node` to `>=22.0.0`, or hold at
+  `>=20.0.0` and skip the bumps. Maintainer chose to raise the floor.
+  Bumped `commander` (`^13.0.0` → `^15.0.0`), `better-sqlite3` (`^11.0.0` →
+  `^13.0.3`), and `@types/better-sqlite3` (`^7.6.12` → `^9.6.0`) in root
+  `package.json`; `better-sqlite3` and `vitest` (`^3.0.0` → `^3.2.7`, the
+  latter previously inconsistent — see the earlier dependency-CVE pass) in
+  `shorthand/package.json` too, so the whole workspace resolves to a single
+  deduped copy of each instead of two divergent ones. `engines.node` raised
+  to `>=22.0.0` everywhere it was declared (root, `shorthand/`,
+  `packages/examples/`, `packages/docs/`), and in the `package.json`
+  template `smallchat init` scaffolds for new projects (which depend on
+  `@smallchat/core` and would otherwise inherit a floor that's already
+  wrong). CI's `test` matrix dropped Node 20 in favor of `['22', '24']`;
+  the `audit` and `docs` jobs' single Node version moved from `'20'` to
+  `'22'`. `README.md`'s "Requires Node.js >= 20" updated to `>= 22`.
+
+  Verified beyond typecheck/tests: built and ran the actual CLI
+  (`smallchat --help`, `smallchat doctor`) against the new
+  `better-sqlite3@13`/`commander@15` — help text renders correctly and
+  `doctor` confirms `better-sqlite3 + sqlite-vec: working`, since a
+  `better-sqlite3` major bump is exactly the kind of change a type-check
+  alone wouldn't catch a native-binding or CLI-formatting regression in.
 
 ## Dependency Upgrade Summary
 
@@ -142,20 +242,21 @@ specific reason rather than oversight:
 
 Roughly in priority order:
 
-1. **Decide the Node floor**, then take the `commander`/`better-sqlite3`
-   major bumps (both are otherwise routine).
-2. **Scope a `ToolProxy` transport-abstraction refactor** to fix the
-   Tier-1/Tier-2 layering violation (#13) as its own PR.
+1. ~~Decide the Node floor, then take the `commander`/`better-sqlite3`
+   major bumps~~ — done, see
+   [Follow-up](#follow-up-deferred-items-addressed-second-pass). Floor is
+   now Node >=22.
+2. ~~Scope a `ToolProxy` transport-abstraction refactor~~ — done, see
+   [Follow-up](#follow-up-deferred-items-addressed-second-pass).
 3. **Test coverage:** `src/app/` (MCP Apps compile/runtime pipeline, ~1,160
    lines) still has no tests; `src/memex/resolver.ts`'s primary `resolve()`
    function is untested (only its `computeTier()` helper is); `LocalEmbedder`
    (the placeholder hash-based embedder referenced in QUICKSTART.md) has no
    tests.
-4. **Consolidate `src/importance/` with `@shorthand/core/importance`**
-   per `docs/ecosystem/engineering-guide.md`'s existing analysis.
-5. **Un-nest the stray lockfiles** in `shorthand/` and `packages/examples/`
-   once their independent-publish requirements (if any) are confirmed, or
-   document why they're intentionally separate.
+4. ~~Consolidate `src/importance/` with `@shorthand/core/importance`~~ —
+   done, see [Follow-up](#follow-up-deferred-items-addressed-second-pass).
+5. ~~Un-nest the stray lockfiles~~ — done, see
+   [Follow-up](#follow-up-deferred-items-addressed-second-pass).
 6. **Consider Git LFS** for the committed ONNX model files, or at minimum
    document the convention in ARCHITECTURE.md/README.md.
 7. **Prune stale entries** from the rate limiter's and connection pool's

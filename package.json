@@ -91,7 +91,7 @@
   "author": "Johnny Clem",
   "license": "MIT",
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.12",
+    "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^22.0.0",
     "typescript": "^5.7.0",
     "vitest": "^3.2.7"
@@ -99,12 +99,12 @@
   "dependencies": {
     "@modelcontextprotocol/ext-apps": "^1.7.1",
     "@shorthand/core": "file:./shorthand",
-    "better-sqlite3": "^11.0.0",
-    "commander": "^13.0.0",
+    "better-sqlite3": "^13.0.3",
+    "commander": "^15.0.0",
     "onnxruntime-node": "^1.20.0",
     "sqlite-vec": "^0.1.7"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.0.0"
   }
 }

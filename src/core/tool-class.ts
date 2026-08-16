@@ -1,8 +1,7 @@
-import type { ToolIMP, ToolMethod, ToolProtocol, ToolSchema, ToolSelector, ToolResult, TransportType, ArgumentConstraints, ValidationResult, InferenceDelta } from './types.js';
+import type { ToolIMP, ToolMethod, ToolProtocol, ToolSchema, ToolSelector, ToolResult, TransportType, ArgumentConstraints, ValidationResult, InferenceDelta, ToolTransport, ToolTransportFactory } from './types.js';
 import { OverloadTable } from './overload-table.js';
 import type { OverloadResolutionResult } from './overload-table.js';
 import type { SCMethodSignature } from './sc-types.js';
-import { MCPTransport, getTransport, type TransportOptions } from '../mcp/transport.js';
 
 /**
  * ToolClass — a group of related tools from one provider.
@@ -209,7 +208,8 @@ export class ToolProxy implements ToolIMP {
   headers?: Record<string, string>;
 
   private realized = false;
-  private transport: MCPTransport | null = null;
+  private transport: ToolTransport | null = null;
+  private readonly transportFactory?: ToolTransportFactory;
 
   constructor(
     providerId: string,
@@ -218,6 +218,7 @@ export class ToolProxy implements ToolIMP {
     schemaLoader: () => Promise<ToolSchema>,
     constraints?: ArgumentConstraints,
     transportOptions?: { endpoint?: string; headers?: Record<string, string> },
+    transportFactory?: ToolTransportFactory,
   ) {
     this.providerId = providerId;
     this.toolName = toolName;
@@ -226,6 +227,7 @@ export class ToolProxy implements ToolIMP {
     this.constraints = constraints ?? createPassthroughConstraints();
     this.endpoint = transportOptions?.endpoint;
     this.headers = transportOptions?.headers;
+    this.transportFactory = transportFactory;
   }
 
   /** Load full schema on first use */
@@ -235,16 +237,37 @@ export class ToolProxy implements ToolIMP {
     this.realized = true;
   }
 
-  /** Get or create the transport instance */
-  private getTransport(): MCPTransport {
+  /**
+   * Get or create the transport instance via the injected factory.
+   *
+   * ToolProxy deliberately does not know how to construct a concrete
+   * transport itself — that would couple the durable inference core to a
+   * specific wire protocol (see the ToolTransport doc comment in
+   * core/types.ts). Callers that need working execution (the compiler, the
+   * MCP artifact loader) pass a transportFactory when constructing the
+   * proxy; one that doesn't gets a clear error result instead of silently
+   * reaching into a hardcoded implementation.
+   */
+  private getTransport(): ToolTransport | null {
+    if (!this.transportFactory) return null;
     if (!this.transport) {
-      this.transport = getTransport(this.providerId, {
+      this.transport = this.transportFactory(this.providerId, {
         transportType: this.transportType,
         endpoint: this.endpoint,
         headers: this.headers,
       });
     }
     return this.transport;
+  }
+
+  private noTransportError(): ToolResult {
+    return {
+      content: null,
+      isError: true,
+      metadata: {
+        error: `ToolProxy for "${this.providerId}.${this.toolName}" has no transport configured — pass a transportFactory to its constructor.`,
+      },
+    };
   }
 
   async execute(args: Record<string, unknown>): Promise<ToolResult> {
@@ -259,8 +282,8 @@ export class ToolProxy implements ToolIMP {
       };
     }
 
-    // Route through the real MCP transport engine
     const transport = this.getTransport();
+    if (!transport) return this.noTransportError();
     return transport.execute(this.toolName, args);
   }
 
@@ -282,6 +305,10 @@ export class ToolProxy implements ToolIMP {
     }
 
     const transport = this.getTransport();
+    if (!transport) {
+      yield this.noTransportError();
+      return;
+    }
     yield* transport.executeStream(this.toolName, args);
   }
 
@@ -296,6 +323,7 @@ export class ToolProxy implements ToolIMP {
     if (!validation.valid) return;
 
     const transport = this.getTransport();
+    if (!transport) return;
     yield* transport.executeInference(this.toolName, args);
   }
 }
