@@ -70,8 +70,12 @@ rationale (see [Deferred / Not Fixed](#deferred--not-fixed-and-why)).
 
 ## Deferred / Not Fixed (and why)
 
-A few real findings were deliberately **not** acted on in this pass, each for a
-specific reason rather than oversight:
+A few real findings were deliberately **not** acted on in the first pass,
+each for a specific reason rather than oversight. All five were revisited
+in a follow-up pass and are now resolved — see
+[Follow-up](#follow-up-deferred-items-addressed-second-pass) — but the
+original reasoning for deferring each is kept below since it's still the
+right record of *why* they weren't folded into the first PR:
 
 - **`ToolClass`/`ToolProxy` importing MCP transport code (#13).** This is a
   genuine layering violation — the "durable, transport-agnostic" Tier-1
