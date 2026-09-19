@@ -370,6 +370,48 @@ export type {
 // VerificationResult name collides with core/types — export under alias
 export type { VerificationResult as CompactionVerificationResult } from '@shorthand/core/compaction';
 
+// [satellite] Truth ledger interop — stenographer TB/UV v2 JSONL seam,
+// re-exported from @shorthand/core
+export {
+  CONSUMPTION_RULES,
+  isAnonymousIdentity,
+  assertAccountableAuthor,
+  ulid,
+  wikiLineToEntry,
+  entryToWikiLine,
+  parseWikiLines,
+  serializeWikiEntries,
+  readWikiFile,
+  writeWikiFile,
+  classifyEntry,
+  selectCurrentTruth,
+  renderTruthSection,
+  applyTruthToCompactedState,
+  TruthAwareCompactor,
+  truthToInvariantRecords,
+  proposeInvariants,
+  serializeProposals,
+  appendProposalsFile,
+} from '@shorthand/core/truth';
+export type {
+  TruthConfidence,
+  TbStatus,
+  UvStatus,
+  TruthEvidence,
+  TruthVerifyBy,
+  WikiEntryLine,
+  TruthTbEntry,
+  TruthUvEntry,
+  TruthLedgerEntry,
+  ConsumptionAction,
+  TruthSelection,
+  CompactedTruth,
+  InvariantProposalLine,
+  WikiParseResult,
+  TruthInvariantRecord,
+  ProposeInvariantsOptions,
+} from '@shorthand/core/truth';
+
 // Transport Layer — ITransport interface and implementations
 export type {
   ITransport,

@@ -12,6 +12,9 @@ export { normalizeTimestamp } from './types.js';
 // Compaction
 export * from './compaction/index.js';
 
+// Truth ledger interop (stenographer TB/UV v2 — JSONL seam)
+export * from './truth/index.js';
+
 // CRDTs
 export * from './crdt/index.js';
 

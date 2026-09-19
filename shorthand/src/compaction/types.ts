@@ -17,6 +17,7 @@
 // ---------------------------------------------------------------------------
 
 import type { ConversationMessage } from '../types.js';
+import type { CompactedTruth } from '../truth/types.js';
 export type { ConversationMessage } from '../types.js';
 export { normalizeTimestamp } from '../types.js';
 
@@ -121,6 +122,12 @@ export interface CompactedState {
   originalTokenCount: number;
   /** Provenance: which message IDs contributed to this compacted state. */
   sourceMessageIds: string[];
+  /**
+   * Asserted truth carried through compaction (truth-ledger interop).
+   * Rebuilt from the current ledger selection on every round — see
+   * `applyTruthToCompactedState` in the truth module.
+   */
+  truth?: CompactedTruth;
 }
 
 // ---------------------------------------------------------------------------

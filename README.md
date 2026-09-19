@@ -141,6 +141,7 @@ for await (const token of runtime.inferenceStream('find flights', { to: 'NYC' })
 
 **Unreleased on `main`** (ahead of the last tagged release, 0.5.0):
 
+- **Truth-ledger interop (`@shorthand/core/truth`)** — the vendored Short-Hand package now reads Stenographer's TB/UV v2 asserted-truth ledger at the JSONL seam: signed tombstones (`TB`) compact as ground truth, unverified assertions (`UV`) carry a visible `UNVERIFIED` marker through every compaction level, contested entries keep both sides of the dispute, and overridden/refuted history is displaced on sync. Compaction can emit its candidate invariants back as machine-drafted `PROPOSAL` lines — never as signed truth, and never anonymously. Re-exported from `@smallchat/core` (`TruthAwareCompactor`, `parseWikiLines`, `selectCurrentTruth`, `proposeInvariants`, …).
 - **Semantic map** — when the user resolves a refinement, that choice is learned: the exact intent resolves instantly next time, and *similar* intents get a confidence boost toward the same tool. Defer once, remember forever.
 - **Selector-table pollution fix** — resolved intents no longer leak into the tool list or shadow real tools in "did you mean?" suggestions; intent entries are now LRU-bounded instead of retained forever.
 - **`requireLLMForSubHighDispatch` guard** — opt-in flag to stop MEDIUM/LOW-confidence dispatches from auto-firing a tool when no `LLMClient` is configured.
