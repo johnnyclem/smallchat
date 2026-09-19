@@ -15,6 +15,10 @@
       "types": "./dist/compaction/index.d.ts",
       "import": "./dist/compaction/index.js"
     },
+    "./truth": {
+      "types": "./dist/truth/index.d.ts",
+      "import": "./dist/truth/index.js"
+    },
     "./crdt": {
       "types": "./dist/crdt/index.d.ts",
       "import": "./dist/crdt/index.js"
