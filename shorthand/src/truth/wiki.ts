@@ -18,6 +18,7 @@ import type {
   TruthLedgerEntry,
   TruthSelection,
   TruthTbEntry,
+  TruthTombstonedLiteral,
   TruthUvEntry,
   TruthVerifyBy,
   UvStatus,
@@ -29,6 +30,44 @@ import type {
 // ---------------------------------------------------------------------------
 
 const TB_STATUSES: readonly TbStatus[] = ['active', 'contested', 'overridden'];
+
+function isDistinctiveIdentifier(value: string): boolean {
+  return value.length >= 4 && /[A-Za-z]/.test(value);
+}
+
+/**
+ * Stenographer's write-time rule for a tombstoned literal
+ * (`TombstonedLiteralSchema`): every present field is a non-blank string,
+ * and a literal without a `subject` must be a distinctive identifier
+ * (≥4 chars, contains a letter) — a bare value like "30" can't be matched
+ * safely without naming what it's the value of. Returns the reason it's
+ * invalid, or null.
+ */
+export function literalValidationError(literal: unknown): string | null {
+  if (!literal || typeof literal !== 'object' || Array.isArray(literal)) return 'a literal must be an object';
+  const { dead, subject, current } = literal as Record<string, unknown>;
+  if (typeof dead !== 'string' || dead.trim().length === 0) return 'a literal needs a dead value';
+  if (subject !== undefined && (typeof subject !== 'string' || subject.trim().length === 0)) {
+    return "a literal's subject must be a non-blank string";
+  }
+  if (current !== undefined && (typeof current !== 'string' || current.trim().length === 0)) {
+    return "a literal's current value must be a non-blank string";
+  }
+  if (subject === undefined && !isDistinctiveIdentifier(dead.trim())) {
+    return 'a literal without a subject must be a distinctive identifier (≥4 chars, contains a letter) — name the subject of bare values';
+  }
+  return null;
+}
+
+/** Rejects the whole line when any literal is invalid, as stenographer's import does. */
+function validLiterals(literals: unknown[], id: string): TruthTombstonedLiteral[] {
+  for (const literal of literals) {
+    const reason = literalValidationError(literal);
+    if (reason) throw new Error(`entry ${id}: invalid literals — ${reason}`);
+  }
+  // Keep the wiki's objects as-is so the round trip stays byte-stable
+  return literals as TruthTombstonedLiteral[];
+}
 const UV_STATUSES: readonly UvStatus[] = ['open', 'verified', 'refuted'];
 
 export function wikiLineToEntry(line: WikiEntryLine): TruthLedgerEntry {
@@ -50,6 +89,9 @@ export function wikiLineToEntry(line: WikiEntryLine): TruthLedgerEntry {
       signedBy: line.signedBy ?? null,
       status,
     };
+    if (Array.isArray(line.literals) && line.literals.length > 0) {
+      entry.literals = validLiterals(line.literals, line.id);
+    }
     if (line['x-steno'] !== undefined) entry.xSteno = line['x-steno'];
     return entry;
   }
@@ -90,6 +132,8 @@ export function entryToWikiLine(entry: TruthLedgerEntry): WikiEntryLine {
       claim: entry.claim,
       evidence: entry.evidence,
       signedBy: entry.signedBy,
+      // Only present when given, so literal-free TBs keep their exact shape
+      ...(entry.literals && entry.literals.length > 0 ? { literals: entry.literals } : {}),
       status: entry.status,
     };
     if (entry.xSteno !== undefined) line['x-steno'] = entry.xSteno;

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — Truth ledger keeps tombstoned literals
+- **`parseWikiLines` no longer drops a TB's `literals`.** These are the dead values (with an optional `subject` and `current`) that stenographer's real-time objections cite (§12). They now round-trip, typed as `TruthTombstonedLiteral`. Literal-free TBs keep their exact shape.
+- **Literals are validated against stenographer's write-time rule.** `literalValidationError` implements it: every present field is a non-blank string, and a literal without a `subject` must be a distinctive identifier (at least 4 characters, including a letter). A line with an invalid literal is rejected with a per-line error, as stenographer's import does, while the rest of the file still loads. 4 new tests.
+
 ### Added — Truth-ledger interop (`@shorthand/core/truth`)
 - **New `truth` module in the vendored Short-Hand package**, implementing the consumer side of Stenographer's TB/UV v2 asserted-truth ledger (stenographer PR #7) at the JSONL seam — Option B of the reserved convergence decision (§13 Q6): no code dependency on stenographer, a format-level contract only. `parseWikiLines`/`serializeWikiEntries` read and write the wiki's append-only JSONL losslessly (the namespaced `x-steno` key is preserved opaquely; the round-trip invariant `serialize(parse(lines)) == lines` is tested), later lines for the same id supersede earlier ones, and per-line parse errors never poison the rest of the file.
 - **§7 consumption rules enforced in code, not convention.** `classifyEntry`/`selectCurrentTruth` partition entries exactly as the ledger prescribes: active TBs are ground truth; contested TBs stay authoritative but carry their contesting UVs (the dispute is never resolved silently); open UVs are flagged, never blocking and never rendered as proven; overridden TBs and refuted/verified UVs are history — excluded from current truth and displaced from any cached compaction on the next sync. The `CONSUMPTION_RULES` text ships verbatim so downstream tools can embed it.

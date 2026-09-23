@@ -18,6 +18,7 @@ export type {
   WikiEntryLine,
   TruthTbEntry,
   TruthUvEntry,
+  TruthTombstonedLiteral,
   TruthLedgerEntry,
   ConsumptionAction,
   TruthSelection,
@@ -36,6 +37,7 @@ export type { WikiParseResult } from './wiki.js';
 export {
   wikiLineToEntry,
   entryToWikiLine,
+  literalValidationError,
   parseWikiLines,
   serializeWikiEntries,
   readWikiFile,
