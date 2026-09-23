@@ -39,6 +39,20 @@ export interface TruthEvidence {
   detail?: string;
 }
 
+/**
+ * A dead literal a tombstone declares (§12) — what a real-time objection can
+ * cite. `subject` names the identifier a bare value belongs to; `current` is
+ * the replacement, if any. Mirrors stenographer's `TombstonedLiteralSchema`.
+ */
+export interface TruthTombstonedLiteral {
+  /** The dead value or identifier, e.g. "30" or "legacyRateLimit". */
+  dead: string;
+  /** The identifier the value belongs to, e.g. "LOG_BUDGET". */
+  subject?: string;
+  /** What replaced it, if anything. */
+  current?: string;
+}
+
 /** Machine-actionable verification hint carried by every UV. */
 export interface TruthVerifyBy {
   kind: 'command' | 'inspect' | 'ask' | 'observe';
@@ -67,6 +81,8 @@ export interface WikiEntryLine {
   claim?: string;
   evidence?: unknown[];
   signedBy?: string | null;
+  /** Matchable dead literals (§12). Absent when the TB declares none. */
+  literals?: unknown[];
   // UV fields
   assertion?: string;
   basis?: string;
@@ -94,6 +110,8 @@ export interface TruthTbEntry {
   /** The asserting author (distinct from `author` when an agent drafted and a human signed). */
   signedBy: string | null;
   status: TbStatus;
+  /** Matchable dead literals (§12). Only present when the TB declares some. */
+  literals?: TruthTombstonedLiteral[];
   /** Opaque stenographer namespace, preserved for round-tripping. */
   xSteno?: Record<string, unknown>;
 }

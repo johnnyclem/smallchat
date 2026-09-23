@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   classifyEntry,
   entryToWikiLine,
+  literalValidationError,
   parseWikiLines,
   selectCurrentTruth,
   serializeWikiEntries,
@@ -159,5 +160,55 @@ describe('ulid', () => {
     expect(a).toHaveLength(26);
     expect(b).toHaveLength(26);
     expect(b > a).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tombstoned literals (§12) — what real-time objections cite
+// ---------------------------------------------------------------------------
+
+describe('tombstoned literals', () => {
+  const withLiterals: WikiEntryLine = {
+    ...tbLine,
+    id: '01JAAAAAAAAAAAAAAAAAAAAAA3',
+    literals: [
+      { subject: 'LOG_BUDGET', dead: '30', current: '100' },
+      { dead: 'legacyRateLimiter', current: 'TokenBucket' },
+    ],
+  };
+
+  it('round-trips literals losslessly', () => {
+    const { entries, errors } = parseWikiLines([JSON.stringify(withLiterals)]);
+    expect(errors).toEqual([]);
+    const tb = entries[0] as TruthTbEntry;
+    expect(tb.literals).toEqual(withLiterals.literals);
+    const [back] = serializeWikiEntries(entries);
+    expect(JSON.parse(back)).toEqual(withLiterals);
+  });
+
+  it('keeps literal-free TBs in their exact shape', () => {
+    const entry = wikiLineToEntry(tbLine) as TruthTbEntry;
+    expect(entry.literals).toBeUndefined();
+    expect('literals' in entryToWikiLine(entry)).toBe(false);
+  });
+
+  it('rejects a line whose literals cannot be matched, like stenographer', () => {
+    const bad = { ...withLiterals, id: 'BAD', literals: [{ dead: '30' }] };
+    const { entries, errors } = parseWikiLines([JSON.stringify(bad), JSON.stringify(tbLine)]);
+    expect(entries.map((e) => e.id)).toEqual([tbLine.id]);
+    expect(errors).toHaveLength(1);
+    expect(errors[0].error).toContain('entry BAD: invalid literals');
+  });
+
+  it('applies stenographer\'s write-time rule', () => {
+    expect(literalValidationError({ subject: 'LOG_BUDGET', dead: '30' })).toBeNull();
+    expect(literalValidationError({ dead: 'legacyRateLimiter' })).toBeNull();
+    expect(literalValidationError({ dead: '30' })).toMatch(/distinctive identifier/);
+    expect(literalValidationError({ dead: 'abc' })).toMatch(/distinctive identifier/);
+    expect(literalValidationError({ dead: '1234' })).toMatch(/distinctive identifier/);
+    expect(literalValidationError({ dead: ' ' })).toMatch(/dead value/);
+    expect(literalValidationError({ dead: 'x', subject: '' })).toMatch(/subject/);
+    expect(literalValidationError({ dead: 'legacyThing', current: 5 })).toMatch(/current/);
+    expect(literalValidationError('30')).toMatch(/object/);
   });
 });
