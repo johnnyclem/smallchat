@@ -98,6 +98,34 @@ export class SelectorTable {
     return sel;
   }
 
+  /**
+   * Register a compiled tool or alias selector under its exact canonical
+   * name. Unlike intern(), this never folds the selector into a
+   * semantically similar existing one — two distinct tools always get two
+   * distinct selectors. Registering an existing tool canonical again
+   * returns the selector already in the table.
+   */
+  register(embedding: Float32Array, canonical: string): ToolSelector {
+    const existing = this.selectors.get(canonical);
+    if (existing && existing.provenance !== 'intent') return existing;
+    if (existing) {
+      // An intent that canonicalized to this exact name — the tool wins.
+      this.intentOrder = this.intentOrder.filter(c => c !== canonical);
+    }
+
+    const parts = canonical.split(':').filter(Boolean);
+    const sel: ToolSelector = {
+      vector: embedding,
+      canonical,
+      parts,
+      arity: Math.max(0, parts.length - 1),
+      provenance: 'tool',
+    };
+    this.selectors.set(canonical, sel);
+    this.index.insert(canonical, embedding);
+    return sel;
+  }
+
   /** Evict the oldest intent selectors past the retention cap. */
   private evictExcessIntents(): void {
     while (this.intentOrder.length > this.maxIntentEntries) {

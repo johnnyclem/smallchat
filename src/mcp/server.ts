@@ -35,8 +35,8 @@ import {
   loadRuntime,
   buildToolList,
   formatContent,
-  type SerializedArtifact,
 } from './artifact.js';
+import type { ArtifactV1 } from '../artifact/types.js';
 import { filterContentWithRtk } from '../transport/rtk-transport.js';
 import type { RtkConfig } from '../transport/types.js';
 
@@ -64,8 +64,13 @@ export interface MCPServerConfig {
   port: number;
   /** Host to bind to */
   host: string;
-  /** Source directory or compiled artifact */
+  /** Compiled artifact (.json/.db) or a directory of manifests */
   sourcePath: string;
+  /**
+   * When `sourcePath` is a manifest directory: keep near-duplicate tools
+   * instead of failing to compile (same as `compile --allow-duplicates`).
+   */
+  allowDuplicates?: boolean;
   /** SQLite database path for sessions */
   dbPath?: string;
   /** Enable OAuth 2.1 authentication */
@@ -173,7 +178,7 @@ interface SSEClient {
 export class MCPServer {
   private server: Server | null = null;
   private runtime: ToolRuntime | null = null;
-  private artifact: SerializedArtifact | null = null;
+  private artifact: ArtifactV1 | null = null;
   private readonly sessionStore: SessionStore;
   private readonly oauthManager: OAuthManager;
   private readonly resourceRegistry: ResourceRegistry;
@@ -284,7 +289,9 @@ export class MCPServer {
   // -------------------------------------------------------------------------
 
   async start(): Promise<void> {
-    const { runtime, artifact } = await loadRuntime(this.config.sourcePath);
+    const { runtime, artifact } = await loadRuntime(this.config.sourcePath, {
+      compilerOptions: { allowDuplicates: this.config.allowDuplicates },
+    });
     this.runtime = runtime;
     this.artifact = artifact;
 

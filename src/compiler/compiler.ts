@@ -1,7 +1,9 @@
 import type {
   ArgumentConstraints,
   CompilationResult,
+  CompiledToolRef,
   CompilerHint,
+  DuplicateToolPair,
   Embedder,
   OverloadEntryData,
   OverloadTableData,
@@ -24,6 +26,43 @@ import { parseMCPManifest, applyManifestOverrides, type ParsedTool } from './par
 import type { SmallChatManifest } from '../core/manifest.js';
 import { AppCompiler } from '../app/app-compiler.js';
 import { getTransport } from '../mcp/transport.js';
+import { toolId } from '../core/tool-id.js';
+
+/**
+ * Thrown by compile() when two distinct tools embed at or above the
+ * duplicate threshold. The compiler never merges tools; it refuses to build
+ * a toolkit whose intents could not tell them apart, unless the caller
+ * opts in with `allowDuplicates`.
+ */
+export class DuplicateToolError extends Error {
+  readonly pairs: DuplicateToolPair[];
+
+  constructor(pairs: DuplicateToolPair[], threshold: number) {
+    const lines = pairs.map(
+      p => `  ${p.toolA} <-> ${p.toolB} (cosine ${p.similarity.toFixed(3)}; selectors ${p.selectorA}, ${p.selectorB})`,
+    );
+    super(
+      `${pairs.length} pair(s) of distinct tools embed at cosine >= ${threshold} and cannot be told apart:\n` +
+      `${lines.join('\n')}\n` +
+      'Disambiguate them with compiler hints (selectorHint, aliases, exclude), or pass ' +
+      'allowDuplicates (--allow-duplicates) to keep every tool and accept ambiguous intent resolution.',
+    );
+    this.name = 'DuplicateToolError';
+    this.pairs = pairs;
+  }
+}
+
+/**
+ * Thrown by compile() when two tools claim the same selector canonical
+ * (a pinSelector or namespace clash) or the same tool id is declared twice.
+ * One selector dispatches to exactly one tool, so this cannot be waived.
+ */
+export class SelectorConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SelectorConflictError';
+  }
+}
 
 /**
  * ToolCompiler — the build-time tool that produces dispatch tables,
@@ -36,7 +75,8 @@ import { getTransport } from '../mcp/transport.js';
 export class ToolCompiler {
   private embedder: Embedder;
   private vectorIndex: VectorIndex;
-  private selectorTable: SelectorTable;
+  private duplicateThreshold: number;
+  private allowDuplicates: boolean;
   private collisionThreshold: number;
   private generateSemanticOverloads: boolean;
   private semanticOverloadThreshold: number;
@@ -55,11 +95,8 @@ export class ToolCompiler {
     this.semanticOverloadThreshold = options?.semanticOverloadThreshold ?? 0.82;
     this.compileApps = options?.compileApps ?? true;
     this.appVectorIndex = options?.appVectorIndex;
-    this.selectorTable = new SelectorTable(
-      vectorIndex,
-      embedder,
-      options?.deduplicationThreshold ?? 0.95,
-    );
+    this.duplicateThreshold = options?.duplicateThreshold ?? options?.deduplicationThreshold ?? 0.95;
+    this.allowDuplicates = options?.allowDuplicates ?? false;
   }
 
   /**
@@ -97,22 +134,48 @@ export class ToolCompiler {
       }
     }
 
-    // Phase 2: EMBED — generate embeddings and intern selectors
+    // Phase 2: EMBED — generate embeddings and register selectors.
+    // Every tool gets its own selector under its exact canonical name; a
+    // selector is never shared between tools, whatever the embeddings say.
     // Compiler hints can steer this phase:
     //   - selectorHint: appended to embedding text
-    //   - pinSelector: bypasses vector interning entirely
+    //   - pinSelector: the tool's canonical, taken literally
     //   - aliases: additional selectors pointing to the same IMP
+    const selectorTable = new SelectorTable(this.vectorIndex, this.embedder);
     const toolSelectors: Map<ParsedTool, ToolSelector> = new Map();
     const toolEmbeddings: Map<ParsedTool, Float32Array> = new Map();
     const aliasSelectors: Map<ParsedTool, ToolSelector[]> = new Map();
-    let mergedCount = 0;
-    const selectorsBefore = this.selectorTable.size;
+    const toolIds: Map<ParsedTool, string> = new Map();
+    const seenToolIds: Set<string> = new Set();
+    const selectorOwners: Map<string, string> = new Map(); // canonical → tool id
+    const toolRefs: CompiledToolRef[] = [];
+
+    const claim = (canonical: string, id: string, embedding: Float32Array): ToolSelector => {
+      const owner = selectorOwners.get(canonical);
+      if (owner !== undefined && owner !== id) {
+        throw new SelectorConflictError(
+          `Selector "${canonical}" is claimed by both ${owner} and ${id}. ` +
+          'Each tool needs its own selector — change the pinSelector, namespace, or alias.',
+        );
+      }
+      selectorOwners.set(canonical, id);
+      return selectorTable.register(embedding, canonical);
+    };
 
     // Warn if multiple tools in the same collision group claim "preferred"
     const preferredByProvider: Map<string, string[]> = new Map();
 
     for (const tool of allTools) {
       const hints = tool.compilerHints;
+
+      const id = toolId(tool.providerId, tool.name);
+      if (seenToolIds.has(id)) {
+        throw new SelectorConflictError(
+          `Tool id "${id}" is declared more than once — tool names must be unique within a provider.`,
+        );
+      }
+      toolIds.set(tool, id);
+      seenToolIds.add(id);
 
       // Build embedding text — selectorHint steers the vector
       let embeddingText = `${tool.name}: ${tool.description}`;
@@ -130,19 +193,7 @@ export class ToolCompiler {
       const embedding = await this.embedder.embed(embeddingText);
       toolEmbeddings.set(tool, embedding);
 
-      let selector: ToolSelector;
-      if (hints?.pinSelector) {
-        // Pinned: register with the embedding but force the canonical name
-        selector = await this.selectorTable.intern(embedding, hints.pinSelector);
-      } else {
-        selector = await this.selectorTable.intern(embedding, canonical);
-      }
-
-      // Track merged (deduplicated) tools
-      if (this.selectorTable.size === selectorsBefore + toolSelectors.size) {
-        mergedCount++;
-      }
-
+      const selector = claim(canonical, id, embedding);
       toolSelectors.set(tool, selector);
 
       // Track preferred hints for collision warning
@@ -153,26 +204,37 @@ export class ToolCompiler {
       }
 
       // Process aliases — each alias gets its own selector pointing to the same tool
-      if (hints?.aliases && hints.aliases.length > 0) {
-        const aliases: ToolSelector[] = [];
-        for (const alias of hints.aliases) {
-          const aliasEmbedding = await this.embedder.embed(alias);
-          const aliasCanonical = `${canonical}~alias~${alias.replace(/\s+/g, '_')}`;
-          const aliasSel = await this.selectorTable.intern(aliasEmbedding, aliasCanonical);
-          aliases.push(aliasSel);
-        }
+      const aliases: ToolSelector[] = [];
+      for (const alias of new Set(hints?.aliases ?? [])) {
+        const aliasEmbedding = await this.embedder.embed(alias);
+        const aliasCanonical = `${canonical}~alias~${alias.replace(/\s+/g, '_')}`;
+        aliases.push(claim(aliasCanonical, id, aliasEmbedding));
+      }
+      if (aliases.length > 0) {
         aliasSelectors.set(tool, aliases);
       }
+
+      toolRefs.push({
+        id,
+        providerId: tool.providerId,
+        toolName: tool.name,
+        selector: selector.canonical,
+        aliases: aliases.map(a => a.canonical),
+      });
     }
 
     // Phase 2.5: SEMANTIC OVERLOAD GENERATION (optional compiler pass)
     const overloadTables: Map<string, OverloadTableData> = new Map();
     const semanticOverloads: SemanticOverloadGroup[] = [];
+    // Tool id → overload group index; tools in one group are deliberately
+    // similar, so they are exempt from duplicate detection.
+    const overloadGroupOf: Map<string, number> = new Map();
 
     if (this.generateSemanticOverloads) {
       const groups = this.findSemanticGroups(allTools, toolEmbeddings);
 
-      for (const group of groups) {
+      for (const [groupIndex, group] of groups.entries()) {
+        for (const t of group.tools) overloadGroupOf.set(toolIds.get(t)!, groupIndex);
         const canonicalSelector = group.tools[0].providerId + '.' + group.tools[0].name;
         const overloadEntries: OverloadEntryData[] = [];
 
@@ -206,6 +268,42 @@ export class ToolCompiler {
           reason: `Tools grouped by semantic similarity above ${(this.semanticOverloadThreshold * 100).toFixed(0)}% threshold`,
         });
       }
+    }
+
+    // Phase 2.6: DUPLICATE DETECTION — distinct tools whose selectors embed
+    // at or above the duplicate threshold. Reported once per tool pair (the
+    // most similar selector pair), in manifest order.
+    const allSelectors = selectorTable.all();
+    const duplicatesByPair: Map<string, DuplicateToolPair> = new Map();
+    for (let i = 0; i < allSelectors.length; i++) {
+      for (let j = i + 1; j < allSelectors.length; j++) {
+        const a = allSelectors[i];
+        const b = allSelectors[j];
+        const idA = selectorOwners.get(a.canonical)!;
+        const idB = selectorOwners.get(b.canonical)!;
+        if (idA === idB) continue;
+        const groupA = overloadGroupOf.get(idA);
+        if (groupA !== undefined && groupA === overloadGroupOf.get(idB)) continue;
+
+        const similarity = cosineSim(a.vector, b.vector);
+        if (similarity < this.duplicateThreshold) continue;
+
+        const key = `${idA}\u0000${idB}`;
+        const previous = duplicatesByPair.get(key);
+        if (!previous || similarity > previous.similarity) {
+          duplicatesByPair.set(key, {
+            toolA: idA,
+            toolB: idB,
+            selectorA: a.canonical,
+            selectorB: b.canonical,
+            similarity,
+          });
+        }
+      }
+    }
+    const duplicates = [...duplicatesByPair.values()];
+    if (duplicates.length > 0 && !this.allowDuplicates) {
+      throw new DuplicateToolError(duplicates, this.duplicateThreshold);
     }
 
     // Phase 3: LINK — build dispatch tables and detect collisions
@@ -253,7 +351,6 @@ export class ToolCompiler {
       for (const a of aliases) aliasCanonicals.add(a.canonical);
     }
 
-    const allSelectors = this.selectorTable.all();
     for (let i = 0; i < allSelectors.length; i++) {
       for (let j = i + 1; j < allSelectors.length; j++) {
         const a = allSelectors[i];
@@ -270,7 +367,8 @@ export class ToolCompiler {
         const similarity = cosineSim(a.vector, b.vector);
 
         // 0.4.0: Collision firewall — detect in the 0.75-0.95 zone
-        if (similarity > firewallThreshold && similarity < 0.95) {
+        // (pairs at or above the duplicate threshold are reported as duplicates)
+        if (similarity > firewallThreshold && similarity < this.duplicateThreshold) {
           const aPreferred = this.isPreferredTool(a.canonical, allTools, toolSelectors);
           const bPreferred = this.isPreferredTool(b.canonical, allTools, toolSelectors);
 
@@ -319,9 +417,10 @@ export class ToolCompiler {
       selectors: new Map(allSelectors.map(s => [s.canonical, s])),
       dispatchTables,
       protocols: [],
+      tools: toolRefs,
       toolCount: allTools.length,
-      uniqueSelectorCount: this.selectorTable.size,
-      mergedCount,
+      uniqueSelectorCount: allSelectors.length,
+      duplicates,
       collisions,
       overloadTables,
       semanticOverloads,
@@ -376,7 +475,7 @@ export class ToolCompiler {
       async (): Promise<ToolSchema> => ({
         name: tool.name,
         description: tool.description,
-        inputSchema: { type: 'object', properties: {} },
+        inputSchema: tool.inputSchema ?? { type: 'object', properties: {} },
         arguments: tool.arguments,
       }),
       constraints,
@@ -507,7 +606,19 @@ function cosineSim(a: Float32Array, b: Float32Array): number {
 
 export interface CompilerOptions {
   collisionThreshold?: number;
+  /**
+   * Cosine similarity at or above which two distinct tools are reported as
+   * duplicates (default 0.95). Duplicates are a compile error unless
+   * `allowDuplicates` is set; tools are never merged.
+   */
+  duplicateThreshold?: number;
+  /** @deprecated Renamed to `duplicateThreshold` (tools are no longer merged). */
   deduplicationThreshold?: number;
+  /**
+   * Keep near-duplicate tools and report them in `CompilationResult.duplicates`
+   * instead of throwing DuplicateToolError. Default false.
+   */
+  allowDuplicates?: boolean;
   /** Enable compiler-generated overloads for semantically similar tools */
   generateSemanticOverloads?: boolean;
   /** Similarity threshold for grouping tools as overloads (default 0.82) */

@@ -151,3 +151,26 @@ describe('SelectorTable', () => {
     });
   });
 });
+
+describe('SelectorTable.register (compiled selectors)', () => {
+  it('keeps two tools with identical embeddings as two selectors', async () => {
+    const embedder = new LocalEmbedder(64);
+    const table = new SelectorTable(new MemoryVectorIndex(), embedder);
+    const vector = await embedder.embed('list issues in a repository');
+
+    const a = table.register(vector, 'github.list_issues');
+    const b = table.register(vector, 'github.list-issues');
+
+    expect(a.canonical).toBe('github.list_issues');
+    expect(b.canonical).toBe('github.list-issues');
+    expect(table.all().map(s => s.canonical)).toEqual(['github.list_issues', 'github.list-issues']);
+  });
+
+  it('is idempotent for the same canonical', async () => {
+    const embedder = new LocalEmbedder(64);
+    const table = new SelectorTable(new MemoryVectorIndex(), embedder);
+    const vector = await embedder.embed('read a file');
+    expect(table.register(vector, 'fs.read_file')).toBe(table.register(vector, 'fs.read_file'));
+    expect(table.size).toBe(1);
+  });
+});

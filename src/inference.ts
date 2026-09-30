@@ -83,7 +83,9 @@ export { NULL_LLM_CLIENT } from './core/llm-client.js';
 export type { LLMClient, MicroCheckRequest, DecomposeRequest, DecomposeResponse, RefineRequest, RefineResponse, SubIntent, RefinementOption, ToolSummary } from './core/llm-client.js';
 
 // --- Embedding substrate the engine resolves against ---
-export { LocalEmbedder } from './embedding/local-embedder.js';
+// HashEmbedder is a dependency-free placeholder for development and tests;
+// real semantic matching uses ONNXEmbedder (package root).
+export { HashEmbedder, LocalEmbedder } from './embedding/hash-embedder.js';
 export { MemoryVectorIndex } from './embedding/memory-vector-index.js';
 
 // --- Core engine types ---
@@ -99,6 +101,7 @@ export type {
   DispatchEventToolStart,
   InferenceDelta,
   Embedder,
+  EmbedderFingerprint,
   JSONSchemaType,
   ResolvedTool,
   SelectorCollision,

@@ -12,7 +12,7 @@
  * single composite score that beats any one signal alone.
  */
 
-import { LocalEmbedder } from '../../src/embedding/local-embedder.js';
+import { HashEmbedder } from '../../src/embedding/hash-embedder.js';
 import { MemoryVectorIndex } from '../../src/embedding/memory-vector-index.js';
 import { SelectorTable } from '../../src/core/selector-table.js';
 import { ToolClass } from '../../src/core/tool-class.js';
@@ -64,7 +64,7 @@ const QUALITY_SIGNALS: Record<string, string[]> = {
 export class SmallchatRunner implements Runner {
   name = 'smallchat';
   private tools: BenchTool[] = [];
-  private embedder = new LocalEmbedder(384);
+  private embedder = new HashEmbedder(384);
   private vectorIndex = new MemoryVectorIndex();
   private selectorTable: SelectorTable;
   private toolById = new Map<string, BenchTool>();

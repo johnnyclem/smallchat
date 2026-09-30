@@ -1,11 +1,10 @@
 import { Command } from 'commander';
-import { readFileSync, existsSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createInterface } from 'node:readline';
-import type { Embedder, VectorIndex } from '../../core/types.js';
-import { LocalEmbedder } from '../../embedding/local-embedder.js';
-import { MemoryVectorIndex } from '../../embedding/memory-vector-index.js';
-import { SelectorTable } from '../../core/selector-table.js';
+import type { ArtifactV1 } from '../../artifact/types.js';
+import { readArtifact } from '../../artifact/io.js';
+import { createArtifactIndex, describeFingerprint, parseEmbedderKind } from '../../artifact/embedder.js';
 
 /**
  * Interactive REPL for querying the smallchat runtime.
@@ -16,7 +15,7 @@ import { SelectorTable } from '../../core/selector-table.js';
 export const replCommand = new Command('repl')
   .description('Start an interactive shell for querying tool resolution')
   .argument('<file>', 'Path to the compiled toolkit file')
-  .option('-e, --embedder <type>', 'Embedder to use: onnx or local', 'local')
+  .option('-e, --embedder <type>', 'Expected embedder (onnx or hash); refuses if the artifact was compiled with another')
   .option('--top-k <number>', 'Number of results to show', '5')
   .option('--threshold <number>', 'Minimum similarity threshold', '0.5')
   .action(async (file, options) => {
@@ -31,49 +30,28 @@ export const replCommand = new Command('repl')
       process.exit(1);
     }
 
-    let data: ToolkitArtifact;
+    // The artifact's embedder fingerprint decides which embedder resolves
+    // intents; --embedder can only confirm it.
+    let data: ArtifactV1;
+    let index: Awaited<ReturnType<typeof createArtifactIndex>>;
     try {
-      const content = readFileSync(filePath, 'utf-8');
-      data = JSON.parse(content) as ToolkitArtifact;
+      data = await readArtifact(filePath);
+      if (options.embedder !== undefined && parseEmbedderKind(options.embedder) !== data.embedder.kind) {
+        throw new Error(
+          `--embedder ${options.embedder} does not match ${filePath}, which was compiled with the ` +
+          `${data.embedder.kind} embedder (${data.embedder.model})`,
+        );
+      }
+      index = await createArtifactIndex(data, { source: filePath });
     } catch (e) {
-      console.error(`Failed to read ${filePath}: ${(e as Error).message}`);
+      console.error(`Failed to load ${filePath}: ${(e as Error).message}`);
       process.exit(1);
     }
+    const { selectorTable } = index;
 
-    // Set up embedder and vector index
-    let embedder: Embedder;
-    let vectorIndex: VectorIndex;
-
-    if (options.embedder === 'onnx') {
-      try {
-        const { ONNXEmbedder } = await import('../../embedding/onnx-embedder.js');
-        const { SqliteVectorIndex } = await import('../../embedding/sqlite-vector-index.js');
-        embedder = new ONNXEmbedder();
-        vectorIndex = new SqliteVectorIndex(':memory:');
-      } catch {
-        console.warn('ONNX embedder unavailable, falling back to local embedder.');
-        embedder = new LocalEmbedder();
-        vectorIndex = new MemoryVectorIndex();
-      }
-    } else {
-      embedder = new LocalEmbedder();
-      vectorIndex = new MemoryVectorIndex();
-    }
-
-    const selectorTable = new SelectorTable(vectorIndex, embedder);
-
-    // Load selectors from the artifact
-    for (const [, sel] of Object.entries(data.selectors)) {
-      const s = sel as { canonical: string; vector: number[] };
-      const vector = new Float32Array(s.vector);
-      await selectorTable.intern(vector, s.canonical);
-    }
-
-    const selectorCount = Object.keys(data.selectors).length;
-    const providerCount = Object.keys(data.dispatchTables).length;
-
-    console.log(`smallchat repl v0.5.0`);
-    console.log(`Loaded ${selectorCount} selectors from ${providerCount} providers`);
+    console.log(`smallchat repl`);
+    console.log(`Loaded ${data.stats.selectorCount} selectors from ${data.stats.providerCount} providers`);
+    console.log(`Embedder: ${describeFingerprint(data.embedder)}`);
     console.log(`Type an intent to resolve, or :help for commands.\n`);
 
     const rl = createInterface({
@@ -102,7 +80,7 @@ export const replCommand = new Command('repl')
       // Resolve intent
       try {
         const selector = await selectorTable.resolve(input);
-        const matches = await vectorIndex.search(selector.vector, topK, threshold);
+        const matches = await selectorTable.searchTools(selector.vector, topK, threshold);
 
         console.log(`\n  Intent:    "${input}"`);
         console.log(`  Selector:  ${selector.canonical}`);
@@ -113,8 +91,8 @@ export const replCommand = new Command('repl')
           console.log('  Matches:');
           for (const match of matches) {
             const confidence = ((1 - match.distance) * 100).toFixed(1);
-            const provider = findProvider(match.id, data);
-            console.log(`    ${confidence.padStart(5)}%  ${match.id}  (${provider})`);
+            const toolId = data.selectors[match.id]?.toolId ?? 'unknown';
+            console.log(`    ${confidence.padStart(5)}%  ${match.id}  (${toolId})`);
           }
           console.log('');
         }
@@ -131,7 +109,7 @@ export const replCommand = new Command('repl')
     });
   });
 
-function handleCommand(input: string, data: ToolkitArtifact): void {
+function handleCommand(input: string, data: ArtifactV1): void {
   const [cmd, ...args] = input.slice(1).split(/\s+/);
 
   switch (cmd) {
@@ -151,8 +129,8 @@ function handleCommand(input: string, data: ToolkitArtifact): void {
     case 'providers':
     case 'p':
       console.log('\nProviders:');
-      for (const [providerId, table] of Object.entries(data.dispatchTables)) {
-        const count = Object.keys(table as Record<string, unknown>).length;
+      for (const providerId of Object.keys(data.providers)) {
+        const count = Object.values(data.tools).filter(t => t.providerId === providerId).length;
         console.log(`  ${providerId}: ${count} tools`);
       }
       console.log('');
@@ -161,9 +139,8 @@ function handleCommand(input: string, data: ToolkitArtifact): void {
     case 'selectors':
     case 's':
       console.log('\nSelectors:');
-      for (const [, sel] of Object.entries(data.selectors)) {
-        const s = sel as { canonical: string; arity: number };
-        console.log(`  ${s.canonical} (arity: ${s.arity})`);
+      for (const sel of Object.values(data.selectors)) {
+        console.log(`  ${sel.canonical} → ${sel.toolId}${sel.kind === 'alias' ? ' (alias)' : ''}`);
       }
       console.log('');
       break;
@@ -172,12 +149,9 @@ function handleCommand(input: string, data: ToolkitArtifact): void {
     case 't': {
       const filterProvider = args[0];
       console.log('\nTools:');
-      for (const [providerId, table] of Object.entries(data.dispatchTables)) {
-        if (filterProvider && providerId !== filterProvider) continue;
-        const methods = table as Record<string, { toolName: string }>;
-        for (const [, tool] of Object.entries(methods)) {
-          console.log(`  ${providerId}/${tool.toolName}`);
-        }
+      for (const tool of Object.values(data.tools)) {
+        if (filterProvider && tool.providerId !== filterProvider) continue;
+        console.log(`  ${tool.id}`);
       }
       console.log('');
       break;
@@ -185,10 +159,11 @@ function handleCommand(input: string, data: ToolkitArtifact): void {
 
     case 'stats':
       console.log('\nArtifact stats:');
-      console.log(`  Version:    ${data.version}`);
-      console.log(`  Compiled:   ${data.timestamp}`);
+      console.log(`  Format:     ${data.formatVersion}`);
+      console.log(`  Hash:       ${data.contentHash}`);
+      console.log(`  Embedder:   ${describeFingerprint(data.embedder)}`);
       console.log(`  Tools:      ${data.stats.toolCount}`);
-      console.log(`  Selectors:  ${data.stats.uniqueSelectorCount}`);
+      console.log(`  Selectors:  ${data.stats.selectorCount}`);
       console.log(`  Providers:  ${data.stats.providerCount}`);
       console.log(`  Collisions: ${data.stats.collisionCount}`);
       console.log('');
@@ -203,28 +178,4 @@ function handleCommand(input: string, data: ToolkitArtifact): void {
     default:
       console.log(`Unknown command: :${cmd}. Type :help for available commands.\n`);
   }
-}
-
-function findProvider(selectorId: string, data: ToolkitArtifact): string {
-  for (const [providerId, table] of Object.entries(data.dispatchTables)) {
-    const methods = table as Record<string, unknown>;
-    if (selectorId in methods) {
-      return providerId;
-    }
-  }
-  return 'unknown';
-}
-
-interface ToolkitArtifact {
-  version: string;
-  timestamp: string;
-  stats: {
-    toolCount: number;
-    uniqueSelectorCount: number;
-    mergedCount: number;
-    providerCount: number;
-    collisionCount: number;
-  };
-  selectors: Record<string, unknown>;
-  dispatchTables: Record<string, unknown>;
 }

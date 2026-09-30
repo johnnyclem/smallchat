@@ -23,13 +23,17 @@
       "types": "./dist/compiler/compiler.d.ts",
       "import": "./dist/compiler/compiler.js"
     },
+    "./artifact": {
+      "types": "./dist/artifact/index.d.ts",
+      "import": "./dist/artifact/index.js"
+    },
     "./mcp": {
       "types": "./dist/mcp/index.d.ts",
       "import": "./dist/mcp/index.js"
     },
     "./embedding": {
-      "types": "./dist/embedding/local-embedder.d.ts",
-      "import": "./dist/embedding/local-embedder.js"
+      "types": "./dist/embedding/hash-embedder.d.ts",
+      "import": "./dist/embedding/hash-embedder.js"
     },
     "./channel": {
       "types": "./dist/channel/index.d.ts",
@@ -50,6 +54,7 @@
   "files": [
     "dist",
     "models",
+    "spec",
     "README.md",
     "LICENSE",
     "CHANGELOG.md"
@@ -99,6 +104,7 @@
   "dependencies": {
     "@modelcontextprotocol/ext-apps": "^1.7.1",
     "@shorthand/core": "file:./shorthand",
+    "ajv": "^8.20.0",
     "better-sqlite3": "^13.0.3",
     "commander": "^15.0.0",
     "onnxruntime-node": "^1.20.0",

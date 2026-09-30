@@ -17,8 +17,11 @@ npx @smallchat/core compile --source <dir> --output <file> [--watch]
 
 | Option | Alias | Required | Description |
 |--------|-------|----------|-------------|
-| `--source <dir>` | `-s` | Yes | Directory containing `*-manifest.json` files |
-| `--output <file>` | `-o` | Yes | Path to write the compiled artifact |
+| `--source <path>` | `-s` | No | Directory of `*-manifest.json` files or an MCP config file (auto-detects when omitted) |
+| `--output <file>` | `-o` | No | Path to write the compiled artifact (default `tools.toolkit.json`) |
+| `--embedder <type>` | `-e` | No | `onnx` (default) or `hash` |
+| `--format <type>` | `-f` | No | `json` (default) or `sqlite` (writes `.db`) |
+| `--allow-duplicates` | | No | Keep near-duplicate tools as a warning instead of an error |
 | `--watch` | `-w` | No | Watch the source directory for changes and recompile |
 
 ## Examples
@@ -76,53 +79,68 @@ npx @smallchat/core compile -s ./tools -o tools.json
 
 ## Output format
 
-The compiled artifact is a JSON file containing:
+The artifact follows format 1.0, defined by the JSON Schema in
+[`spec/artifact/artifact.v1.schema.json`](https://github.com/johnnyclem/smallchat/blob/main/spec/artifact/artifact.v1.schema.json):
 
-- **`version`** — artifact schema version
-- **`fingerprint`** — SHA-256 hash of the combined manifest content
-- **`providers`** — array of `ToolClass` descriptors
-- **`selectors`** — the full `SelectorTable` with embeddings
-- **`overloads`** — `OverloadTable` entries for tools sharing a selector
+- **`formatVersion`** — `"1.0"`; loaders refuse anything else (pre-1.0
+  artifacts must be recompiled)
+- **`embedder`** — fingerprint of the embedder that produced every vector
+- **`providers`** — per provider: name, transport, and launch spec (stdio
+  command/args and environment variable *names*, never values; or a URL)
+- **`tools`** — keyed by canonical id `<providerId>/<toolName>`: upstream
+  name, description, `inputSchema`, `outputSchema`, `annotations`, and the
+  tool's primary selector
+- **`selectors`** — one embedding per selector, each pointing at exactly one tool
+- **`collisions`**, **`duplicates`**, **`stats`**
+- **`contentHash`** — SHA-256 over the canonical (RFC 8785) JSON of the rest
 
 ```json
 {
-  "version": "1",
-  "fingerprint": "a3f2...",
-  "providers": [
-    {
-      "id": "github",
-      "name": "GitHub",
-      "tools": [ ... ]
-    }
-  ],
-  "selectors": [
-    {
-      "id": "sel_search_code",
-      "canonical": "search for code",
-      "embedding": [0.12, -0.04, ...]
-    }
-  ],
-  "overloads": []
+  "formatVersion": "1.0",
+  "embedder": { "kind": "onnx", "model": "all-MiniLM-L6-v2", "modelSha256": "afdb6f1a…", "dims": 384, "maxLength": 128, "pooling": "mean", "normalize": true },
+  "providers": { "github": { "id": "github", "name": "GitHub", "transportType": "mcp", "launch": { "transport": "stdio", "command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"], "env": ["GITHUB_TOKEN"] } } },
+  "tools": { "github/search_code": { "id": "github/search_code", "providerId": "github", "name": "search_code", "description": "Search for code across repositories", "inputSchema": { "type": "object" }, "transportType": "mcp", "selector": "github.search_code" } },
+  "selectors": { "github.search_code": { "canonical": "github.search_code", "toolId": "github/search_code", "kind": "tool", "vector": [0.12, -0.04] } },
+  "collisions": [],
+  "duplicates": [],
+  "stats": { "toolCount": 1, "selectorCount": 1, "providerCount": 1, "collisionCount": 0, "duplicateCount": 0 },
+  "contentHash": "…"
 }
 ```
 
-## Collision detection
+## Collision warnings
 
-When two tools from different providers produce the same canonical selector, the compiler emits a warning:
+Distinct tools whose selectors are 0.75–0.95 similar are reported as
+collision warnings (dispatches between them get MEDIUM-confidence
+verification). Both tools stay separate; nothing is merged.
+
+## Near-duplicate tools
+
+The compiler never merges distinct tools: every tool keeps its own selector
+and its own canonical id (`<providerId>/<toolName>`). When two distinct
+tools embed at cosine similarity ≥ 0.95 (default), intents cannot tell them
+apart, so compilation fails and lists each pair:
 
 ```
-⚠ Selector collision: "search code" → [github.search_code, gitlab.search_code]
-  Both tools will be registered as overloads.
+Error: 1 pair(s) of distinct tools embed at cosine >= 0.95 and cannot be told apart:
+  github/list_issues <-> github/list-issues (cosine 1.000; …)
 ```
 
-Both tools are kept as overload entries under the shared selector. Dispatch resolves between them based on argument types.
+Disambiguate with compiler hints (`selectorHint`, `aliases`, `exclude`), or
+pass `--allow-duplicates` (or `"compiler": { "allowDuplicates": true }` in
+`smallchat.json`) to keep every tool and record the pairs in the artifact.
+The threshold is `compiler.duplicateThreshold` in `smallchat.json`.
+`pinSelector` is taken literally; two tools pinned to the same selector is
+always an error.
 
-## Selector deduplication
+## Embedder
 
-The compiler deduplicates selectors with cosine similarity ≥ 0.95 (default). Tools whose descriptions are nearly identical merge into one selector. You can tune this:
-
-```bash
-# Not yet a CLI flag — configure via ToolCompiler API
-```
+`--embedder onnx` (default) or `--embedder hash` (a dependency-free
+placeholder for development and tests; `local` is its 0.x name). The
+artifact records the embedder's fingerprint (model, model SHA-256, dims,
+max length, pooling, normalization), and `serve`, `resolve`, `repl` and
+`loadRuntime()` construct exactly that embedder or refuse to load. If the
+ONNX model cannot be loaded, `compile` fails instead of silently falling
+back.
 
 See [ToolCompiler API](../api/compiler) for programmatic configuration.

@@ -1,4 +1,4 @@
-import { ToolRuntime, MemoryVectorIndex, LocalEmbedder, ToolCompiler } from '@smallchat/core';
+import { ToolRuntime, MemoryVectorIndex, HashEmbedder, ToolCompiler } from '@smallchat/core';
 import type { ProviderManifest } from '@smallchat/core';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -10,7 +10,7 @@ async function main() {
 
   // Create runtime
   const vectorIndex = new MemoryVectorIndex();
-  const embedder = new LocalEmbedder();
+  const embedder = new HashEmbedder();
   const compiler = new ToolCompiler(embedder, vectorIndex);
 
   console.log('Compiling GitHub bot tools...');

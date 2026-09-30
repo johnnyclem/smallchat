@@ -36,8 +36,8 @@ import type { Embedder, VectorIndex } from '../../core/types.js';
 
 async function createEmbedder(type: string): Promise<Embedder> {
   if (type === 'local') {
-    const { LocalEmbedder } = await import('../../embedding/local-embedder.js');
-    return new LocalEmbedder();
+    const { HashEmbedder } = await import('../../embedding/hash-embedder.js');
+    return new HashEmbedder();
   }
   const { ONNXEmbedder } = await import('../../embedding/onnx-embedder.js');
   return new ONNXEmbedder();

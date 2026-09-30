@@ -110,18 +110,18 @@ For the durable engine and nothing else, import the dedicated entry point — it
 excludes the token-era optimization satellites (compaction, memex, CRDT, …):
 
 ```typescript
-import { ToolRuntime, MemoryVectorIndex, LocalEmbedder } from '@smallchat/core/inference';
+import { ToolRuntime, MemoryVectorIndex, HashEmbedder } from '@smallchat/core/inference';
 ```
 
-Or from the package root, which additionally re-exports the satellites:
+Or from the package root, which additionally re-exports the satellites. The
+usual starting point is a compiled artifact:
 
 ```typescript
-import { ToolRuntime, MemoryVectorIndex, LocalEmbedder } from '@smallchat/core';
+import { loadRuntime } from '@smallchat/core';
 
-const runtime = new ToolRuntime(
-  new MemoryVectorIndex(),
-  new LocalEmbedder(),
-);
+// The artifact records the embedder its vectors came from (model, SHA-256,
+// dims, pooling); loadRuntime builds that embedder or refuses to load.
+const { runtime } = await loadRuntime('tools.toolkit.json');
 
 const result = await runtime.dispatch('find flights', { to: 'NYC' });
 

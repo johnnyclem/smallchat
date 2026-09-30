@@ -13,10 +13,11 @@
 
 import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import type { ProviderManifest, Embedder, VectorIndex } from '../core/types.js';
+import type { ProviderManifest } from '../core/types.js';
 import { ToolCompiler } from '../compiler/compiler.js';
-import { LocalEmbedder } from '../embedding/local-embedder.js';
 import { MemoryVectorIndex } from '../embedding/memory-vector-index.js';
+import { buildArtifact, serializeArtifact } from '../artifact/format.js';
+import { createEmbedder, fingerprintOf, parseEmbedderKind } from '../artifact/embedder.js';
 import { parseMCPManifest } from '../compiler/parser.js';
 import {
   isMcpConfigFile,
@@ -122,86 +123,17 @@ function extractKnownToolNames(manifests: ProviderManifest[]): string[] {
 }
 
 // ---------------------------------------------------------------------------
-// Embedder/index factory
+// Dream metadata
 // ---------------------------------------------------------------------------
 
-async function createEmbedder(type: string): Promise<Embedder> {
-  if (type === 'onnx') {
-    try {
-      const { ONNXEmbedder } = await import('../embedding/onnx-embedder.js');
-      return new ONNXEmbedder();
-    } catch {
-      return new LocalEmbedder();
-    }
-  }
-  return new LocalEmbedder();
-}
-
-function createVectorIndex(embedderType: string): VectorIndex {
-  // Only use SQLite for ONNX; local embedder uses memory index
-  return new MemoryVectorIndex();
-}
-
-// ---------------------------------------------------------------------------
-// Compile with priority hints
-// ---------------------------------------------------------------------------
-
-function serializeResult(
-  result: import('../core/types.js').CompilationResult,
-  embedderType: string,
-  hints: ToolPriorityHints,
-): object {
-  const selectors: Record<string, object> = {};
-  for (const [key, sel] of result.selectors) {
-    selectors[key] = {
-      canonical: sel.canonical,
-      parts: sel.parts,
-      arity: sel.arity,
-      vector: Array.from(sel.vector),
-    };
-  }
-
-  const dispatchTables: Record<string, Record<string, object>> = {};
-  for (const [providerId, table] of result.dispatchTables) {
-    const methods: Record<string, object> = {};
-    for (const [canonical, imp] of table) {
-      methods[canonical] = {
-        providerId: imp.providerId,
-        toolName: imp.toolName,
-        transportType: imp.transportType,
-      };
-    }
-    dispatchTables[providerId] = methods;
-  }
-
-  // Serialize priority hints for runtime use
-  const dreamMetadata: Record<string, unknown> = {
+/** Priority hints serialized under the artifact's `extensions.dream`. */
+function dreamExtension(hints: ToolPriorityHints): Record<string, unknown> {
+  return {
     boosted: Object.fromEntries(hints.boosted),
     demoted: Object.fromEntries(hints.demoted),
     excluded: Array.from(hints.excluded),
     reasoning: Object.fromEntries(hints.reasoning),
     generatedAt: new Date().toISOString(),
-  };
-
-  return {
-    version: '0.5.0',
-    timestamp: new Date().toISOString(),
-    embedding: {
-      model: embedderType === 'onnx' ? 'all-MiniLM-L6-v2' : 'hash-based',
-      dimensions: 384,
-      embedderType,
-    },
-    stats: {
-      toolCount: result.toolCount,
-      uniqueSelectorCount: result.uniqueSelectorCount,
-      mergedCount: result.mergedCount,
-      providerCount: result.dispatchTables.size,
-      collisionCount: result.collisions.length,
-    },
-    selectors,
-    dispatchTables,
-    collisions: result.collisions,
-    dreamMetadata,
   };
 }
 
@@ -298,16 +230,19 @@ export async function compileLatest(options: CompileLatestOptions = {}): Promise
     tools: m.tools.filter(t => !hints.excluded.has(t.name)),
   }));
 
-  const embedder = await createEmbedder(config.embedder);
-  const vectorIndex = createVectorIndex(config.embedder);
-  const compiler = new ToolCompiler(embedder, vectorIndex);
+  // Same embedder choice as `smallchat compile`; no silent fallback, since
+  // the artifact must record the embedder that actually produced its vectors.
+  const embedder = await createEmbedder(parseEmbedderKind(config.embedder));
+  const compiler = new ToolCompiler(embedder, new MemoryVectorIndex());
   const result = await compiler.compile(filteredManifests);
 
   // Serialize with dream metadata
-  const output = serializeResult(result, config.embedder, hints);
+  const artifact = buildArtifact(result, filteredManifests, fingerprintOf(embedder), {
+    extensions: { dream: dreamExtension(hints) },
+  });
   const outputPath = resolve(projectDir, config.outputPath);
   const newArtifactPath = outputPath + '.dream-pending.json';
-  writeFileSync(newArtifactPath, JSON.stringify(output, null, 2));
+  writeFileSync(newArtifactPath, serializeArtifact(artifact));
 
   console.log(`  Compiled: ${result.toolCount} tools, ${result.uniqueSelectorCount} selectors`);
 

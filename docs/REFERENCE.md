@@ -106,12 +106,15 @@ smallchat provides two embedding strategies and two vector index backends:
 
 | Component | Implementation | Use case |
 |-----------|---------------|----------|
-| **LocalEmbedder** | Deterministic hash-based | Fast development, testing, CI |
+| **HashEmbedder** (formerly `LocalEmbedder`) | Hash-based placeholder (same text → same vector; not semantic) | Development, testing, CI |
 | **ONNXEmbedder** | all-MiniLM-L6-v2 via ONNX Runtime (384-dim) | Production semantic matching |
 | **MemoryVectorIndex** | In-memory brute-force cosine similarity | Development, small tool sets |
 | **SqliteVectorIndex** | sqlite-vec with persistent storage | Production, large tool sets |
 
 The ONNX model ships with the package in `models/` (quantized, ~30MB).
+Compiled artifacts record the embedder fingerprint (kind, model, model
+SHA-256, dims, maxLength, pooling, normalize); every load path constructs
+that embedder or refuses to load (see `spec/artifact/`).
 
 > **Bundling in serverless / edge runtimes.** `ONNXEmbedder` falls back from
 > `onnxruntime-node` to `onnxruntime-web` when the native addon isn't
@@ -119,12 +122,12 @@ The ONNX model ships with the package in `models/` (quantized, ~30MB).
 > limit). The web backend's node entry loads its WASM glue
 > (`ort-wasm-*.mjs`) through a computed `import()` that most bundlers'
 > file tracers can't follow, so it's easy to ship a function that's missing
-> the glue next to the `.wasm` binaries — the failure is silent, degrading
-> to `LocalEmbedder` (lexical-only dispatch) rather than throwing. If you
-> bundle for a serverless/edge target, explicitly force-include
-> `onnxruntime-web`'s `dist/ort-wasm*.mjs` and `dist/*.wasm` alongside your
-> traced files, and surface embedder load failures to your own logs/UI
-> rather than relying on the default silent degradation.
+> the glue next to the `.wasm` binaries. Since 1.0 this fails loudly: an
+> artifact records its embedder fingerprint, and loading an ONNX-compiled
+> artifact without a working ONNX embedder throws `EmbedderMismatchError`
+> instead of degrading to hash vectors. If you bundle for a serverless/edge
+> target, explicitly force-include `onnxruntime-web`'s `dist/ort-wasm*.mjs`
+> and `dist/*.wasm` alongside your traced files.
 >
 > **Threshold calibration.** `DEFAULT_THRESHOLDS` (`exact .95 / high .85 /
 > medium .75 / low .60`, `src/core/confidence.ts`) were tuned against a

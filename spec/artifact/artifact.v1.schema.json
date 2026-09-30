@@ -1,0 +1,520 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smallchat.dev/spec/artifact/artifact.v1.schema.json",
+  "title": "smallchat compiled toolkit artifact, format 1.0",
+  "description": "Output of `smallchat compile`. Tools are keyed by canonical tool id '<providerId>/<toolName>'; every selector vector was produced by the embedder named in `embedder`, and loaders must refuse any other embedder. `contentHash` is sha256hex(UTF8(\"smallchat.artifact.v1\") || 0x00 || UTF8(JCS(artifact without contentHash))), JCS per RFC 8785.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "formatVersion",
+    "embedder",
+    "providers",
+    "tools",
+    "selectors",
+    "collisions",
+    "duplicates",
+    "stats",
+    "contentHash"
+  ],
+  "properties": {
+    "formatVersion": {
+      "const": "1.0"
+    },
+    "embedder": {
+      "$ref": "#/$defs/embedderFingerprint"
+    },
+    "providers": {
+      "type": "object",
+      "propertyNames": {
+        "$ref": "#/$defs/providerId"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/provider"
+      }
+    },
+    "tools": {
+      "type": "object",
+      "propertyNames": {
+        "$ref": "#/$defs/toolId"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/tool"
+      }
+    },
+    "selectors": {
+      "type": "object",
+      "propertyNames": {
+        "minLength": 1
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/selector"
+      }
+    },
+    "collisions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/collision"
+      }
+    },
+    "duplicates": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/duplicate"
+      }
+    },
+    "stats": {
+      "$ref": "#/$defs/stats"
+    },
+    "extensions": {
+      "description": "Tool-specific metadata (e.g. dream prioritization). Covered by contentHash; ignored by loaders.",
+      "type": "object"
+    },
+    "contentHash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  },
+  "$defs": {
+    "providerId": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[^/]+$"
+    },
+    "toolId": {
+      "type": "string",
+      "pattern": "^[^/]+/.+$"
+    },
+    "transportType": {
+      "enum": [
+        "mcp",
+        "rest",
+        "local",
+        "grpc"
+      ]
+    },
+    "embedderFingerprint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "model",
+        "modelSha256",
+        "dims",
+        "maxLength",
+        "pooling",
+        "normalize"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "onnx",
+            "hash",
+            "custom"
+          ]
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "modelSha256": {
+          "description": "SHA-256 of the model file; null only for the hash embedder.",
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "dims": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxLength": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pooling": {
+          "enum": [
+            "mean",
+            "cls",
+            "none"
+          ]
+        },
+        "normalize": {
+          "type": "boolean"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "hash"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "modelSha256": {
+                "type": "null"
+              },
+              "maxLength": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "onnx"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "modelSha256": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "launch": {
+      "description": "How to start or reach the upstream server. Environment variables are listed by NAME only, never with values.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "transport",
+            "command",
+            "args",
+            "env"
+          ],
+          "properties": {
+            "transport": {
+              "const": "stdio"
+            },
+            "command": {
+              "type": "string",
+              "minLength": 1
+            },
+            "args": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "env": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[^=\\u0000]+$"
+              },
+              "uniqueItems": true
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "transport",
+            "url"
+          ],
+          "properties": {
+            "transport": {
+              "enum": [
+                "streamable-http",
+                "sse",
+                "http"
+              ]
+            },
+            "url": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      ]
+    },
+    "provider": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "transportType"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/providerId"
+        },
+        "name": {
+          "type": "string"
+        },
+        "transportType": {
+          "$ref": "#/$defs/transportType"
+        },
+        "version": {
+          "type": "string"
+        },
+        "launch": {
+          "$ref": "#/$defs/launch"
+        },
+        "compilerHints": {
+          "type": "object"
+        },
+        "channel": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "isChannel",
+            "twoWay",
+            "permissionRelay"
+          ],
+          "properties": {
+            "isChannel": {
+              "type": "boolean"
+            },
+            "twoWay": {
+              "type": "boolean"
+            },
+            "permissionRelay": {
+              "type": "boolean"
+            },
+            "replyToolName": {
+              "type": "string"
+            },
+            "instructions": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "annotations": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "readOnlyHint": {
+          "type": "boolean"
+        },
+        "destructiveHint": {
+          "type": "boolean"
+        },
+        "idempotentHint": {
+          "type": "boolean"
+        },
+        "openWorldHint": {
+          "type": "boolean"
+        }
+      }
+    },
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "providerId",
+        "name",
+        "description",
+        "inputSchema",
+        "transportType",
+        "selector"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/toolId"
+        },
+        "providerId": {
+          "$ref": "#/$defs/providerId"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Upstream tool name, verbatim."
+        },
+        "title": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "inputSchema": {
+          "type": "object"
+        },
+        "outputSchema": {
+          "type": "object"
+        },
+        "annotations": {
+          "$ref": "#/$defs/annotations"
+        },
+        "transportType": {
+          "$ref": "#/$defs/transportType"
+        },
+        "selector": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Canonical of the tool's primary selector."
+        },
+        "compilerHints": {
+          "type": "object"
+        },
+        "ui": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "resourceUri"
+          ],
+          "properties": {
+            "resourceUri": {
+              "type": "string"
+            },
+            "visibility": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "model",
+                  "app"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "selector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "canonical",
+        "toolId",
+        "kind",
+        "vector"
+      ],
+      "properties": {
+        "canonical": {
+          "type": "string",
+          "minLength": 1
+        },
+        "toolId": {
+          "$ref": "#/$defs/toolId"
+        },
+        "kind": {
+          "enum": [
+            "tool",
+            "alias"
+          ]
+        },
+        "vector": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          }
+        }
+      }
+    },
+    "collision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "selectorA",
+        "selectorB",
+        "similarity",
+        "hint"
+      ],
+      "properties": {
+        "selectorA": {
+          "type": "string"
+        },
+        "selectorB": {
+          "type": "string"
+        },
+        "similarity": {
+          "type": "number"
+        },
+        "hint": {
+          "type": "string"
+        }
+      }
+    },
+    "duplicate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "toolA",
+        "toolB",
+        "selectorA",
+        "selectorB",
+        "similarity"
+      ],
+      "properties": {
+        "toolA": {
+          "$ref": "#/$defs/toolId"
+        },
+        "toolB": {
+          "$ref": "#/$defs/toolId"
+        },
+        "selectorA": {
+          "type": "string"
+        },
+        "selectorB": {
+          "type": "string"
+        },
+        "similarity": {
+          "type": "number"
+        }
+      }
+    },
+    "stats": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "toolCount",
+        "selectorCount",
+        "providerCount",
+        "collisionCount",
+        "duplicateCount"
+      ],
+      "properties": {
+        "toolCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "selectorCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "providerCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "collisionCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "duplicateCount": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}

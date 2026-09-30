@@ -17,7 +17,8 @@ import { MCPServer, type MCPServerConfig } from '../../mcp/server.js';
  */
 export const serveCommand = new Command('serve')
   .description('Start an MCP 2026 compliant tool server with streaming support')
-  .requiredOption('-s, --source <path>', 'Source directory or compiled artifact (.json)')
+  .requiredOption('-s, --source <path>', 'Compiled artifact (.json or .db) or a directory of manifests')
+  .option('--allow-duplicates', 'With a manifest directory: keep near-duplicate tools instead of failing to compile')
   .option('-p, --port <number>', 'Port to listen on', '3001')
   .option('--host <address>', 'Host to bind to', '127.0.0.1')
   .option('--db-path <path>', 'SQLite database path for sessions', 'smallchat.db')
@@ -43,6 +44,7 @@ export const serveCommand = new Command('serve')
       port,
       host,
       sourcePath,
+      allowDuplicates: options.allowDuplicates === true,
       dbPath: options.dbPath,
       enableAuth: options.auth,
       enableRateLimit: options.rateLimit,
@@ -73,5 +75,12 @@ export const serveCommand = new Command('serve')
     process.on('SIGINT', shutdown);
     process.on('SIGTERM', shutdown);
 
-    await server.start();
+    try {
+      await server.start();
+    } catch (e) {
+      // e.g. a pre-1.0 artifact, or an artifact whose embedder is unavailable
+      console.error(`Failed to load ${sourcePath}: ${(e as Error).message}`);
+      await server.stop();
+      process.exit(1);
+    }
   });

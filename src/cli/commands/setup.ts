@@ -462,8 +462,11 @@ async function runCompileFromConfig(
   // Dynamically import compile dependencies to avoid loading them until needed
   const { introspectMcpConfigFile } = await import('../../mcp/client.js');
   const { ToolCompiler } = await import('../../compiler/compiler.js');
-  const { LocalEmbedder } = await import('../../embedding/local-embedder.js');
   const { MemoryVectorIndex } = await import('../../embedding/memory-vector-index.js');
+  const { buildArtifact } = await import('../../artifact/format.js');
+  const { writeArtifact } = await import('../../artifact/io.js');
+  const { createEmbedder, describeFingerprint, fingerprintOf, DEFAULT_EMBEDDER_KIND } =
+    await import('../../artifact/embedder.js');
 
   let manifests;
   try {
@@ -482,22 +485,24 @@ async function runCompileFromConfig(
   const totalTools = manifests.reduce((sum, m) => sum + m.tools.length, 0);
   console.log(`\nDiscovered ${totalTools} tool(s) across ${manifests.length} server(s).`);
 
-  // Try ONNX first, fall back to local
+  // The compile default (ONNX); if its model is unavailable, fall back to
+  // the hash embedder. The artifact records whichever was actually used, so
+  // `serve` will load it with the same embedder.
   let embedder;
-  let embedderLabel: string;
   try {
-    const { ONNXEmbedder } = await import('../../embedding/onnx-embedder.js');
-    embedder = new ONNXEmbedder();
-    embedderLabel = 'all-MiniLM-L6-v2 (ONNX)';
-  } catch {
-    embedder = new LocalEmbedder();
-    embedderLabel = 'hash-based (local)';
+    embedder = await createEmbedder(DEFAULT_EMBEDDER_KIND);
+  } catch (err) {
+    console.warn(`Warning: ${(err as Error).message}`);
+    console.warn('  Falling back to the hash embedder (placeholder vectors; run "smallchat doctor").');
+    embedder = await createEmbedder('hash');
   }
+  const fingerprint = fingerprintOf(embedder);
 
-  const vectorIndex = new MemoryVectorIndex();
-  const compiler = new ToolCompiler(embedder, vectorIndex);
+  // The wizard keeps near-duplicate tools (reported below) rather than
+  // failing a first-run setup; `smallchat compile` treats them as errors.
+  const compiler = new ToolCompiler(embedder, new MemoryVectorIndex(), { allowDuplicates: true });
 
-  console.log(`\nCompiling with ${embedderLabel}...`);
+  console.log(`\nCompiling with ${describeFingerprint(fingerprint)}...`);
 
   const result = await compiler.compile(manifests);
 
@@ -508,52 +513,11 @@ async function runCompileFromConfig(
   if (result.collisions.length > 0) {
     console.log(`  Collisions: ${result.collisions.length}`);
   }
-
-  // Serialize output
-  const selectors: Record<string, object> = {};
-  for (const [key, sel] of result.selectors) {
-    selectors[key] = {
-      canonical: sel.canonical,
-      parts: sel.parts,
-      arity: sel.arity,
-      vector: Array.from(sel.vector),
-    };
+  for (const d of result.duplicates) {
+    console.log(`  ⚠ Near-duplicate tools: ${d.toolA} <-> ${d.toolB} (cosine: ${d.similarity.toFixed(3)})`);
   }
 
-  const dispatchTables: Record<string, Record<string, object>> = {};
-  for (const [providerId, table] of result.dispatchTables) {
-    const methods: Record<string, object> = {};
-    for (const [canonical, imp] of table) {
-      methods[canonical] = {
-        providerId: imp.providerId,
-        toolName: imp.toolName,
-        transportType: imp.transportType,
-      };
-    }
-    dispatchTables[providerId] = methods;
-  }
-
-  const output = {
-    version: '0.5.0',
-    timestamp: new Date().toISOString(),
-    embedding: {
-      model: embedderLabel.includes('ONNX') ? 'all-MiniLM-L6-v2' : 'hash-based',
-      dimensions: 384,
-      embedderType: embedderLabel.includes('ONNX') ? 'onnx' : 'local',
-    },
-    stats: {
-      toolCount: result.toolCount,
-      uniqueSelectorCount: result.uniqueSelectorCount,
-      mergedCount: result.mergedCount,
-      providerCount: result.dispatchTables.size,
-      collisionCount: result.collisions.length,
-    },
-    selectors,
-    dispatchTables,
-    collisions: result.collisions,
-  };
-
-  writeFileSync(outputPath, JSON.stringify(output, null, 2));
+  await writeArtifact(outputPath, buildArtifact(result, manifests, fingerprint));
   console.log(`\nCompiled toolkit written to: ${outputPath}`);
 
   return true;

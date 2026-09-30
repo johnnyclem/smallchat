@@ -46,11 +46,11 @@ const appCompileCommand = new Command('compile')
     }
 
     // Dynamically import to avoid loading heavy deps at startup
-    const { LocalEmbedder } = await import('../../embedding/local-embedder.js');
+    const { HashEmbedder } = await import('../../embedding/hash-embedder.js');
     const { MemoryVectorIndex } = await import('../../embedding/memory-vector-index.js');
     const { AppCompiler } = await import('../../app/app-compiler.js');
 
-    const embedder = new LocalEmbedder();
+    const embedder = new HashEmbedder();
     const vectorIndex = new MemoryVectorIndex();
     const compiler = new AppCompiler(embedder, vectorIndex, {
       verbose: Boolean(options.verbose),
@@ -168,10 +168,10 @@ const appPreviewCommand = new Command('preview')
     const raw = JSON.parse(readFileSync(filePath, 'utf-8')) as Record<string, unknown>;
 
     const { UIRuntime } = await import('../../app/app-runtime.js');
-    const { LocalEmbedder } = await import('../../embedding/local-embedder.js');
+    const { HashEmbedder } = await import('../../embedding/hash-embedder.js');
     const { MemoryVectorIndex } = await import('../../embedding/memory-vector-index.js');
 
-    const embedder = new LocalEmbedder();
+    const embedder = new HashEmbedder();
     const vectorIndex = new MemoryVectorIndex();
     const runtime = new UIRuntime(embedder, vectorIndex);
 

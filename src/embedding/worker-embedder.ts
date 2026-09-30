@@ -9,8 +9,8 @@ import { Worker } from 'node:worker_threads';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
-import type { Embedder } from '../core/types.js';
-import type { ONNXEmbedderOptions } from './onnx-embedder.js';
+import type { Embedder, EmbedderFingerprint } from '../core/types.js';
+import { onnxFingerprint, type ONNXEmbedderOptions } from './onnx-embedder.js';
 import type { WorkerRequest, WorkerResponse, WorkerInitData } from './embedding-worker.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -43,9 +43,12 @@ export class EmbeddingWorkerBridge {
   private pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>();
   private ready: Promise<void>;
   private terminated = false;
+  /** Options the worker's ONNXEmbedder was created with */
+  readonly embedderOptions: ONNXEmbedderOptions | undefined;
 
   constructor(initData?: WorkerInitData) {
     const workerPath = resolveWorkerPath();
+    this.embedderOptions = initData?.embedderOptions;
 
     this.worker = new Worker(workerPath, {
       workerData: initData,
@@ -125,10 +128,13 @@ export class EmbeddingWorkerBridge {
  */
 export class WorkerEmbedder implements Embedder {
   readonly dimensions: number = 384;
+  /** Same vectors as the ONNXEmbedder running in the worker */
+  readonly fingerprint: EmbedderFingerprint;
   private bridge: EmbeddingWorkerBridge;
 
   constructor(bridge: EmbeddingWorkerBridge) {
     this.bridge = bridge;
+    this.fingerprint = onnxFingerprint(bridge.embedderOptions?.maxLength);
   }
 
   async embed(text: string): Promise<Float32Array> {

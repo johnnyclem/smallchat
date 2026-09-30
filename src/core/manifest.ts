@@ -17,7 +17,7 @@
  *   },
  *   "compiler": {
  *     "embedder": "onnx",
- *     "deduplicationThreshold": 0.95,
+ *     "duplicateThreshold": 0.95,
  *     "collisionThreshold": 0.89,
  *     "generateSemanticOverloads": true
  *   },
@@ -143,10 +143,17 @@ export interface SmallChatManifest {
 }
 
 export interface ManifestCompilerConfig {
-  /** Embedder type: "onnx" or "local" */
+  /** Embedder: "onnx" (default) or "hash" ("local" is the 0.x name of "hash") */
   embedder?: string;
-  /** Deduplication threshold (0–1, default 0.95) */
+  /**
+   * Cosine similarity at or above which two distinct tools are a duplicate
+   * (0–1, default 0.95) — a compile error unless allowDuplicates is set.
+   */
+  duplicateThreshold?: number;
+  /** @deprecated Renamed to duplicateThreshold (tools are no longer merged) */
   deduplicationThreshold?: number;
+  /** Keep near-duplicate tools as a warning instead of a compile error */
+  allowDuplicates?: boolean;
   /** Collision warning threshold (0–1, default 0.89) */
   collisionThreshold?: number;
   /** Enable semantic overload generation */

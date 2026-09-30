@@ -1,12 +1,9 @@
 import { Command } from 'commander';
-import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import type { Embedder, TransportType, VectorIndex } from '../../core/types.js';
-import { LocalEmbedder } from '../../embedding/local-embedder.js';
-import { MemoryVectorIndex } from '../../embedding/memory-vector-index.js';
-import { ONNXEmbedder } from '../../embedding/onnx-embedder.js';
-import { SqliteVectorIndex } from '../../embedding/sqlite-vector-index.js';
-import { SelectorTable } from '../../core/selector-table.js';
+import type { TransportType } from '../../core/types.js';
+import type { ArtifactV1 } from '../../artifact/types.js';
+import { readArtifact } from '../../artifact/io.js';
+import { createArtifactIndex, parseEmbedderKind } from '../../artifact/embedder.js';
 import { HttpTransport } from '../../transport/http-transport.js';
 import { LocalTransport } from '../../transport/local-transport.js';
 import { McpSseTransport } from '../../transport/mcp-client-transport.js';
@@ -16,7 +13,7 @@ export const resolveCommand = new Command('resolve')
   .description('Test dispatch resolution against a compiled artifact')
   .argument('<file>', 'Path to the compiled toolkit file')
   .argument('<intent>', 'Natural language intent to resolve')
-  .option('-e, --embedder <type>', 'Embedder to use: onnx (default) or local', 'onnx')
+  .option('-e, --embedder <type>', 'Expected embedder (onnx or hash); refuses if the artifact was compiled with another')
   .option('-x, --execute', 'Execute the resolved tool via its transport')
   .option('--args <json>', 'JSON arguments to pass when executing', '{}')
   .option('--endpoint <url>', 'Override the tool endpoint for execution')
@@ -24,50 +21,30 @@ export const resolveCommand = new Command('resolve')
   .action(async (file, intent, options) => {
     const filePath = resolve(file);
 
-    let data: ToolkitArtifact;
+    // Load the artifact and the embedder it was compiled with — the
+    // artifact's fingerprint decides; --embedder can only confirm it.
+    let data: ArtifactV1;
+    let index: Awaited<ReturnType<typeof createArtifactIndex>>;
     try {
-      const content = readFileSync(filePath, 'utf-8');
-      data = JSON.parse(content) as ToolkitArtifact;
+      data = await readArtifact(filePath);
+      if (options.embedder !== undefined && parseEmbedderKind(options.embedder) !== data.embedder.kind) {
+        throw new Error(
+          `--embedder ${options.embedder} does not match ${filePath}, which was compiled with the ` +
+          `${data.embedder.kind} embedder (${data.embedder.model})`,
+        );
+      }
+      index = await createArtifactIndex(data, { source: filePath });
     } catch (e) {
-      console.error(`Failed to read ${filePath}: ${(e as Error).message}`);
+      console.error(`Failed to load ${filePath}: ${(e as Error).message}`);
       process.exit(1);
     }
-
-    // Detect embedder type from artifact or CLI flag
-    const embedderType = data.embedding?.embedderType ?? options.embedder;
-
-    // Rebuild the selector table and vector index from the artifact
-    let embedder: Embedder;
-    let vectorIndex: VectorIndex;
-
-    if (embedderType === 'onnx') {
-      try {
-        embedder = new ONNXEmbedder();
-        vectorIndex = new SqliteVectorIndex(':memory:');
-      } catch {
-        console.warn('ONNX embedder unavailable, falling back to local embedder.');
-        embedder = new LocalEmbedder();
-        vectorIndex = new MemoryVectorIndex();
-      }
-    } else {
-      embedder = new LocalEmbedder();
-      vectorIndex = new MemoryVectorIndex();
-    }
-
-    const selectorTable = new SelectorTable(vectorIndex, embedder);
-
-    // Load selectors from the artifact
-    for (const [, sel] of Object.entries(data.selectors)) {
-      const s = sel as { canonical: string; vector: number[] };
-      const vector = new Float32Array(s.vector);
-      await selectorTable.intern(vector, s.canonical);
-    }
+    const { selectorTable } = index;
 
     // Resolve the intent
     const selector = await selectorTable.resolve(intent);
 
-    // Find nearest selectors
-    const matches = await vectorIndex.search(selector.vector, 5, 0.5);
+    // Find nearest tool selectors (never the intent itself)
+    const matches = await selectorTable.searchTools(selector.vector, 5, 0.5);
 
     console.log(`Intent: "${intent}"`);
     console.log(`Resolved selector: ${selector.canonical}`);
@@ -81,16 +58,8 @@ export const resolveCommand = new Command('resolve')
     console.log('Matches:');
     for (const match of matches) {
       const confidence = ((1 - match.distance) * 100).toFixed(1);
-      // Look up which provider owns this selector
-      let provider = 'unknown';
-      for (const [providerId, table] of Object.entries(data.dispatchTables)) {
-        const methods = table as Record<string, { toolName: string }>;
-        if (match.id in methods) {
-          provider = providerId;
-          break;
-        }
-      }
-      console.log(`  → ${match.id} (confidence: ${confidence}%, provider: ${provider})`);
+      const toolId = data.selectors[match.id]?.toolId ?? 'unknown';
+      console.log(`  → ${match.id} (confidence: ${confidence}%, tool: ${toolId})`);
     }
 
     // Show the best match
@@ -105,22 +74,13 @@ export const resolveCommand = new Command('resolve')
     // --execute: run the resolved tool via its transport
     if (options.execute && matches.length > 0) {
       const bestMatch = matches[0];
-      let toolName = bestMatch.id;
-      let providerId = 'unknown';
-      let transportType: TransportType = 'rest';
-      let endpoint: string | undefined = options.endpoint;
-
-      // Look up the tool info from the dispatch table
-      for (const [pid, table] of Object.entries(data.dispatchTables)) {
-        const methods = table as Record<string, { toolName: string; transportType?: TransportType; endpoint?: string }>;
-        if (bestMatch.id in methods) {
-          providerId = pid;
-          toolName = methods[bestMatch.id].toolName ?? bestMatch.id;
-          transportType = methods[bestMatch.id].transportType ?? 'rest';
-          endpoint = endpoint ?? methods[bestMatch.id].endpoint;
-          break;
-        }
-      }
+      const tool = data.tools[data.selectors[bestMatch.id].toolId];
+      const toolName = tool.name;
+      const providerId = tool.providerId;
+      const transportType: TransportType = tool.transportType;
+      const launch = data.providers[providerId]?.launch;
+      const endpoint: string | undefined =
+        options.endpoint ?? (launch && launch.transport !== 'stdio' ? launch.url : undefined);
 
       let args: Record<string, unknown>;
       try {
@@ -181,13 +141,3 @@ export const resolveCommand = new Command('resolve')
       }
     }
   });
-
-interface ToolkitArtifact {
-  selectors: Record<string, unknown>;
-  dispatchTables: Record<string, unknown>;
-  embedding?: {
-    model: string;
-    dimensions: number;
-    embedderType: string;
-  };
-}

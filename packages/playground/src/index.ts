@@ -1,10 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { readFileSync, existsSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-import type { Embedder, VectorIndex } from '@smallchat/core';
-import { LocalEmbedder } from '@smallchat/core';
-import { MemoryVectorIndex } from '@smallchat/core';
-import { SelectorTable } from '@smallchat/core';
+import { readArtifact, createArtifactIndex } from '@smallchat/core';
 
 /**
  * Playground web server — serves a single-page UI for testing
@@ -25,18 +22,10 @@ export async function startPlayground(config: PlaygroundConfig): Promise<void> {
     process.exit(1);
   }
 
-  const data = JSON.parse(readFileSync(toolkitPath, 'utf-8'));
-
-  // Set up embedder and vector index
-  const embedder = new LocalEmbedder();
-  const vectorIndex = new MemoryVectorIndex();
-  const selectorTable = new SelectorTable(vectorIndex, embedder);
-
-  // Load selectors
-  for (const [, sel] of Object.entries(data.selectors)) {
-    const s = sel as { canonical: string; vector: number[] };
-    await selectorTable.intern(new Float32Array(s.vector), s.canonical);
-  }
+  // The artifact's embedder fingerprint decides which embedder resolves
+  // intents; loading refuses a pre-1.0 artifact or an unavailable embedder.
+  const data = await readArtifact(toolkitPath);
+  const { selectorTable } = await createArtifactIndex(data, { source: toolkitPath });
 
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     if (req.method === 'GET' && (req.url === '/' || req.url === '/index.html')) {
@@ -64,19 +53,12 @@ export async function startPlayground(config: PlaygroundConfig): Promise<void> {
       try {
         const { intent } = JSON.parse(body) as { intent: string };
         const selector = await selectorTable.resolve(intent);
-        const matches = await vectorIndex.search(selector.vector, 10, 0.3);
+        const matches = await selectorTable.searchTools(selector.vector, 10, 0.3);
 
         const results = matches.map((m) => {
-          let provider = 'unknown';
-          let toolName = m.id;
-          for (const [pid, table] of Object.entries(data.dispatchTables)) {
-            const methods = table as Record<string, { toolName: string }>;
-            if (m.id in methods) {
-              provider = pid;
-              toolName = methods[m.id].toolName;
-              break;
-            }
-          }
+          const tool = data.tools[data.selectors[m.id]?.toolId ?? ''];
+          const provider = tool?.providerId ?? 'unknown';
+          const toolName = tool?.name ?? m.id;
           return {
             selector: m.id,
             distance: m.distance,
@@ -101,13 +83,11 @@ export async function startPlayground(config: PlaygroundConfig): Promise<void> {
     }
 
     if (req.method === 'GET' && req.url === '/api/tools') {
-      const tools: Array<{ provider: string; tool: string; selector: string }> = [];
-      for (const [pid, table] of Object.entries(data.dispatchTables)) {
-        const methods = table as Record<string, { toolName: string }>;
-        for (const [sel, m] of Object.entries(methods)) {
-          tools.push({ provider: pid, tool: m.toolName, selector: sel });
-        }
-      }
+      const tools = Object.values(data.selectors).map(sel => ({
+        provider: data.tools[sel.toolId].providerId,
+        tool: data.tools[sel.toolId].name,
+        selector: sel.canonical,
+      }));
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ tools, stats: data.stats }));
       return;
@@ -188,7 +168,7 @@ const PLAYGROUND_HTML = `<!DOCTYPE html>
     fetch('/api/tools').then(r => r.json()).then(data => {
       statsDiv.innerHTML = [
         '<span>Tools: <span class="stat-value">' + esc(data.stats.toolCount) + '</span></span>',
-        '<span>Selectors: <span class="stat-value">' + esc(data.stats.uniqueSelectorCount) + '</span></span>',
+        '<span>Selectors: <span class="stat-value">' + esc(data.stats.selectorCount) + '</span></span>',
         '<span>Providers: <span class="stat-value">' + esc(data.stats.providerCount) + '</span></span>',
       ].join('');
     });

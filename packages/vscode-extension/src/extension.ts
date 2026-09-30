@@ -138,14 +138,12 @@ function loadToolNames() {
           const content = readFileSync(file.fsPath, 'utf-8');
           const data = JSON.parse(content);
 
-          if (data.dispatchTables) {
-            for (const [providerId, table] of Object.entries(data.dispatchTables)) {
-              providerNames.push(providerId);
-              const methods = table as Record<string, { toolName: string }>;
-              for (const [, method] of Object.entries(methods)) {
-                if (method.toolName) {
-                  toolNames.push(method.toolName);
-                }
+          // Artifact format 1.0: providers and tools keyed by id
+          if (data.formatVersion === '1.0' && data.tools && data.providers) {
+            providerNames.push(...Object.keys(data.providers));
+            for (const tool of Object.values(data.tools) as Array<{ name?: string }>) {
+              if (tool.name) {
+                toolNames.push(tool.name);
               }
             }
           }

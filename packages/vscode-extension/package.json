@@ -26,7 +26,7 @@
     ],
     "jsonValidation": [
       {
-        "fileMatch": ["*-manifest.json", "*.toolkit.json", "smallchat.config.json"],
+        "fileMatch": ["*-manifest.json", "smallchat.config.json"],
         "url": "./schemas/manifest.schema.json"
       },
       {

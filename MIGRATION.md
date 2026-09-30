@@ -1,3 +1,59 @@
+# Migration Guide: 0.5 → 1.0
+
+1.0 is a major release; the sections below cover each breaking change.
+
+## Compiled artifacts (format 1.0) and embedder identity
+
+**Recompile every artifact.** 1.0 refuses 0.x `.toolkit.json` and `.db`
+artifacts ("recompile with smallchat 1.0"). Run the same command you used
+before:
+
+```bash
+smallchat compile --source ~/.mcp.json          # or ./manifests
+smallchat compile --source ./manifests -f sqlite
+```
+
+**The artifact decides the embedder.** `serve`, `resolve`, `repl` and
+`loadRuntime()` construct the embedder recorded in the artifact (ONNX by
+default) and refuse a different one. If you passed `-e local` to `resolve`
+or `repl`, drop it. In code, pass an embedder only if it matches:
+
+```typescript
+// 0.5
+const { runtime, artifact } = await loadRuntime('tools.toolkit.json');
+// artifact.dispatchTables[providerId][selector].toolName
+
+// 1.0
+const { runtime, artifact, embedder } = await loadRuntime('tools.toolkit.json');
+const tool = artifact.tools['github/create_issue'];   // description, inputSchema, annotations…
+```
+
+**`LocalEmbedder` → `HashEmbedder`.** The old name still works (deprecated).
+Use `ONNXEmbedder` (or just `loadRuntime`) for real semantic matching; the
+hash embedder is for development and tests. Custom `Embedder`
+implementations must declare a `fingerprint` (`kind: 'custom'`) to compile or
+load artifacts, and must then be passed explicitly: `loadRuntime(path, { embedder })`.
+
+**Near-duplicate tools are a compile error.** If `compile` reports
+`N pair(s) of distinct tools embed at cosine >= 0.95`, either disambiguate
+the tools (`selectorHint`, `aliases`, `exclude` compiler hints) or opt in
+with `--allow-duplicates` / `"compiler": { "allowDuplicates": true }`.
+Tools were previously merged silently (one of each pair was lost).
+`CompilerOptions.deduplicationThreshold` is now `duplicateThreshold`
+(the old name still works), and `CompilationResult.mergedCount` is gone.
+
+**ONNX is required for the default compile.** If the model cannot be
+loaded, `compile` fails instead of silently producing hash vectors. Fix the
+install (`smallchat doctor`) or compile with `--embedder hash` explicitly.
+
+**Reading artifacts yourself.** Use `readArtifact()` from
+`@smallchat/core/artifact` (validates schema, consistency and content hash)
+instead of `JSON.parse`. The format is specified in
+`spec/artifact/artifact.v1.schema.json`. `SqliteArtifactStore.save()/load()`
+now take/return `ArtifactV1`.
+
+---
+
 # Migration Guide: 0.1.0 → 0.2.0
 
 > **Historical document.** This guide is preserved for users upgrading from the original 0.1.0 release. The current published version is 0.5.0; see the [Changelog](./CHANGELOG.md) for changes since 0.2.0. Newer migrations (if any are required) will be added to that file.

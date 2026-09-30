@@ -1,141 +1,138 @@
 /**
- * Artifact — compiled tool artifact loading and serialization helpers.
+ * Artifact — load a ToolRuntime from a compiled 1.0 artifact (.json or
+ * .db) or a directory of provider manifests, plus MCP tool-list helpers.
  *
- * Handles loading a ToolRuntime from either a compiled .json artifact
- * or a directory of provider manifests.
+ * The artifact format itself (types, writer, validating reader, embedder
+ * identity) lives in src/artifact/ — see src/artifact/index.ts.
  */
 
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import type { CompilationResult, ProviderManifest, ToolResult } from '../core/types.js';
+import type { Embedder, JSONSchemaType, ProviderManifest, ToolResult, VectorIndex } from '../core/types.js';
 import { ToolClass, ToolProxy } from '../core/tool-class.js';
-import { ToolCompiler } from '../compiler/compiler.js';
-import { ToolRuntime } from '../runtime/runtime.js';
-import { LocalEmbedder } from '../embedding/local-embedder.js';
+import { ToolCompiler, type CompilerOptions } from '../compiler/compiler.js';
+import { ToolRuntime, type RuntimeOptions } from '../runtime/runtime.js';
 import { MemoryVectorIndex } from '../embedding/memory-vector-index.js';
-import { SqliteVectorIndex } from '../embedding/sqlite-vector-index.js';
-import { SqliteArtifactStore } from './sqlite-artifact.js';
 import { safeJsonParse } from '../core/safe-json.js';
 import { getTransport } from './transport.js';
-
-// ---------------------------------------------------------------------------
-// Serialized artifact shape
-// ---------------------------------------------------------------------------
-
-export interface SerializedArtifact {
-  version: string;
-  stats: {
-    toolCount: number;
-    uniqueSelectorCount: number;
-    providerCount: number;
-    collisionCount: number;
-  };
-  selectors: Record<
-    string,
-    { canonical: string; parts: string[]; arity: number; vector: number[] }
-  >;
-  dispatchTables: Record<
-    string,
-    Record<
-      string,
-      {
-        providerId: string;
-        toolName: string;
-        transportType: string;
-        inputSchema?: Record<string, unknown>;
-        compilerHints?: Record<string, unknown>;
-      }
-    >
-  >;
-  /** Provider-level compiler hints baked into this artifact */
-  providerHints?: Record<string, Record<string, unknown>>;
-}
+import type { ArtifactV1 } from '../artifact/types.js';
+import { buildArtifact } from '../artifact/format.js';
+import { isSqliteArtifactPath, readArtifact } from '../artifact/io.js';
+import {
+  createEmbedder,
+  DEFAULT_EMBEDDER_KIND,
+  fingerprintOf,
+  resolveArtifactEmbedder,
+} from '../artifact/embedder.js';
 
 // ---------------------------------------------------------------------------
 // Runtime loading
 // ---------------------------------------------------------------------------
 
-export async function loadRuntime(
-  sourcePath: string,
-): Promise<{ runtime: ToolRuntime; artifact: SerializedArtifact }> {
-  const embedder = new LocalEmbedder();
+export interface LoadRuntimeOptions {
+  /**
+   * Embedder to use. For an artifact it must match the artifact's embedder
+   * fingerprint (EmbedderMismatchError otherwise); when omitted, the
+   * embedder is constructed from the fingerprint. For a manifest
+   * directory it is the embedder to compile with (default: the compile
+   * default, ONNX).
+   */
+  embedder?: Embedder;
+  /** Options for the ToolRuntime (thresholds, LLM client, …) */
+  runtimeOptions?: RuntimeOptions;
+  /** Compiler options when `sourcePath` is a manifest directory */
+  compilerOptions?: CompilerOptions;
+}
 
-  // SQLite artifact path — use SqliteVectorIndex for pre-indexed vectors
-  if (sourcePath.endsWith('.db') && !isDirectory(sourcePath)) {
-    const store = new SqliteArtifactStore(sourcePath);
-    const artifact = store.load();
-
-    // Use a SqliteVectorIndex backed by the same database so vectors
-    // are already indexed — no re-embedding or index-build needed.
-    const vectorIndex = new SqliteVectorIndex(sourcePath);
-    const runtime = new ToolRuntime(vectorIndex, embedder);
-
-    hydrateRuntime(runtime, artifact);
-    store.close();
-    return { runtime, artifact };
-  }
-
-  const vectorIndex = new MemoryVectorIndex();
-  let artifact: SerializedArtifact;
-
-  if (sourcePath.endsWith('.json') && !isDirectory(sourcePath)) {
-    const content = readFileSync(sourcePath, 'utf-8');
-    artifact = safeJsonParse(content, { onPollution: 'strip' }) as SerializedArtifact;
-  } else {
-    const manifests = findManifests(sourcePath);
-
-    if (manifests.length === 0) {
-      console.error(
-        'No manifests found. Point to a manifest directory or compiled artifact.',
-      );
-      process.exit(1);
-    }
-
-    const compiler = new ToolCompiler(embedder, vectorIndex);
-    const result = await compiler.compile(manifests);
-    artifact = buildArtifact(result, manifests);
-  }
-
-  const runtime = new ToolRuntime(vectorIndex, embedder);
-  hydrateRuntime(runtime, artifact);
-  return { runtime, artifact };
+export interface LoadedRuntime {
+  runtime: ToolRuntime;
+  artifact: ArtifactV1;
+  /** The embedder the runtime resolves intents with (matches artifact.embedder) */
+  embedder: Embedder;
 }
 
 /**
- * Hydrate a ToolRuntime from a SerializedArtifact — shared between
- * JSON and SQLite load paths.
+ * Load a dispatch-ready ToolRuntime.
+ *
+ * `sourcePath` is a compiled artifact (`.json`, or `.db` for SQLite) or a
+ * directory of provider manifests, which is compiled in-process with the
+ * same default embedder as `smallchat compile`. Resolves only after every
+ * tool class is registered; any load error (unreadable or pre-1.0
+ * artifact, embedder mismatch, selector shadowing) rejects.
  */
-async function hydrateRuntime(runtime: ToolRuntime, artifact: SerializedArtifact): Promise<void> {
-  for (const [providerId, methods] of Object.entries(artifact.dispatchTables)) {
-    const toolClass = new ToolClass(providerId);
+export async function loadRuntime(
+  sourcePath: string,
+  options: LoadRuntimeOptions = {},
+): Promise<LoadedRuntime> {
+  let artifact: ArtifactV1;
+  let embedder: Embedder;
+  let vectorIndex: VectorIndex;
 
-    for (const [canonical, imp] of Object.entries(
-      methods as Record<
-        string,
-        {
-          providerId: string;
-          toolName: string;
-          transportType: string;
-          inputSchema?: Record<string, unknown>;
-        }
-      >,
-    )) {
-      const selectorData = artifact.selectors[canonical];
-      if (!selectorData) continue;
+  if (isDirectory(sourcePath)) {
+    const manifests = findManifests(sourcePath);
+    if (manifests.length === 0) {
+      throw new Error(
+        `No manifests found in ${sourcePath}. Point to a manifest directory or a compiled artifact.`,
+      );
+    }
+    embedder = options.embedder ?? await createEmbedder(DEFAULT_EMBEDDER_KIND);
+    const compiler = new ToolCompiler(embedder, new MemoryVectorIndex(), options.compilerOptions);
+    const result = await compiler.compile(manifests);
+    artifact = buildArtifact(result, manifests, fingerprintOf(embedder));
+    vectorIndex = new MemoryVectorIndex();
+  } else {
+    artifact = await readArtifact(sourcePath);
+    embedder = await resolveArtifactEmbedder(artifact.embedder, {
+      embedder: options.embedder,
+      source: sourcePath,
+    });
+    if (isSqliteArtifactPath(sourcePath)) {
+      // Search the vectors already indexed in the artifact database.
+      const { SqliteVectorIndex } = await import('../embedding/sqlite-vector-index.js');
+      vectorIndex = new SqliteVectorIndex(sourcePath, artifact.embedder.dims);
+    } else {
+      vectorIndex = new MemoryVectorIndex();
+    }
+  }
 
-      const vector = new Float32Array(selectorData.vector);
-      const selector = await runtime.selectorTable.intern(vector, canonical);
+  const runtime = new ToolRuntime(vectorIndex, embedder, {
+    ...options.runtimeOptions,
+    modelVersion: options.runtimeOptions?.modelVersion ?? `${artifact.embedder.kind}:${artifact.embedder.model}`,
+  });
+  await hydrateRuntime(runtime, artifact);
+  return { runtime, artifact, embedder };
+}
 
-      const inputSchema = imp.inputSchema ?? { type: 'object' };
+/**
+ * Register every provider of an artifact as a ToolClass. Each selector is
+ * registered under its exact canonical — never folded into a similar one —
+ * so distinct tools stay distinct at runtime too.
+ */
+async function hydrateRuntime(runtime: ToolRuntime, artifact: ArtifactV1): Promise<void> {
+  const classes = new Map<string, ToolClass>();
+  for (const providerId of Object.keys(artifact.providers)) {
+    classes.set(providerId, new ToolClass(providerId));
+  }
 
-      const proxy = new ToolProxy(
-        imp.providerId,
-        imp.toolName,
-        imp.transportType as 'mcp' | 'rest' | 'local' | 'grpc',
+  const proxies = new Map<string, ToolProxy>();
+  for (const selectorData of Object.values(artifact.selectors)) {
+    const tool = artifact.tools[selectorData.toolId];
+    const selector = runtime.selectorTable.register(
+      Float32Array.from(selectorData.vector),
+      selectorData.canonical,
+    );
+
+    let proxy = proxies.get(tool.id);
+    if (!proxy) {
+      const launch = artifact.providers[tool.providerId].launch;
+      proxy = new ToolProxy(
+        tool.providerId,
+        tool.name,
+        tool.transportType,
         async () => ({
-          name: imp.toolName,
-          description: canonical,
-          inputSchema: { type: 'object', ...inputSchema },
+          name: tool.name,
+          description: tool.description,
+          inputSchema: tool.inputSchema as unknown as JSONSchemaType,
           arguments: [],
         }),
         {
@@ -143,13 +140,16 @@ async function hydrateRuntime(runtime: ToolRuntime, artifact: SerializedArtifact
           optional: [],
           validate: () => ({ valid: true, errors: [] }),
         },
-        undefined,
+        launch && launch.transport !== 'stdio' ? { endpoint: launch.url } : undefined,
         getTransport,
       );
-
-      toolClass.addMethod(selector, proxy);
+      proxies.set(tool.id, proxy);
     }
 
+    classes.get(tool.providerId)!.addMethod(selector, proxy);
+  }
+
+  for (const toolClass of classes.values()) {
     runtime.registerClass(toolClass);
   }
 }
@@ -186,105 +186,22 @@ export function findManifests(dir: string): ProviderManifest[] {
 }
 
 // ---------------------------------------------------------------------------
-// Artifact construction
-// ---------------------------------------------------------------------------
-
-export function buildArtifact(
-  result: CompilationResult,
-  manifests: ProviderManifest[],
-): SerializedArtifact {
-  const schemaIndex = new Map<string, Record<string, unknown>>();
-  const hintIndex = new Map<string, Record<string, unknown>>();
-  for (const manifest of manifests) {
-    for (const tool of manifest.tools) {
-      schemaIndex.set(
-        tool.name,
-        tool.inputSchema as unknown as Record<string, unknown>,
-      );
-      if (tool.compilerHints) {
-        hintIndex.set(tool.name, tool.compilerHints as unknown as Record<string, unknown>);
-      }
-    }
-  }
-
-  const selectors: SerializedArtifact['selectors'] = {};
-  for (const [key, sel] of result.selectors) {
-    selectors[key] = {
-      canonical: sel.canonical,
-      parts: sel.parts,
-      arity: sel.arity,
-      vector: Array.from(sel.vector),
-    };
-  }
-
-  const dispatchTables: SerializedArtifact['dispatchTables'] = {};
-  for (const [providerId, table] of result.dispatchTables) {
-    const methods: Record<
-      string,
-      {
-        providerId: string;
-        toolName: string;
-        transportType: string;
-        inputSchema?: Record<string, unknown>;
-        compilerHints?: Record<string, unknown>;
-      }
-    > = {};
-    for (const [canonical, imp] of table) {
-      methods[canonical] = {
-        providerId: imp.providerId,
-        toolName: imp.toolName,
-        transportType: imp.transportType,
-        inputSchema: schemaIndex.get(imp.toolName),
-        compilerHints: hintIndex.get(imp.toolName),
-      };
-    }
-    dispatchTables[providerId] = methods;
-  }
-
-  // Collect provider-level hints
-  const providerHints: Record<string, Record<string, unknown>> = {};
-  for (const manifest of manifests) {
-    if (manifest.compilerHints) {
-      providerHints[manifest.id] = manifest.compilerHints as unknown as Record<string, unknown>;
-    }
-  }
-
-  return {
-    version: '0.5.0',
-    stats: {
-      toolCount: result.toolCount,
-      uniqueSelectorCount: result.uniqueSelectorCount,
-      providerCount: result.dispatchTables.size,
-      collisionCount: result.collisions.length,
-    },
-    selectors,
-    dispatchTables,
-    ...(Object.keys(providerHints).length > 0 ? { providerHints } : {}),
-  };
-}
-
-// ---------------------------------------------------------------------------
 // Tool list & content helpers
 // ---------------------------------------------------------------------------
 
-export function buildToolList(artifact: SerializedArtifact): object[] {
-  const tools: object[] = [];
-  for (const [_providerId, methods] of Object.entries(
-    artifact.dispatchTables,
-  )) {
-    for (const [canonical, imp] of Object.entries(methods)) {
-      const inputSchema = imp.inputSchema ?? {
-        type: 'object',
-        properties: {},
-      };
-      tools.push({
-        name: imp.toolName,
-        description: `${canonical} [${imp.providerId}]`,
-        inputSchema,
-      });
-    }
-  }
-  return tools;
+/**
+ * MCP tools/list entries for every tool in the artifact, carrying the
+ * upstream description, inputSchema, outputSchema, annotations and title.
+ */
+export function buildToolList(artifact: ArtifactV1): object[] {
+  return Object.values(artifact.tools).map(tool => ({
+    name: tool.name,
+    ...(tool.title !== undefined ? { title: tool.title } : {}),
+    description: tool.description,
+    inputSchema: tool.inputSchema,
+    ...(tool.outputSchema !== undefined ? { outputSchema: tool.outputSchema } : {}),
+    ...(tool.annotations !== undefined ? { annotations: tool.annotations } : {}),
+  }));
 }
 
 export function formatContent(

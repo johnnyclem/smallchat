@@ -115,12 +115,12 @@ export async function echo(args: { message: string }): Promise<ToolResult> {
   writeIfNotExists(join(projectDir, 'tools', 'sample-tools.ts'), toolFile);
 
   // Entry point
-  const entryPoint = `import { ToolRuntime, MemoryVectorIndex, LocalEmbedder } from '@smallchat/core';
+  const entryPoint = `import { ToolRuntime, MemoryVectorIndex, HashEmbedder } from '@smallchat/core';
 
 async function main() {
   // Create the runtime with in-memory vector index
   const vectorIndex = new MemoryVectorIndex();
-  const embedder = new LocalEmbedder();
+  const embedder = new HashEmbedder();
   const runtime = new ToolRuntime(vectorIndex, embedder);
 
   // Compile your tools
@@ -185,7 +185,7 @@ export async function currentTime(_args: Record<string, unknown>): Promise<ToolR
 }
 
 function generateAgentTemplate(projectDir: string): void {
-  const agentFile = `import { ToolRuntime, MemoryVectorIndex, LocalEmbedder } from '@smallchat/core';
+  const agentFile = `import { ToolRuntime, MemoryVectorIndex, HashEmbedder } from '@smallchat/core';
 
 /**
  * A simple agent loop that takes user input, dispatches to tools,
@@ -193,7 +193,7 @@ function generateAgentTemplate(projectDir: string): void {
  */
 async function agent() {
   const vectorIndex = new MemoryVectorIndex();
-  const embedder = new LocalEmbedder();
+  const embedder = new HashEmbedder();
   const runtime = new ToolRuntime(vectorIndex, embedder);
 
   console.log('Agent ready. Processing intents...\\n');
@@ -316,7 +316,7 @@ function generateConfig(template: string): object {
   return {
     $schema: 'https://smallchat.dev/schema/config.json',
     version: '0.1.0',
-    embedder: 'local',
+    embedder: 'hash',
     manifests: ['./manifests'],
     output: 'tools.toolkit.json',
     template,

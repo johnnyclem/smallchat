@@ -21,6 +21,8 @@ export interface ParsedTool {
   name: string;
   description: string;
   arguments: ArgumentSpec[];
+  /** The tool's full input JSON Schema, when the source provides one */
+  inputSchema?: JSONSchemaType;
   transportType: TransportType;
   /** Resolved compiler hints (merged from provider defaults + tool overrides) */
   compilerHints?: CompilerHint;
@@ -46,6 +48,7 @@ export function parseMCPManifest(manifest: ProviderManifest): ParsedTool[] {
       name: tool.name,
       description: tool.description,
       arguments: extractArguments(tool.inputSchema),
+      inputSchema: tool.inputSchema,
       transportType: manifest.transportType,
       compilerHints: mergedHints,
       providerHints: manifest.compilerHints,
@@ -151,6 +154,7 @@ export function parseRawSchema(definition: ToolDefinition): ParsedTool {
     name: definition.name,
     description: definition.description,
     arguments: extractArguments(definition.inputSchema),
+    inputSchema: definition.inputSchema,
     transportType: definition.transportType,
   };
 }

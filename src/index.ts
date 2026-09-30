@@ -31,8 +31,15 @@ export type {
   DispatchEventResolving,
   DispatchEventToolStart,
   InferenceDelta,
+  CompiledToolRef,
+  DuplicateToolPair,
   Embedder,
+  EmbedderFingerprint,
   JSONSchemaType,
+  LaunchSpec,
+  StdioLaunchSpec,
+  RemoteLaunchSpec,
+  ToolAnnotations,
   OverloadEntryData,
   OverloadTableData,
   ProviderManifest,
@@ -149,15 +156,15 @@ export { DispatchObserver } from './runtime/observer.js';
 export type { DispatchRecord, CorrectionSignal, SchemaRejection, AdaptiveThreshold, NegativeExample, ObserverOptions } from './runtime/observer.js';
 
 // Compiler
-export { ToolCompiler } from './compiler/compiler.js';
+export { ToolCompiler, DuplicateToolError, SelectorConflictError } from './compiler/compiler.js';
 export type { CompilerOptions } from './compiler/compiler.js';
 export { parseMCPManifest, parseOpenAPISpec, parseRawSchema } from './compiler/parser.js';
 export type { ParsedTool } from './compiler/parser.js';
 
 // Embedding
-export { LocalEmbedder } from './embedding/local-embedder.js';
+export { HashEmbedder, LocalEmbedder, hashFingerprint } from './embedding/hash-embedder.js';
 export { MemoryVectorIndex } from './embedding/memory-vector-index.js';
-export { ONNXEmbedder } from './embedding/onnx-embedder.js';
+export { ONNXEmbedder, onnxFingerprint } from './embedding/onnx-embedder.js';
 export type { ONNXEmbedderOptions } from './embedding/onnx-embedder.js';
 export { SqliteVectorIndex } from './embedding/sqlite-vector-index.js';
 export { EmbeddingWorkerBridge, WorkerEmbedder, createWorkerEmbedder } from './embedding/worker-embedder.js';
@@ -183,9 +190,49 @@ export type { MCPPrompt, MCPPromptArgument, MCPPromptMessage, MCPPromptContent, 
 export { RateLimiter } from './mcp/rate-limiter.js';
 export { AuditLog } from './mcp/audit-log.js';
 export type { AuditEntry } from './mcp/audit-log.js';
-export { loadRuntime, buildToolList, formatContent, findManifests, buildArtifact } from './mcp/artifact.js';
-export type { SerializedArtifact } from './mcp/artifact.js';
+export { loadRuntime, buildToolList, formatContent, findManifests } from './mcp/artifact.js';
+export type { LoadRuntimeOptions, LoadedRuntime } from './mcp/artifact.js';
 export { SqliteArtifactStore } from './mcp/sqlite-artifact.js';
+export type { SqliteArtifactStoreOptions } from './mcp/sqlite-artifact.js';
+
+// Compiled artifacts (format 1.0) and embedder identity — also importable
+// alone via `@smallchat/core/artifact`.
+export {
+  ARTIFACT_FORMAT_VERSION,
+  ArtifactFormatError,
+  ArtifactVersionError,
+  EmbedderMismatchError,
+  EmbedderUnavailableError,
+  DEFAULT_EMBEDDER_KIND,
+  buildArtifact,
+  computeContentHash,
+  validateArtifact,
+  parseArtifact,
+  serializeArtifact,
+  readArtifact,
+  writeArtifact,
+  parseEmbedderKind,
+  createEmbedder,
+  fingerprintOf,
+  fingerprintsEqual,
+  describeFingerprint,
+  assertEmbedderMatches,
+  resolveArtifactEmbedder,
+  createArtifactIndex,
+  toolId,
+  parseToolId,
+} from './artifact/index.js';
+export type {
+  ArtifactV1,
+  ArtifactProvider,
+  ArtifactTool,
+  ArtifactSelector,
+  ArtifactCollision,
+  ArtifactDuplicate,
+  ArtifactStats,
+  BuildArtifactOptions,
+  BuiltinEmbedderKind,
+} from './artifact/index.js';
 
 // Channel — Claude Code channel protocol support
 export {

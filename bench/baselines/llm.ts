@@ -13,14 +13,14 @@
  * Replace the resolve() body with actual LLM calls when API key is available.
  */
 
-import { LocalEmbedder } from '../../src/embedding/local-embedder.js';
+import { HashEmbedder } from '../../src/embedding/hash-embedder.js';
 import { MemoryVectorIndex } from '../../src/embedding/memory-vector-index.js';
 import type { BenchTool, Runner, RunnerResult, ResolvedResult } from '../runners/types.js';
 
 export class LLMBaseline implements Runner {
   name = 'llm';
   private tools: BenchTool[] = [];
-  private embedder = new LocalEmbedder(384);
+  private embedder = new HashEmbedder(384);
   private index = new MemoryVectorIndex();
   private toolById = new Map<string, BenchTool>();
   /** Simulated temperature — adds controlled noise to simulate LLM non-determinism */

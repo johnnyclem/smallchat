@@ -2,246 +2,126 @@
  * SqliteArtifactStore — persistence layer that stores compiled artifacts
  * in a SQLite database with pre-indexed vectors via sqlite-vec.
  *
- * Replaces the flat JSON artifact format for large toolsets (1000+ tools)
- * where parsing a multi-MB JSON file and rebuilding the vector index on
- * every load is too slow. The SQLite format keeps vectors pre-indexed in
- * a vec0 virtual table, so the Link phase during loadRuntime is O(rows)
- * sequential reads instead of O(n) insert + index-build.
+ * An alternative to the flat JSON artifact for large toolsets (1000+
+ * tools): selector vectors live in a vec0 virtual table (`vec_selectors`,
+ * the same table SqliteVectorIndex searches), and everything else — the
+ * 1.0 artifact minus its vectors — is one JSON document in `metadata`.
+ * load() reassembles the exact artifact that was saved, so its content
+ * hash still verifies.
  */
 
 import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
-import type { SerializedArtifact } from './artifact.js';
+import { ARTIFACT_FORMAT_VERSION, ArtifactFormatError, ArtifactVersionError, type ArtifactV1 } from '../artifact/types.js';
+import { safeJsonParse } from '../core/safe-json.js';
 
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
+export interface SqliteArtifactStoreOptions {
+  /** Open without write access (no schema creation, no WAL switch) */
+  readonly?: boolean;
+}
+
+/** Tables written by 0.x releases; dropped when a 1.0 artifact is saved. */
+const LEGACY_TABLES = ['selectors', 'dispatch_entries', 'collisions', 'channels'];
+
 export class SqliteArtifactStore {
   private db: Database.Database;
 
-  constructor(dbPath: string) {
-    this.db = new Database(dbPath);
-    this.db.pragma('journal_mode = WAL');
+  constructor(dbPath: string, options: SqliteArtifactStoreOptions = {}) {
+    this.db = new Database(dbPath, options.readonly ? { readonly: true, fileMustExist: true } : undefined);
+    if (!options.readonly) this.db.pragma('journal_mode = WAL');
     sqliteVec.load(this.db);
-    this.ensureSchema();
+    if (!options.readonly) this.ensureSchema();
   }
 
   // -----------------------------------------------------------------------
-  // Write path — called by the compiler
+  // Write path — called by writeArtifact()
   // -----------------------------------------------------------------------
 
-  /** Persist a full compiled artifact into the database (replaces previous). */
-  save(artifact: SerializedArtifact): void {
+  /** Persist a 1.0 artifact into the database (replaces any previous one). */
+  save(artifact: ArtifactV1): void {
+    const dims = artifact.embedder.dims;
     const tx = this.db.transaction(() => {
-      // Clear previous data
-      this.db.exec('DELETE FROM selectors');
-      this.db.exec('DELETE FROM vec_selectors');
-      this.db.exec('DELETE FROM dispatch_entries');
-      this.db.exec('DELETE FROM collisions');
-      this.db.exec('DELETE FROM channels');
+      for (const table of LEGACY_TABLES) this.db.exec(`DROP TABLE IF EXISTS ${table}`);
+      this.db.exec('DELETE FROM metadata');
+      // Recreate the vector table at this artifact's dimensionality.
+      this.db.exec('DROP TABLE IF EXISTS vec_selectors');
+      this.db.exec(`CREATE VIRTUAL TABLE vec_selectors USING vec0(id TEXT PRIMARY KEY, embedding FLOAT[${dims}])`);
 
-      // Upsert metadata
-      const upsertMeta = this.db.prepare(
-        `INSERT OR REPLACE INTO metadata(key, value) VALUES (?, ?)`,
-      );
-      upsertMeta.run('version', artifact.version);
-      upsertMeta.run('timestamp', (artifact as ArtifactWithTimestamp).timestamp ?? new Date().toISOString());
-
-      const embedding = (artifact as ArtifactWithEmbedding).embedding;
-      if (embedding) {
-        upsertMeta.run('embedding_model', embedding.model);
-        upsertMeta.run('embedding_dimensions', String(embedding.dimensions));
-        upsertMeta.run('embedding_type', embedding.embedderType);
+      const insertVec = this.db.prepare('INSERT INTO vec_selectors(id, embedding) VALUES (?, ?)');
+      const skeleton: ArtifactV1 = { ...artifact, selectors: {} };
+      for (const [canonical, selector] of Object.entries(artifact.selectors)) {
+        skeleton.selectors[canonical] = { ...selector, vector: [] };
+        const vec = new Float32Array(selector.vector);
+        insertVec.run(canonical, Buffer.from(vec.buffer, vec.byteOffset, vec.byteLength));
       }
 
-      // Stats
-      upsertMeta.run('stat_toolCount', String(artifact.stats.toolCount));
-      upsertMeta.run('stat_uniqueSelectorCount', String(artifact.stats.uniqueSelectorCount));
-      upsertMeta.run('stat_providerCount', String(artifact.stats.providerCount));
-      upsertMeta.run('stat_collisionCount', String(artifact.stats.collisionCount));
-      if ('mergedCount' in artifact.stats) {
-        upsertMeta.run('stat_mergedCount', String((artifact.stats as StatsWithMerged).mergedCount));
-      }
-      if ('channelCount' in artifact.stats) {
-        upsertMeta.run('stat_channelCount', String((artifact.stats as StatsWithChannel).channelCount));
-      }
-
-      // Selectors + vectors
-      const insertSelector = this.db.prepare(
-        `INSERT INTO selectors(canonical, parts, arity) VALUES (?, ?, ?)`,
-      );
-      const insertVec = this.db.prepare(
-        `INSERT INTO vec_selectors(id, embedding) VALUES (?, ?)`,
-      );
-
-      for (const [key, sel] of Object.entries(artifact.selectors)) {
-        insertSelector.run(key, JSON.stringify(sel.parts), sel.arity);
-        const vec = new Float32Array(sel.vector);
-        const buf = Buffer.from(vec.buffer, vec.byteOffset, vec.byteLength);
-        insertVec.run(key, buf);
-      }
-
-      // Dispatch entries
-      const insertDispatch = this.db.prepare(
-        `INSERT INTO dispatch_entries(provider_id, canonical, tool_name, transport_type, input_schema)
-         VALUES (?, ?, ?, ?, ?)`,
-      );
-
-      for (const [providerId, methods] of Object.entries(artifact.dispatchTables)) {
-        for (const [canonical, imp] of Object.entries(methods)) {
-          insertDispatch.run(
-            providerId,
-            canonical,
-            imp.toolName,
-            imp.transportType,
-            imp.inputSchema ? JSON.stringify(imp.inputSchema) : null,
-          );
-        }
-      }
-
-      // Collisions (from extended artifact)
-      const collisions = (artifact as ArtifactWithCollisions).collisions;
-      if (collisions && collisions.length > 0) {
-        const insertCollision = this.db.prepare(
-          `INSERT INTO collisions(selector_a, selector_b, similarity, hint) VALUES (?, ?, ?, ?)`,
-        );
-        for (const c of collisions) {
-          insertCollision.run(c.selectorA, c.selectorB, c.similarity, c.hint);
-        }
-      }
-
-      // Channels (from extended artifact)
-      const channels = (artifact as ArtifactWithChannels).channels;
-      if (channels) {
-        const insertChannel = this.db.prepare(
-          `INSERT INTO channels(provider_id, config) VALUES (?, ?)`,
-        );
-        for (const [id, cfg] of Object.entries(channels)) {
-          insertChannel.run(id, JSON.stringify(cfg));
-        }
-      }
+      const upsertMeta = this.db.prepare('INSERT OR REPLACE INTO metadata(key, value) VALUES (?, ?)');
+      upsertMeta.run('format_version', artifact.formatVersion);
+      upsertMeta.run('content_hash', artifact.contentHash);
+      upsertMeta.run('artifact', JSON.stringify(skeleton));
     });
 
     tx();
   }
 
   // -----------------------------------------------------------------------
-  // Read path — called by loadRuntime
+  // Read path — called by readArtifact()
   // -----------------------------------------------------------------------
 
-  /** Load the full artifact from the database. */
-  load(): SerializedArtifact {
-    // Metadata
-    const metaRows = this.db.prepare('SELECT key, value FROM metadata').all() as Array<{ key: string; value: string }>;
-    const meta = new Map(metaRows.map(r => [r.key, r.value]));
+  /**
+   * Load the artifact from the database. The caller validates it
+   * (readArtifact does); a pre-1.0 database throws ArtifactVersionError.
+   */
+  load(): ArtifactV1 {
+    const hasMetadata = this.db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'metadata'")
+      .get();
+    const meta = new Map(
+      hasMetadata
+        ? (this.db.prepare('SELECT key, value FROM metadata').all() as Array<{ key: string; value: string }>)
+            .map(r => [r.key, r.value])
+        : [],
+    );
 
-    // Selectors
-    const selectorRows = this.db.prepare('SELECT canonical, parts, arity FROM selectors').all() as Array<{
-      canonical: string;
-      parts: string;
-      arity: number;
-    }>;
-
-    // Vectors — read raw blobs from vec_selectors via the shadow rowid table
-    const selectors: SerializedArtifact['selectors'] = {};
-    for (const row of selectorRows) {
-      const vecRow = this.db.prepare(
-        'SELECT embedding FROM vec_selectors WHERE id = ?',
-      ).get(row.canonical) as { embedding: Buffer } | undefined;
-
-      const vector = vecRow
-        ? Array.from(new Float32Array(vecRow.embedding.buffer, vecRow.embedding.byteOffset, vecRow.embedding.byteLength / 4))
-        : [];
-
-      selectors[row.canonical] = {
-        canonical: row.canonical,
-        parts: JSON.parse(row.parts),
-        arity: row.arity,
-        vector,
-      };
-    }
-
-    // Dispatch tables
-    const dispatchRows = this.db.prepare(
-      'SELECT provider_id, canonical, tool_name, transport_type, input_schema FROM dispatch_entries',
-    ).all() as Array<{
-      provider_id: string;
-      canonical: string;
-      tool_name: string;
-      transport_type: string;
-      input_schema: string | null;
-    }>;
-
-    const dispatchTables: SerializedArtifact['dispatchTables'] = {};
-    for (const row of dispatchRows) {
-      if (!dispatchTables[row.provider_id]) {
-        dispatchTables[row.provider_id] = {};
+    const formatVersion = meta.get('format_version');
+    if (formatVersion === undefined) {
+      const legacy = meta.get('version');
+      if (legacy !== undefined) {
+        throw new ArtifactVersionError(
+          `${this.db.name} is a pre-1.0 smallchat artifact (version ${legacy}); ` +
+          'recompile with smallchat 1.0 (`smallchat compile --format sqlite`).',
+        );
       }
-      dispatchTables[row.provider_id][row.canonical] = {
-        providerId: row.provider_id,
-        toolName: row.tool_name,
-        transportType: row.transport_type,
-        inputSchema: row.input_schema ? JSON.parse(row.input_schema) : undefined,
-      };
+      throw new ArtifactFormatError(`${this.db.name} does not contain a smallchat artifact`);
+    }
+    if (formatVersion !== ARTIFACT_FORMAT_VERSION) {
+      throw new ArtifactVersionError(
+        `${this.db.name} has formatVersion "${formatVersion}"; this smallchat reads "${ARTIFACT_FORMAT_VERSION}"`,
+      );
     }
 
-    // Collisions
-    const collisionRows = this.db.prepare(
-      'SELECT selector_a, selector_b, similarity, hint FROM collisions',
-    ).all() as Array<{ selector_a: string; selector_b: string; similarity: number; hint: string }>;
-
-    // Channels
-    const channelRows = this.db.prepare(
-      'SELECT provider_id, config FROM channels',
-    ).all() as Array<{ provider_id: string; config: string }>;
-    const channels: Record<string, object> = {};
-    for (const row of channelRows) {
-      channels[row.provider_id] = JSON.parse(row.config);
+    const artifact = safeJsonParse(meta.get('artifact') ?? 'null') as ArtifactV1 | null;
+    if (!artifact || typeof artifact !== 'object' || typeof artifact.selectors !== 'object') {
+      throw new ArtifactFormatError(`${this.db.name} has a damaged artifact record`);
     }
 
-    const artifact: Record<string, unknown> = {
-      version: meta.get('version') ?? '0.1.0',
-      timestamp: meta.get('timestamp'),
-      stats: {
-        toolCount: parseInt(meta.get('stat_toolCount') ?? '0', 10),
-        uniqueSelectorCount: parseInt(meta.get('stat_uniqueSelectorCount') ?? '0', 10),
-        providerCount: parseInt(meta.get('stat_providerCount') ?? '0', 10),
-        collisionCount: parseInt(meta.get('stat_collisionCount') ?? '0', 10),
-        ...(meta.has('stat_mergedCount') ? { mergedCount: parseInt(meta.get('stat_mergedCount')!, 10) } : {}),
-        ...(meta.has('stat_channelCount') ? { channelCount: parseInt(meta.get('stat_channelCount')!, 10) } : {}),
-      },
-      selectors,
-      dispatchTables,
-    };
-
-    if (meta.has('embedding_model')) {
-      artifact.embedding = {
-        model: meta.get('embedding_model'),
-        dimensions: parseInt(meta.get('embedding_dimensions') ?? '384', 10),
-        embedderType: meta.get('embedding_type') ?? 'local',
-      };
+    const readVec = this.db.prepare('SELECT embedding FROM vec_selectors WHERE id = ?');
+    for (const [canonical, selector] of Object.entries(artifact.selectors)) {
+      const row = readVec.get(canonical) as { embedding: Buffer } | undefined;
+      if (!row) {
+        throw new ArtifactFormatError(`${this.db.name} is missing the vector for selector ${canonical}`);
+      }
+      selector.vector = Array.from(toFloat32(row.embedding));
     }
-
-    if (collisionRows.length > 0) {
-      artifact.collisions = collisionRows.map(r => ({
-        selectorA: r.selector_a,
-        selectorB: r.selector_b,
-        similarity: r.similarity,
-        hint: r.hint,
-      }));
-    }
-
-    if (Object.keys(channels).length > 0) {
-      artifact.channels = channels;
-    }
-
-    return artifact as unknown as SerializedArtifact;
+    return artifact;
   }
 
   // -----------------------------------------------------------------------
-  // Direct vector index access — used by loadRuntime to populate the
-  // runtime's VectorIndex without re-embedding
+  // Direct vector index access
   // -----------------------------------------------------------------------
 
   /** Return all selector vectors as { id, vector } pairs for bulk-loading. */
@@ -250,19 +130,12 @@ export class SqliteArtifactStore {
       'SELECT id, embedding FROM vec_selectors',
     ).all() as Array<{ id: string; embedding: Buffer }>;
 
-    return rows.map(row => ({
-      id: row.id,
-      vector: new Float32Array(
-        row.embedding.buffer,
-        row.embedding.byteOffset,
-        row.embedding.byteLength / 4,
-      ),
-    }));
+    return rows.map(row => ({ id: row.id, vector: toFloat32(row.embedding) }));
   }
 
-  /** Number of selectors stored. */
+  /** Number of selector vectors stored. */
   selectorCount(): number {
-    const row = this.db.prepare('SELECT count(*) as cnt FROM selectors').get() as { cnt: number };
+    const row = this.db.prepare('SELECT count(*) as cnt FROM vec_selectors').get() as { cnt: number };
     return row.cnt;
   }
 
@@ -281,76 +154,13 @@ export class SqliteArtifactStore {
         key   TEXT PRIMARY KEY,
         value TEXT NOT NULL
       );
-
-      CREATE TABLE IF NOT EXISTS selectors (
-        canonical TEXT PRIMARY KEY,
-        parts     TEXT NOT NULL,   -- JSON array
-        arity     INTEGER NOT NULL
-      );
-
-      CREATE VIRTUAL TABLE IF NOT EXISTS vec_selectors USING vec0(
-        id        TEXT PRIMARY KEY,
-        embedding FLOAT[384]
-      );
-
-      CREATE TABLE IF NOT EXISTS dispatch_entries (
-        provider_id    TEXT NOT NULL,
-        canonical      TEXT NOT NULL,
-        tool_name      TEXT NOT NULL,
-        transport_type TEXT NOT NULL,
-        input_schema   TEXT,         -- JSON or NULL
-        PRIMARY KEY (provider_id, canonical)
-      );
-
-      CREATE TABLE IF NOT EXISTS collisions (
-        selector_a TEXT NOT NULL,
-        selector_b TEXT NOT NULL,
-        similarity REAL NOT NULL,
-        hint       TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS channels (
-        provider_id TEXT PRIMARY KEY,
-        config      TEXT NOT NULL   -- JSON
-      );
     `);
   }
 }
 
-// ---------------------------------------------------------------------------
-// Internal type extensions for the full serialized artifact shape
-// (the core SerializedArtifact type is minimal; the compiler emits extras)
-// ---------------------------------------------------------------------------
-
-interface ArtifactWithTimestamp {
-  timestamp?: string;
-}
-
-interface ArtifactWithEmbedding {
-  embedding?: {
-    model: string;
-    dimensions: number;
-    embedderType: string;
-  };
-}
-
-interface ArtifactWithCollisions {
-  collisions?: Array<{
-    selectorA: string;
-    selectorB: string;
-    similarity: number;
-    hint: string;
-  }>;
-}
-
-interface ArtifactWithChannels {
-  channels?: Record<string, object>;
-}
-
-interface StatsWithMerged {
-  mergedCount: number;
-}
-
-interface StatsWithChannel {
-  channelCount: number;
+function toFloat32(buf: Buffer): Float32Array {
+  // Copy: the Buffer may not be 4-byte aligned within its ArrayBuffer.
+  const copy = new Uint8Array(buf.byteLength);
+  copy.set(buf);
+  return new Float32Array(copy.buffer);
 }

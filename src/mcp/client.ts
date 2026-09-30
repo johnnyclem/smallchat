@@ -9,7 +9,7 @@ import { execSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { readFileSync, existsSync, statSync } from 'node:fs';
 import { resolve, join } from 'node:path';
-import type { ProviderManifest, ToolDefinition, JSONSchemaType } from '../core/types.js';
+import type { ProviderManifest, ToolDefinition, JSONSchemaType, LaunchSpec, ToolAnnotations } from '../core/types.js';
 import type { ContainerSandboxConfig } from '../transport/types.js';
 import { spawnMcpProcess } from '../transport/container-sandbox.js';
 
@@ -42,8 +42,11 @@ export interface IntrospectionResult {
 
 export interface McpToolResult {
   name: string;
+  title?: string;
   description?: string;
   inputSchema?: Record<string, unknown>;
+  outputSchema?: Record<string, unknown>;
+  annotations?: ToolAnnotations;
 }
 
 // ---------------------------------------------------------------------------
@@ -291,7 +294,7 @@ export async function introspectMcpConfigFile(
       continue;
     }
 
-    const manifest = introspectionToManifest(result);
+    const manifest = introspectionToManifest(result, stdioLaunch(config));
     manifests.push(manifest);
     console.log(`  ${serverId}: ${result.tools.length} tools discovered`);
   }
@@ -395,10 +398,8 @@ export async function introspectLocalMcpServer(
 
   console.log(`  Spawning node ${entryPoint}...`);
 
-  const result = await introspectMcpServer(serverId, {
-    command: 'node',
-    args: [fullEntryPath],
-  }, options);
+  const serverConfig: McpServerConfig = { command: 'node', args: [fullEntryPath] };
+  const result = await introspectMcpServer(serverId, serverConfig, options);
 
   if (result.error) {
     console.error(`  Introspection failed: ${result.error}`);
@@ -407,7 +408,7 @@ export async function introspectLocalMcpServer(
 
   console.log(`  ${serverName}: ${result.tools.length} tools discovered`);
 
-  return introspectionToManifest(result);
+  return introspectionToManifest(result, stdioLaunch(serverConfig));
 }
 
 // ---------------------------------------------------------------------------
@@ -415,13 +416,31 @@ export async function introspectLocalMcpServer(
 // ---------------------------------------------------------------------------
 
 /**
- * Convert an IntrospectionResult to a ProviderManifest.
+ * The launch spec recorded for a stdio server: command and args as
+ * configured, environment variables by NAME only (values — tokens, keys —
+ * never leave the config file).
  */
-function introspectionToManifest(result: IntrospectionResult): ProviderManifest {
+function stdioLaunch(config: McpServerConfig): LaunchSpec {
+  return {
+    transport: 'stdio',
+    command: config.command,
+    args: [...(config.args ?? [])],
+    env: Object.keys(config.env ?? {}),
+  };
+}
+
+/**
+ * Convert an IntrospectionResult to a ProviderManifest, keeping the
+ * upstream tool definition (title, inputSchema, outputSchema, annotations).
+ */
+function introspectionToManifest(result: IntrospectionResult, launch?: LaunchSpec): ProviderManifest {
   const tools: ToolDefinition[] = result.tools.map((t) => ({
     name: t.name,
+    ...(typeof t.title === 'string' ? { title: t.title } : {}),
     description: t.description ?? t.name,
     inputSchema: (t.inputSchema as unknown as JSONSchemaType) ?? { type: 'object', properties: {} },
+    ...(isObject(t.outputSchema) ? { outputSchema: t.outputSchema } : {}),
+    ...(isObject(t.annotations) ? { annotations: t.annotations } : {}),
     providerId: result.serverId,
     transportType: 'mcp' as const,
   }));
@@ -443,6 +462,7 @@ function introspectionToManifest(result: IntrospectionResult): ProviderManifest 
     name: result.serverInfo?.name ?? result.serverId,
     transportType: 'mcp',
     tools,
+    ...(launch ? { launch } : {}),
   };
 
   if (isChannel) {
@@ -456,4 +476,8 @@ function introspectionToManifest(result: IntrospectionResult): ProviderManifest 
   }
 
   return manifest;
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

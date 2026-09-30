@@ -36,13 +36,11 @@ You should see the intent resolve to the `greet` tool with high confidence.
 Edit `src/index.ts`:
 
 ```typescript
-import { ToolRuntime, MemoryVectorIndex, LocalEmbedder } from '@smallchat/core';
+import { loadRuntime } from '@smallchat/core';
 
 async function main() {
-  const runtime = new ToolRuntime(
-    new MemoryVectorIndex(),
-    new LocalEmbedder(),
-  );
+  // Uses the embedder recorded in the artifact (ONNX by default)
+  const { runtime } = await loadRuntime('tools.toolkit.json');
 
   // Simple dispatch
   const result = await runtime.dispatch('greet someone', { name: 'World' });

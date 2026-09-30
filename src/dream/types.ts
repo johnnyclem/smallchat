@@ -115,8 +115,8 @@ export interface DreamConfig {
   outputPath: string;
   /** Source manifest path/directory (same as compile --source). */
   sourcePath?: string;
-  /** Embedder type for compilation. */
-  embedder: 'onnx' | 'local';
+  /** Embedder for compilation: 'onnx' (default) or 'hash' ('local' is the 0.x name of 'hash'). */
+  embedder: 'onnx' | 'hash' | 'local';
 }
 
 // ---------------------------------------------------------------------------

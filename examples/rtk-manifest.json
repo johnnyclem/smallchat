@@ -79,7 +79,7 @@
       },
       "compilerHints": {
         "selectorHint": "rust cargo tests unit integration run test suite",
-        "aliases": ["cargo test", "run rust tests", "run tests", "test rust", "cargo tests"]
+        "aliases": ["cargo test", "run rust tests", "test rust", "cargo tests"]
       }
     },
     {
@@ -132,7 +132,7 @@
       },
       "compilerHints": {
         "selectorHint": "npm node javascript typescript jest vitest mocha tests",
-        "aliases": ["npm test", "run npm tests", "run javascript tests", "vitest", "jest", "run tests"]
+        "aliases": ["npm test", "run npm tests", "run javascript tests", "vitest", "jest"]
       }
     },
     {
