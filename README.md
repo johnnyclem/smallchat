@@ -161,7 +161,7 @@ await upstreams.close(); // stops stdio upstream MCP servers
 - **Exact by construction.** Arguments are validated against each tool's JSON Schema before anything runs; artifacts (format 1.0) are content-hashed and pinned to the embedder that produced their vectors; every decision carries a replayable proof with a canonical call digest. `spec/` holds the cross-implementation vectors (call digest, tool id, ranking, resolve outcomes, artifact).
 - **Intents are never interned.** Runtime intents are embedded on their own and never enter the selector table, so they cannot leak into the tool list, shadow tools in suggestions, or change how later intents rank.
 - **`smallchat serve` is an exact MCP aggregator** on the official SDK (stdio by default, Streamable HTTP with a bearer token), with `smallchat_resolve` for semantic lookup; replay, explain and a hash-chained decision log make decisions checkable.
-- **Truth-ledger interop** comes from `@shorthand/core` 1.0 (a registry dependency): stenographer's Truth Format v2, re-exported from `@smallchat/core` (`TruthAwareCompactor`, `parseWikiLines`, `selectCurrentTruth`, `proposeInvariants`, …).
+- **The root entry is the inference core.** Compaction, CRDT memory, importance scoring and truth-ledger interop (stenographer's Truth Format v2) come from `@shorthand/core` 1.0, a registry dependency: import `@shorthand/core/<module>` (the `@smallchat/core/compaction`, `/crdt`, `/importance` and `/truth` subpaths re-export it and are deprecated). Memex and dream are experimental (`@smallchat/core/memex`, `@smallchat/core/dream`).
 
 ### 0.5.0
 

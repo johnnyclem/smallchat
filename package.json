@@ -39,13 +39,33 @@
       "types": "./dist/channel/index.d.ts",
       "import": "./dist/channel/index.js"
     },
+    "./app": {
+      "types": "./dist/app/index.d.ts",
+      "import": "./dist/app/index.js"
+    },
+    "./compaction": {
+      "types": "./dist/compaction/index.d.ts",
+      "import": "./dist/compaction/index.js"
+    },
+    "./crdt": {
+      "types": "./dist/crdt/index.d.ts",
+      "import": "./dist/crdt/index.js"
+    },
     "./importance": {
       "types": "./dist/importance/index.d.ts",
       "import": "./dist/importance/index.js"
     },
-    "./app": {
-      "types": "./dist/app/index.d.ts",
-      "import": "./dist/app/index.js"
+    "./truth": {
+      "types": "./dist/truth/index.d.ts",
+      "import": "./dist/truth/index.js"
+    },
+    "./memex": {
+      "types": "./dist/memex/index.d.ts",
+      "import": "./dist/memex/index.js"
+    },
+    "./dream": {
+      "types": "./dist/dream/index.d.ts",
+      "import": "./dist/dream/index.js"
     }
   },
   "bin": {

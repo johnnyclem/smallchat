@@ -1,22 +1,22 @@
 // smallchat — Semantic Tool Inference
 // v1.0 — message-passing dispatch from intent to tool.
 //
-// This package is organized in two tiers:
+// The root entry (`@smallchat/core`) is the tool inference core and the
+// surfaces built on it: resolving an intent to the right tool (selectors,
+// dispatch tables, confidence tiers, resolution proofs, one dispatch policy,
+// argument validation), embeddings and compiled artifacts, the compiler, the
+// MCP server and clients, transports and the channel bridge.
+// `@smallchat/core/inference` is the engine alone.
 //
-//   TIER 1 — TOOL INFERENCE CORE (the durable engine)
-//     Resolving an intent to the right tool: selectors, dispatch tables,
-//     confidence tiers, resolution proofs, the verify → decompose → refine →
-//     observe fallback chain, embeddings, and the MCP serving surface. Its
-//     value does not depend on the price of tokens. Import it alone via
-//     `@smallchat/core/inference`.
-//
-//   TIER 2 — OPTIMIZATION SATELLITES (today's token economics; optional)
-//     Compaction, knowledge pre-compilation (memex), CRDT memory, importance
-//     scoring, and dream recompilation. These reduce token spend — a real
-//     problem now, but one that fades as tokens get cheap. They orbit the
-//     core; they are not the thesis. Each Tier-2 section is tagged below.
+// The optimization satellites are not re-exported here (1.0 breaking change):
+//   - compaction, CRDT memory, importance scoring and truth-ledger interop
+//     live in `@shorthand/core` (a dependency). `@smallchat/core/compaction`,
+//     `/crdt`, `/importance` and `/truth` re-export it unchanged and are
+//     deprecated: import `@shorthand/core/<module>` directly.
+//   - knowledge pre-compilation and dream recompilation are experimental:
+//     `@smallchat/core/memex`, `@smallchat/core/dream`.
 
-// ===== TIER 1 — TOOL INFERENCE CORE (the durable engine) =====
+// ===== TOOL INFERENCE CORE =====
 
 // Core types
 export type {
@@ -356,207 +356,6 @@ export type {
   ChannelMessage,
 } from './channel/index.js';
 
-// [satellite] Dream — memory-driven tool re-compilation
-export { compileLatest, dream } from './dream/dream-compiler.js';
-export type { CompileLatestOptions } from './dream/dream-compiler.js';
-export { readMemoryFiles, extractToolMentions } from './dream/memory-reader.js';
-export { discoverLogFiles, analyzeSessionLog, aggregateUsageStats } from './dream/log-analyzer.js';
-export { prioritizeTools, generateReport } from './dream/tool-prioritizer.js';
-export { loadDreamConfig, saveDreamConfig, DEFAULT_DREAM_CONFIG } from './dream/config.js';
-export {
-  loadManifest as loadArtifactManifest,
-  archiveCurrentArtifact,
-  promoteArtifact,
-  rollbackToFallback,
-  pruneOldVersions,
-  listVersions,
-} from './dream/artifact-versioning.js';
-export type {
-  ToolUsageRecord,
-  ToolUsageStats,
-  MemoryFileContent,
-  MemoryToolMention,
-  ToolPriorityHints,
-  DreamAnalysis,
-  DreamResult,
-  DreamConfig,
-  ArtifactVersion,
-  ArtifactManifest,
-} from './dream/types.js';
-
-// [satellite] Memex — knowledge base compiler
-export {
-  compile as memexCompile,
-  ingest as memexIngest,
-  cosineSimilarity as memexCosineSimilarity,
-  serializeKnowledgeBase,
-  deserializeKnowledgeBase,
-} from './memex/knowledge-compiler.js';
-export type { CompileOptions as MemexCompileOptions } from './memex/knowledge-compiler.js';
-export {
-  resolveQuery as memexResolveQuery,
-  computeTier as memexComputeTier,
-  DEFAULT_KNOWLEDGE_THRESHOLDS,
-} from './memex/resolver.js';
-export type { KnowledgeTierThresholds, ResolverOptions as MemexResolverOptions } from './memex/resolver.js';
-export {
-  lint as memexLint,
-  listLintRules as memexListLintRules,
-} from './memex/lint.js';
-export {
-  loadMemexConfig,
-  saveMemexConfig,
-  DEFAULT_MEMEX_CONFIG,
-  loadKnowledgeSchema,
-  saveKnowledgeSchema,
-  DEFAULT_KNOWLEDGE_SCHEMA,
-} from './memex/config.js';
-export {
-  discoverSources,
-  readSource as readKnowledgeSource,
-  readSources as readKnowledgeSources,
-  inferSourceType,
-  hashFileContents,
-  stripMarkdown,
-} from './memex/source-reader.js';
-export type { SourceContent } from './memex/source-reader.js';
-export {
-  extractKnowledge,
-  extractKnowledgeBatch,
-  mergeKnowledgeIRs,
-  slugify,
-} from './memex/claim-extractor.js';
-export {
-  emitWikiPages,
-  emitWikiIndex,
-  renderIndexMarkdown,
-  renderLogMarkdown,
-} from './memex/wiki-emitter.js';
-export type {
-  SourceType,
-  KnowledgeSource,
-  ExtractedClaim as MemexExtractedClaim,
-  ExtractedEntity as MemexExtractedEntity,
-  ExtractedRelationship,
-  KnowledgeIR,
-  ClaimSelector,
-  WikiPage,
-  WikiIndex,
-  IngestionLogEntry,
-  KnowledgeBase,
-  Contradiction,
-  KnowledgeConfidenceTier,
-  KnowledgeResult,
-  LintSeverity,
-  LintFinding,
-  LintReport,
-  IngestResult,
-  KnowledgeSchema,
-  LintRuleConfig,
-  MemexOutputConfig,
-  MemexCompilerConfig,
-  MemexConfig,
-  MemexCompileResult,
-} from './memex/types.js';
-
-// [satellite] Compaction — token compression, re-exported from @shorthand/core
-export {
-  DefaultCompactor,
-  estimateTokens,
-  estimateConversationTokens,
-  extractEntities,
-  extractDecisions,
-  detectTombstones,
-  DefaultQuizGenerator,
-  DefaultQuizEvaluator,
-  tokenOverlapScore,
-  runRecallTest,
-  correctionPropagation,
-  entityProvenance,
-  decisionCompleteness,
-  tombstoneConsistency,
-  temporalOrdering,
-  BUILTIN_INVARIANTS,
-  checkInvariants,
-  tokenize,
-  shannonEntropy,
-  totalInformationBits,
-  computeEntropyMetrics,
-  computeRateDistortion,
-  measureEntityRetention,
-  analyzeInformationTheoretic,
-  VerificationHarness,
-  DEFAULT_VERIFICATION_CONFIG,
-} from '@shorthand/core/compaction';
-export type {
-  CompactedState,
-  CompactionInvariant,
-  CompactionLevel,
-  CompactionVerificationConfig,
-  Compactor,
-  ConversationHistory,
-  ConversationMessage,
-  Decision,
-  EntityCorrection,
-  EntityRetention,
-  EntropyMetrics,
-  ExtractedEntity,
-  InformationTheoreticResult,
-  InvariantCheckResult,
-  InvariantViolation,
-  QuizEvaluator,
-  QuizGenerator,
-  RateDistortionMetrics,
-  RecallAnswer,
-  RecallQuestion,
-  RecallTestResult,
-  Tombstone,
-} from '@shorthand/core/compaction';
-// VerificationResult name collides with core/types — export under alias
-export type { VerificationResult as CompactionVerificationResult } from '@shorthand/core/compaction';
-
-// [satellite] Truth ledger interop — stenographer TB/UV v2 JSONL seam,
-// re-exported from @shorthand/core
-export {
-  CONSUMPTION_RULES,
-  isAnonymousIdentity,
-  assertAccountableAuthor,
-  ulid,
-  wikiLineToEntry,
-  entryToWikiLine,
-  parseWikiLines,
-  serializeWikiEntries,
-  readWikiFile,
-  writeWikiFile,
-  classifyEntry,
-  selectCurrentTruth,
-  renderTruthSection,
-  applyTruthToCompactedState,
-  TruthAwareCompactor,
-  truthToInvariantRecords,
-  proposeInvariants,
-  serializeProposals,
-  appendProposalsFile,
-} from '@shorthand/core/truth';
-export type {
-  TruthConfidence,
-  TbStatus,
-  UvStatus,
-  TruthEvidence,
-  TruthVerifyBy,
-  WikiEntryLine,
-  TruthTbEntry,
-  TruthUvEntry,
-  TruthLedgerEntry,
-  ConsumptionAction,
-  TruthSelection,
-  CompactedTruth,
-  InvariantProposalLine,
-  WikiParseResult,
-  TruthInvariantRecord,
-  ProposeInvariantsOptions,
-} from '@shorthand/core/truth';
-
 // Transport Layer — ITransport interface and implementations
 export type {
   ITransport,
@@ -632,53 +431,6 @@ export {
   buildDockerArgs,
   isDockerAvailable,
 } from './transport/index.js';
-
-// [satellite] CRDT — multi-agent shared memory, re-exported from @shorthand/core
-export {
-  LamportClock,
-  compareLamport,
-  createVectorClock,
-  tickVectorClock,
-  mergeVectorClocks,
-  compareVectorClocks,
-  LWWRegister,
-  ORSet,
-  GSet,
-  defaultMergeFn,
-  RGA,
-  AgentMemory,
-  MemoryMerge,
-  ConflictDetector,
-} from '@shorthand/core/crdt';
-export type {
-  AgentId,
-  LamportTimestamp,
-  VectorClock,
-  UniqueTag,
-  CausalMeta,
-  MergeResult,
-  CRDTInterface,
-  LWWEntry,
-  LWWRegisterState,
-  ORSetState,
-  GSetEntry,
-  GSetState,
-  GSetMergeFn,
-  RGANodeId,
-  RGANode,
-  RGAState,
-  MemoryLayer,
-  L4Invariants,
-  L3Entity,
-  L3Edge,
-  L3Graph,
-  L2Summary,
-  L1Context,
-  L0Message,
-  AgentMemoryState,
-  SemanticConflict,
-  ConflictSeverity,
-} from '@shorthand/core/crdt';
 
 // Manifest types
 export type {

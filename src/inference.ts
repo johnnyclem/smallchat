@@ -1,17 +1,18 @@
 // smallchat — Tool Inference Engine
 //
 // This is the durable core of smallchat: resolving a natural-language intent
-// to the correct tool — semantically, deterministically, with a proof and a
-// self-healing fallback chain. It is the part of the system whose value does
-// NOT depend on the price of tokens. Even in a future where token costs are
-// nominal, deterministic microsecond tool selection — with auditable
-// resolution proofs and governance — is what an agent needs.
+// to at most one tool, with a replayable resolution proof, and executing only
+// what resolved. It is the part of the system whose value does NOT depend on
+// the price of tokens. "Deterministic" here means: the same artifact, embedder
+// and runtime state give the same outcome, candidate order and proof digest
+// for the same intent text (LLM verifier answers are inputs, not covered).
 //
 // Token compaction, output compression (RTK), knowledge pre-compilation
-// (memex), CRDT memory, and importance scoring are *optimization satellites*
-// that orbit this core. They address today's token economics. They are
-// exported from the package root (`@smallchat/core`) but deliberately NOT
-// from this entry point, which is the engine and nothing else.
+// (memex), CRDT memory, and importance scoring are *optimization satellites*.
+// Neither this entry point nor the package root (`@smallchat/core`)
+// re-exports them: compaction, CRDT, importance and truth live in
+// `@shorthand/core`; memex and dream are the experimental
+// `@smallchat/core/memex` and `@smallchat/core/dream` subpaths.
 //
 // Import the engine alone:   import { ToolRuntime } from '@smallchat/core/inference';
 

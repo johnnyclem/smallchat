@@ -1,5 +1,12 @@
 /**
- * Dream module — memory-driven tool re-compilation.
+ * `@smallchat/core/dream` — memory-driven tool re-compilation.
+ *
+ * @experimental Dream is an optimization satellite, not part of the
+ * inference core: its API, heuristics and versioning layout may change in
+ * any 1.x release, and it is not covered by the 1.0 claims in the README.
+ * Its usage statistics come from heuristics over session logs; it proposes
+ * exclusions but never applies one unless configured to. The root entry
+ * (`@smallchat/core`) no longer re-exports it.
  */
 
 export { compileLatest, dream } from './dream-compiler.js';

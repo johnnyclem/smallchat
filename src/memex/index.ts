@@ -1,10 +1,15 @@
 /**
- * Memex — the knowledge base compiler module.
+ * `@smallchat/core/memex` — the knowledge base compiler module.
  *
  * Compiles document sources into a persistent, cross-referenced knowledge
  * wiki with semantic search, incremental ingestion, and lint checks.
  *
  * Inspired by Vannevar Bush's Memex (1945) and Karpathy's LLM Wiki pattern.
+ *
+ * @experimental Memex is an optimization satellite, not part of the
+ * inference core: its API, file formats and heuristics may change in any
+ * 1.x release, and it is not covered by the 1.0 claims in the README.
+ * The root entry (`@smallchat/core`) no longer re-exports it.
  */
 
 // Types

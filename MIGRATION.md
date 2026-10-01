@@ -2,17 +2,65 @@
 
 1.0 is a major release; the sections below cover each breaking change.
 
-## Installing 1.0: `@shorthand/core` comes from npm
+## The root entry is the inference core; satellites moved to subpaths
+
+`@smallchat/core` (the root entry) no longer re-exports the optimization
+satellites. Imports of them from `'@smallchat/core'` fail to compile (and
+are `undefined` at runtime); change the specifier:
+
+| 0.5 import from `'@smallchat/core'` | 1.0 import |
+|---|---|
+| compaction (`DefaultCompactor`, `VerificationHarness`, `runRecallTest`, `checkInvariants`, entropy/rate-distortion helpers, …) | `@shorthand/core/compaction` |
+| CRDT (`LamportClock`, `LWWRegister`, `ORSet`, `GSet`, `RGA`, `AgentMemory`, `MemoryMerge`, `ConflictDetector`, …) | `@shorthand/core/crdt` |
+| importance (`ImportanceDetector`, … — already only on `@smallchat/core/importance`) | `@shorthand/core/importance` |
+| truth (`parseWikiLines`, `selectCurrentTruth`, `TruthAwareCompactor`, `proposeInvariants`, …) | `@shorthand/core/truth` |
+| memex (`memexCompile`, `memexIngest`, `memexResolveQuery`, `memexLint`, `memexListLintRules`, `memexCosineSimilarity`, `memexComputeTier`) | `@smallchat/core/memex` as `compile`, `ingest`, `resolveQuery`, `lint`, `listLintRules`, `cosineSimilarity`, `computeTier` (other names unchanged; `readKnowledgeSource(s)` → `readSource(s)`, types `MemexExtractedClaim`/`MemexExtractedEntity`/`MemexCompileOptions`/`MemexResolverOptions` → `ExtractedClaim`/`ExtractedEntity`/`CompileOptions`/`ResolverOptions`) |
+| dream (`compileLatest`, `dream`, `analyzeSessionLog`, `loadArtifactManifest`, …) | `@smallchat/core/dream` (`loadArtifactManifest` → `loadManifest`) |
+
+`@shorthand/core` is a dependency of `@smallchat/core`, so it is already
+installed; add it to your own `package.json` when you import it directly.
+`@smallchat/core/compaction`, `/crdt`, `/importance` and `/truth` exist in
+1.x as `export *` re-exports of the same `@shorthand/core` subpaths, marked
+`@deprecated` (removed in 2.0): they are a one-line migration, not an API of
+their own. `@smallchat/core/memex` and `/dream` are `@experimental`: their
+APIs may change in any 1.x release.
+
+**Renamed compaction types.** `@shorthand/core` 1.0 merged smallchat's
+vendored copy with the short-hand repository. In it, `CompactedState`,
+`CompactionLevel`, `Compactor`, `Decision` and `VerificationResult` name the
+LSM pipeline's types; the snapshot pipeline's types (what `DefaultCompactor`
+returns, what 0.5 re-exported under those names) were renamed:
+
+| 0.5 (`@smallchat/core`) | 1.0 (`@shorthand/core/compaction`) |
+|---|---|
+| `CompactedState` | `CompactedSnapshot` |
+| `CompactionLevel` (`'L0'`–`'L3'`) | `SnapshotLevel` |
+| `Compactor` | `SnapshotCompactor` |
+| `Decision` | `SnapshotDecision` |
+| `CompactionVerificationResult` | `SnapshotVerificationResult` |
+
+The old names still exist on `@shorthand/core/compaction` (and the
+deprecated `@smallchat/core/compaction`), but mean the LSM types, so code
+that only renames the specifier compiles against different types. Rename
+them. `Tombstone` gains a required `timestamp`; `applyTruthToCompactedState`
+is `applyTruthToSnapshot` (old name kept, deprecated); `InvariantProposalLine`
+is `UvProposalLine`.
+
+**Behaviour changes in `@shorthand/core` 1.0** (all in its MIGRATION.md,
+"Coming from smallchat's vendored copy"): the truth module reads and writes
+Truth Format v2 (TRANSITION lines for status changes, `prevHash`/`hash`,
+`sinceSeq`, the suite PROPOSAL envelope; the bare `shorthand-compaction`
+proposal format is read-only), unknown or missing statuses fail closed
+(history, never ground truth), an open UV contesting a TB is always
+attached to it; OR-Set removes propagate and G-Set keyless entries get
+replica-scoped ids (the CRDTs converge, property-tested); the importance
+state-delta signal reads at most 16 KB of prose per message.
 
 `@smallchat/core@1.0.0` depends on `@shorthand/core@^1.0.0` from the
 registry (0.x pointed at a `file:./shorthand` copy that only resolved
-inside this repository). The compaction, CRDT, importance and truth APIs
-that `@smallchat/core` re-exports are `@shorthand/core` 1.0's. Its truth
-module reads and writes Truth Format v2 (TRANSITION lines for status
-changes, `prevHash`/`hash`, `sinceSeq`, the suite PROPOSAL envelope; the
-bare `shorthand-compaction` proposal format is read-only): follow
-`@shorthand/core`'s MIGRATION.md if you call `proposeInvariants`,
-`selectCurrentTruth` or the wiki codec through `@smallchat/core`.
+inside this repository, so a published install could not load). In this
+repository `shorthand/` is an exact mirror of that release, written by
+`scripts/sync-shorthand.mjs`; never edit it (see `shorthand/README.md`).
 
 ## Compiled artifacts (format 1.0) and embedder identity
 
