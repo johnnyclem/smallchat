@@ -655,12 +655,26 @@ or unmounting aborts the previous run (its tool is cancelled through the
 dispatch signal) and drops its events; `useToolDispatch` and
 `useAppDispatch` show only the latest call's result. If you relied on two
 streams appending to one hook's state, use one hook per stream.
-`AppView` renders a `ui://` resource only from its HTML: pass `html` (the
-text of the MCP `resources/read` result) or `readResource={(uri) => …}`.
-An `http(s)` `componentUri` still loads as the iframe `src`. The default
-`sandbox` is now `allow-scripts`; add `allow-same-origin` back only for
-views you trust (with `allow-scripts` it lets a same-origin view remove its
-sandbox).
+`AppView` is the host side of the MCP Apps protocol
+(`@modelcontextprotocol/ext-apps`, a new dependency of `@smallchat/react`).
+A view must connect with ext-apps' `App` (`app.connect()` sends
+`ui/initialize`); a view that waits for 0.5's private
+`{ type: 'mcp-ui/ready' }` handshake gets nothing. The view receives
+`ui/notifications/tool-input` (pass the call's arguments as `toolInput`)
+and one `CallToolResult` per `toolResult` (a string becomes a text block;
+an object becomes a JSON text block plus `structuredContent`). To answer
+the view's `tools/call`, pass `onCallTool={(name, args) => …}` returning a
+`ToolResult` (for example from `runtime.dispatchById`); `onInteraction`
+still reports tool calls and messages. To deliver `ui/resource-teardown`,
+`await ref.current?.teardown()` before you unmount the view or change its
+`componentUri`: a removed frame receives no messages. `AppView` is now a
+`forwardRef` component, so render it as `<AppView … />` rather than calling
+it as a function. It renders a `ui://` resource only from its HTML: pass
+`html` (the text of the MCP `resources/read` result) or
+`readResource={(uri) => …}`. An `http(s)` `componentUri` still loads as the
+iframe `src`. The default `sandbox` is now `allow-scripts`; add
+`allow-same-origin` back only for views you trust (with `allow-scripts` it
+lets a same-origin view remove its sandbox).
 
 **`@smallchat/playground`** is private (run it from source:
 `node packages/playground/dist/index.js tools.toolkit.json [port]`). Its

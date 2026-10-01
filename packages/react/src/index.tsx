@@ -1,4 +1,8 @@
-import { useState, useCallback, useRef, useEffect, createContext, useContext } from 'react';
+import {
+  useState, useCallback, useRef, useEffect, useLayoutEffect, useImperativeHandle, forwardRef, createContext, useContext,
+  type CSSProperties,
+} from 'react';
+import { AppBridge } from '@modelcontextprotocol/ext-apps/app-bridge';
 import type { ToolRuntime, ToolResult, DispatchEvent, AppIMP, DispatchEventUIAvailable } from '@smallchat/core';
 import type { UIRuntime } from '@smallchat/core/app';
 
@@ -460,13 +464,18 @@ export function useAppStream(options?: UseAppStreamOptions): UseAppStreamResult 
 }
 
 // ---------------------------------------------------------------------------
-// AppView — sandboxed iframe component for rendering MCP Apps views
+// AppView — sandboxed iframe host for an MCP Apps view
 //
 // A ui:// view is an MCP resource, not a URL a browser can load: AppView
 // renders its HTML (given as `html`, or read with `readResource`) through
-// srcdoc. An http(s) view URI is loaded as the iframe src and messaged at
-// its own origin. The bridge lives as long as the frame's content; new tool
-// results are delivered to it without re-mounting (SAT-26).
+// srcdoc. An http(s) view URI is loaded as the iframe src.
+//
+// AppView is the host side of the MCP Apps protocol (@modelcontextprotocol/
+// ext-apps): an AppBridge answers the view's ui/initialize, then sends
+// ui/notifications/tool-input and a ui/notifications/tool-result for the
+// current toolResult and for every later one, and answers the view's
+// tools/call and ui/message requests. The bridge lives as long as the
+// frame's content; new tool results reach it without re-mounting (SAT-26).
 //
 // Obj-C analogy: AppView ≈ NSView — it owns the visual representation of
 // an AppIMP, just as NSView owns pixels on screen.
@@ -479,18 +488,25 @@ export interface AppViewProps {
   html?: string;
   /** Reads a ui:// resource's HTML, e.g. through your MCP client's resources/read; used when html is not given */
   readResource?: (uri: string) => Promise<string>;
-  /** Tool result delivered to the view once it is ready, and again whenever it changes */
+  /** Arguments of the tool call the view belongs to, sent once as ui/notifications/tool-input (default {}) */
+  toolInput?: Record<string, unknown>;
+  /** Tool result sent as ui/notifications/tool-result once the view has initialized, and again whenever it changes */
   toolResult?: ToolResult;
-  /** Callback fired when the view sends a tool call or message */
+  /**
+   * Runs a tools/call the view sends, e.g. with runtime.dispatchById; its
+   * result is the view's answer. Without it the view's tool calls fail.
+   */
+  onCallTool?: (toolName: string, args: Record<string, unknown>) => Promise<ToolResult>;
+  /** Fired when the view sends a tool call ('tool-call') or a ui/message ('message') */
   onInteraction?: (event: string, sourceToolName: string, payload: unknown) => void;
   /** Called when a ui:// resource cannot be read */
   onError?: (error: Error) => void;
-  /** Preferred display mode */
+  /** Display mode, sent to the view in its host context */
   displayMode?: 'inline' | 'fullscreen' | 'pip';
   /** Whether to add a visible border (hint from McpUiResourceMeta.prefersBorder) */
   prefersBorder?: boolean;
   className?: string;
-  style?: React.CSSProperties;
+  style?: CSSProperties;
   /**
    * iframe sandbox attribute value (default: "allow-scripts"). Adding
    * allow-same-origin to allow-scripts lets a view served from your own
@@ -501,30 +517,124 @@ export interface AppViewProps {
   title?: string;
 }
 
+/** Imperative handle of an AppView (`ref`). */
+export interface AppViewHandle {
+  /**
+   * Sends ui/resource-teardown and resolves true once the view has answered
+   * (false when no view is connected or it did not answer within timeoutMs,
+   * default 5000). Await it before you unmount the AppView or change its
+   * componentUri: a frame that has been removed from the page receives no
+   * messages, so unmounting alone never reaches the view. After teardown the
+   * view gets no further messages.
+   */
+  teardown(options?: { timeoutMs?: number }): Promise<boolean>;
+}
+
+type CallToolResult = Parameters<AppBridge['sendToolResult']>[0];
+type BridgeTransport = Parameters<AppBridge['connect']>[0];
+type JSONRPCMessage = Parameters<BridgeTransport['send']>[0];
+
+const HOST_INFO = { name: '@smallchat/react', version: '1.0.0' };
+const CONTENT_BLOCK_TYPES = new Set(['text', 'image', 'audio', 'resource', 'resource_link']);
+
 const isResourceUri = (uri: string) => uri.startsWith('ui://');
 
-/** Origin to post to: the view URL's own origin; '*' for srcdoc frames, whose sandboxed origin is opaque. */
-function messageOrigin(uri: string): string {
-  if (isResourceUri(uri)) return '*';
-  try {
-    return new URL(uri).origin;
-  } catch {
-    return '*';
+/** A smallchat ToolResult as the MCP CallToolResult the protocol carries. */
+function toCallToolResult(result: ToolResult): CallToolResult {
+  const { content } = result;
+  const isError = result.isError ? { isError: true } : {};
+  if (
+    Array.isArray(content) && content.length > 0 &&
+    content.every((b) => typeof b === 'object' && b !== null && CONTENT_BLOCK_TYPES.has((b as { type?: unknown }).type as string))
+  ) {
+    return { content: content as CallToolResult['content'], ...isError };
   }
+  if (content === undefined || content === null) return { content: [], ...isError };
+  if (typeof content === 'string') return { content: [{ type: 'text', text: content }], ...isError };
+  const structured = typeof content === 'object' && !Array.isArray(content)
+    ? { structuredContent: content as Record<string, unknown> }
+    : {};
+  return { content: [{ type: 'text', text: JSON.stringify(content) }], ...structured, ...isError };
 }
 
 /**
- * AppView — renders a MCP Apps view in a sandboxed iframe.
+ * The origin AppView posts to and accepts messages from. A sandbox without
+ * allow-same-origin gives the frame an opaque origin ('null'), which only
+ * '*' reaches; messages are then matched by their source window alone.
+ * With allow-same-origin the frame keeps its real origin: the view URL's,
+ * or the host page's for a srcdoc (ui://) view.
+ */
+function frameOrigin(uri: string, sandbox: string): string {
+  if (!sandbox.split(/\s+/).includes('allow-same-origin')) return '*';
+  let origin: string | undefined;
+  if (isResourceUri(uri)) {
+    origin = (globalThis as { location?: { origin?: string } }).location?.origin;
+  } else {
+    try { origin = new URL(uri).origin; } catch { origin = undefined; }
+  }
+  return origin && origin !== 'null' ? origin : '*';
+}
+
+/**
+ * JSON-RPC over postMessage to one frame: sends to `origin`, accepts only
+ * messages whose source is that frame's window (and, unless origin is '*',
+ * whose origin matches).
+ */
+class FrameTransport implements BridgeTransport {
+  onclose?: () => void;
+  onerror?: (error: Error) => void;
+  onmessage?: (message: JSONRPCMessage) => void;
+
+  constructor(private readonly frame: Window, private readonly origin: string) {}
+
+  private readonly listener = (evt: MessageEvent) => {
+    if (evt.source !== this.frame) return;
+    if (this.origin !== '*' && evt.origin !== this.origin) return;
+    const data = evt.data as { jsonrpc?: unknown } | null;
+    if (typeof data !== 'object' || data === null || data.jsonrpc !== '2.0') return;
+    this.onmessage?.(data as JSONRPCMessage);
+  };
+
+  async start(): Promise<void> {
+    window.addEventListener('message', this.listener);
+  }
+
+  async send(message: JSONRPCMessage): Promise<void> {
+    this.frame.postMessage(message, this.origin);
+  }
+
+  async close(): Promise<void> {
+    window.removeEventListener('message', this.listener);
+    this.onclose?.();
+  }
+}
+
+interface ConnectedView {
+  bridge: AppBridge;
+  transport: FrameTransport;
+  initialized: boolean;
+  closed: boolean;
+  deliver: () => void;
+  close: () => void;
+}
+
+const useIsomorphicLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect;
+
+/**
+ * AppView — renders an MCP Apps view in a sandboxed iframe and hosts it.
  *
  * Security: the iframe is sandboxed with allow-scripts only by default; use
- * the sandbox prop to change it. Messages go only to the frame's own
- * window, addressed to the view URL's origin when it has one.
+ * the sandbox prop to change it. Messages go only to the frame's own window
+ * and are accepted only from it; with allow-same-origin they are also bound
+ * to the frame's origin.
  */
-export function AppView({
+export const AppView = forwardRef<AppViewHandle, AppViewProps>(function AppView({
   componentUri,
   html,
   readResource,
+  toolInput,
   toolResult,
+  onCallTool,
   onInteraction,
   onError,
   displayMode = 'inline',
@@ -533,25 +643,21 @@ export function AppView({
   style,
   sandbox = 'allow-scripts',
   title = 'MCP App View',
-}: AppViewProps): JSX.Element {
+}, ref) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [loaded, setLoaded] = useState<{ uri: string; html?: string; error?: Error } | null>(null);
 
   // Latest props, read by the long-lived bridge without re-mounting it.
-  const toolResultRef = useRef(toolResult);
-  const onInteractionRef = useRef(onInteraction);
-  const onErrorRef = useRef(onError);
-  const readyRef = useRef(false);
-  const deliverRef = useRef<(() => void) | null>(null);
-  useEffect(() => {
-    onInteractionRef.current = onInteraction;
-    onErrorRef.current = onError;
+  const latest = useRef({ toolInput, toolResult, onCallTool, onInteraction, onError, displayMode });
+  useIsomorphicLayoutEffect(() => {
+    latest.current = { toolInput, toolResult, onCallTool, onInteraction, onError, displayMode };
   });
+  const viewRef = useRef<ConnectedView | null>(null);
 
   const resource = isResourceUri(componentUri);
   const resourceHtml = resource ? (html ?? (loaded?.uri === componentUri ? loaded.html : undefined)) : undefined;
   const loadError = resource && html === undefined && loaded?.uri === componentUri ? loaded.error : undefined;
-  const targetOrigin = messageOrigin(componentUri);
+  const origin = frameOrigin(componentUri, sandbox);
   // The frame's content; the bridge is rebuilt only when it changes.
   const frameSource = resource ? resourceHtml : componentUri;
 
@@ -565,64 +671,110 @@ export function AppView({
         if (stale) return;
         const error = err instanceof Error ? err : new Error(String(err));
         setLoaded({ uri: componentUri, error });
-        onErrorRef.current?.(error);
+        latest.current.onError?.(error);
       },
     );
     return () => { stale = true; };
   }, [componentUri, html, readResource, resource]);
 
-  useEffect(() => {
-    const iframe = iframeRef.current;
-    if (!iframe || frameSource === undefined) return;
+  // Connect a bridge to the frame as soon as it is in the page, before its
+  // content can send ui/initialize.
+  useIsomorphicLayoutEffect(() => {
+    const frame = iframeRef.current?.contentWindow;
+    if (!frame || frameSource === undefined) return;
 
-    readyRef.current = false;
-    const post = (message: unknown) => iframe.contentWindow?.postMessage(message, targetOrigin);
-    const deliver = () => {
-      const result = toolResultRef.current;
-      if (result) post({ type: 'ui/notifications/tool-result', toolName: '', result: result.content });
+    const props = latest.current;
+    const bridge = new AppBridge(
+      null,
+      HOST_INFO,
+      {
+        ...(props.onCallTool ? { serverTools: {} } : {}),
+        ...(props.onInteraction ? { message: { text: {} } } : {}),
+      },
+      { hostContext: { displayMode: props.displayMode } },
+    );
+    const transport = new FrameTransport(frame, origin);
+    const view: ConnectedView = {
+      bridge,
+      transport,
+      initialized: false,
+      closed: false,
+      deliver: () => {
+        const result = latest.current.toolResult;
+        if (!view.initialized || view.closed || !result) return;
+        bridge.sendToolResult(toCallToolResult(result)).catch(() => {});
+      },
+      close: () => {
+        if (view.closed) return;
+        view.closed = true;
+        // Closing the transport closes the bridge (rejecting pending requests).
+        transport.close().catch(() => {});
+      },
     };
 
-    const handleMessage = (evt: MessageEvent) => {
-      if (evt.source !== iframe.contentWindow) return;
-      const data = evt.data as Record<string, unknown>;
-
-      if (data?.type === 'mcp-ui/ready') {
-        readyRef.current = true;
-        deliver();
+    bridge.oninitialized = () => {
+      view.initialized = true;
+      bridge.sendToolInput({ arguments: latest.current.toolInput ?? {} })
+        .then(view.deliver, () => {});
+    };
+    bridge.oncalltool = async (params) => {
+      const args = params.arguments ?? {};
+      latest.current.onInteraction?.('tool-call', params.name, args);
+      const run = latest.current.onCallTool;
+      if (!run) {
+        return { content: [{ type: 'text', text: `This host does not run tools for views (${params.name})` }], isError: true };
       }
-
-      if (data?.type === 'tools/call') {
-        onInteractionRef.current?.('tool-call', (data.toolName as string) ?? '', data.arguments);
-      }
-
-      if (data?.type === 'ui/message') {
-        onInteractionRef.current?.('message', '', data.content);
+      try {
+        return toCallToolResult(await run(params.name, args));
+      } catch (err) {
+        return { content: [{ type: 'text', text: err instanceof Error ? err.message : String(err) }], isError: true };
       }
     };
+    bridge.onmessage = async (params) => {
+      const notify = latest.current.onInteraction;
+      if (!notify) return { isError: true };
+      notify('message', '', params.content);
+      return {};
+    };
 
-    window.addEventListener('message', handleMessage);
-    deliverRef.current = deliver;
+    viewRef.current = view;
+    bridge.connect(transport).catch((err: unknown) => {
+      latest.current.onError?.(err instanceof Error ? err : new Error(String(err)));
+    });
 
     return () => {
-      // Tell the view first, while it can still receive the message.
-      if (readyRef.current) post({ type: 'ui/resource-teardown' });
-      readyRef.current = false;
-      deliverRef.current = null;
-      window.removeEventListener('message', handleMessage);
+      // The frame is about to be removed or to load new content: nothing
+      // posted now would reach the view (see AppViewHandle.teardown).
+      view.close();
+      if (viewRef.current === view) viewRef.current = null;
     };
-  }, [frameSource, targetOrigin]);
+  }, [frameSource, origin]);
 
-  // Deliver each new tool result to a ready view.
+  // Deliver each new tool result to an initialized view.
   useEffect(() => {
-    toolResultRef.current = toolResult;
-    if (readyRef.current) deliverRef.current?.();
+    viewRef.current?.deliver();
   }, [toolResult]);
+
+  useImperativeHandle(ref, () => ({
+    async teardown({ timeoutMs = 5000 }: { timeoutMs?: number } = {}): Promise<boolean> {
+      const view = viewRef.current;
+      if (!view || view.closed || !view.initialized) return false;
+      try {
+        await view.bridge.teardownResource({}, { timeout: timeoutMs });
+        return true;
+      } catch {
+        return false;
+      } finally {
+        view.close();
+      }
+    },
+  }), []);
 
   if (resource && resourceHtml === undefined && (loadError || !readResource)) {
     const message = loadError
       ? `AppView: could not read ${componentUri}: ${loadError.message}`
       : `AppView: ${componentUri} is an MCP resource; pass its html, or readResource to read it.`;
-    return (<div role="alert" className={className} style={style}>{message}</div>) as unknown as JSX.Element;
+    return <div role="alert" className={className} style={style}>{message}</div>;
   }
 
   const borderStyle = prefersBorder
@@ -645,8 +797,8 @@ export function AppView({
         ...style,
       }}
     />
-  ) as unknown as JSX.Element;
-}
+  );
+});
 
 // Re-export UIRuntime type for consumers who want to type their context value
 export type { UIRuntime } from '@smallchat/core/app';

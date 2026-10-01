@@ -29,8 +29,16 @@ jobs:
       - name: Type check
         run: npm run lint
 
+      # packages/react/src/app-view.browser.test.ts runs a real MCP Apps view
+      # against AppView in Chromium; SMALLCHAT_BROWSER_TESTS=1 makes a missing
+      # browser a failure instead of a skip.
+      - name: Install Chromium (headless shell)
+        run: npx playwright-core install --with-deps --only-shell chromium
+
       - name: Test
         run: npm test
+        env:
+          SMALLCHAT_BROWSER_TESTS: '1'
 
       # shorthand/ is a byte-for-byte mirror of @shorthand/core from the
       # short-hand repository (scripts/sync-shorthand.mjs). Fail when it

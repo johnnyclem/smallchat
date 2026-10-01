@@ -14,7 +14,9 @@
  * workspace (shorthand/, src/); its package.json has no file:, link: or
  * workspace: dependency; `import('@smallchat/core')` and every subpath
  * export load, and a Node16 TypeScript consumer resolves each subpath's
- * declarations; `smallchat --version` prints the package version.
+ * declarations; `smallchat --version` prints the package version. The
+ * packed @smallchat/react (run `npm run build:packages` first) typechecks
+ * against React 19's types with skipLibCheck off.
  */
 
 import { execFileSync } from 'node:child_process';
@@ -73,6 +75,24 @@ try {
     files: ['consumer.ts'],
   }));
   execFileSync(process.execPath, [join(ROOT, 'node_modules', 'typescript', 'bin', 'tsc'), '-p', app], { cwd: app, stdio: 'inherit' });
+
+  // @smallchat/react's declarations against the current React types, with
+  // skipLibCheck off: @types/react 19 has no global JSX namespace, so a d.ts
+  // naming JSX.Element fails to compile in a React 19 project.
+  const react = JSON.parse(execFileSync(npm, ['pack', '--json', '--workspace', 'packages/react', '--pack-destination', work], { cwd: ROOT, encoding: 'utf-8' }));
+  execFileSync(npm, ['install', '--no-audit', '--no-fund', ...ignoreScripts, join(work, react[0].filename), 'react@19', '@types/react@19', '@types/node@22'], { cwd: app, stdio: 'inherit' });
+  writeFileSync(join(app, 'react-consumer.ts'), [
+    `import { createElement, createRef } from 'react';`,
+    `import { AppView, useToolDispatch, type AppViewHandle } from '@smallchat/react';`,
+    `const ref = createRef<AppViewHandle>();`,
+    `void createElement(AppView, { componentUri: 'ui://demo/view', html: '<p></p>', ref });`,
+    `void useToolDispatch;`,
+  ].join('\n') + '\n');
+  writeFileSync(join(app, 'tsconfig.react.json'), JSON.stringify({
+    compilerOptions: { module: 'Node16', moduleResolution: 'Node16', target: 'ES2022', lib: ['ES2022', 'DOM'], strict: true, noEmit: true, skipLibCheck: false, types: ['node'] },
+    files: ['react-consumer.ts'],
+  }));
+  execFileSync(process.execPath, [join(ROOT, 'node_modules', 'typescript', 'bin', 'tsc'), '-p', join(app, 'tsconfig.react.json')], { cwd: app, stdio: 'inherit' });
 
   const version = execFileSync(process.execPath, [join(app, 'node_modules', '.bin', 'smallchat'), '--version'], { cwd: app, encoding: 'utf-8' }).trim();
   if (version !== pkg.version) fail(`smallchat --version printed ${version}, expected ${pkg.version}`);
