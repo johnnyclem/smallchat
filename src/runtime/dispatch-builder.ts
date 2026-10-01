@@ -1,6 +1,39 @@
 import type { DispatchEvent, ToolResult } from '../core/types.js';
 import { toolkit_dispatch, smallchat_dispatchStream } from './dispatch.js';
-import type { DispatchContext, DispatchOptions } from './dispatch.js';
+import type { DispatchContext, DispatchOptions, DispatchOutcome } from './dispatch.js';
+
+/**
+ * Thrown by DispatchBuilder.execContent() when the result is an error:
+ * the intent ran nothing (`outcome` 'needs-disambiguation', 'unresolved',
+ * 'throttled', 'invalid-arguments', 'aborted') or the tool that ran failed
+ * (`outcome` 'resolved'). `result` is the full isError ToolResult.
+ */
+export class DispatchError extends Error {
+  /** metadata.outcome of the result (undefined if the result carried none) */
+  readonly outcome: DispatchOutcome | undefined;
+  /** Candidate tool ids, best first (empty when a tool ran) */
+  readonly candidates: string[];
+  readonly result: ToolResult;
+
+  constructor(result: ToolResult) {
+    super(errorMessage(result));
+    this.name = 'DispatchError';
+    this.result = result;
+    this.outcome = result.metadata?.outcome as DispatchOutcome | undefined;
+    const content = result.content as { candidates?: unknown } | null;
+    this.candidates = Array.isArray(content?.candidates)
+      ? content.candidates.map(c => (c as { toolId?: unknown })?.toolId).filter((id): id is string => typeof id === 'string')
+      : [];
+  }
+}
+
+function errorMessage(result: ToolResult): string {
+  const content = result.content as { error?: unknown } | string | null | undefined;
+  if (typeof content === 'string' && content.length > 0) return content;
+  if (content && typeof content === 'object' && typeof content.error === 'string') return content.error;
+  const reason = result.metadata?.error;
+  return typeof reason === 'string' && reason.length > 0 ? reason : 'The dispatch failed without giving a reason.';
+}
 
 /**
  * DispatchBuilder — fluent interface for constructing and executing a dispatch.
@@ -108,10 +141,14 @@ export class DispatchBuilder<TArgs extends Record<string, unknown> = Record<stri
   }
 
   /**
-   * Execute and return only the content field of the result.
+   * Execute and return only the content field of a successful result.
+   * Throws DispatchError when the result is an error — the intent ran
+   * nothing (needs-disambiguation, unresolved, invalid arguments, …) or the
+   * tool failed — so an error payload is never returned as a `T`.
    */
   async execContent<T = unknown>(): Promise<T> {
     const result = await this.exec();
+    if (result.isError) throw new DispatchError(result);
     return result.content as T;
   }
 

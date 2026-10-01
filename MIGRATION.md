@@ -82,10 +82,28 @@ used to auto-run for you, either supply an `llmClient` with `microCheck`
 `new ToolRuntime(index, embedder, { requireLLMForSubHighDispatch: false })`.
 
 **Unresolved dispatches are errors.** Check `result.isError` and
-`result.metadata.outcome` (`'resolved' | 'needs-disambiguation' |
-'unresolved' | 'invalid-arguments'`). The 0.x success-shaped "No match …
-want me to search?" stub, `DispatchContext.forward()`, `FallbackStep` and
-`FallbackChainResult` are gone; near misses are never executed.
+`result.metadata.outcome`, typed `DispatchOutcome`:
+
+| outcome | ran a tool? |
+|---|---|
+| `'resolved'` | yes (its own failure is `isError: true` with this outcome) |
+| `'needs-disambiguation'` | no: candidates exist, pick one by id |
+| `'unresolved'` | no: nothing plausible matched (or an unknown id) |
+| `'throttled'` | no: the opt-in rate limiter refused; see `retryAfterMs` |
+| `'invalid-arguments'` | no: arguments failed the `inputSchema` |
+| `'aborted'` | no: the signal fired before the tool started |
+| `'not-dispatched'` | no: a decomposition sub-intent past `maxSubDispatches` |
+
+Switch on every value, or at least treat unknown ones as "ran nothing".
+The 0.x success-shaped "No match … want me to search?" stub,
+`DispatchContext.forward()`, `FallbackStep` and `FallbackChainResult` are
+gone; near misses are never executed.
+
+**`execContent()` throws on errors.** `runtime.dispatch(intent).withArgs(a)
+.execContent<T>()` used to return whatever `content` was, so an
+unresolved intent came back as `{ error, outcome, candidates }` typed as
+`T`. It now throws `DispatchError` (`outcome`, `candidates`, `result`) for
+every `isError` result. Catch it, or use `.exec()` and check `isError`.
 
 **Destructive tools need an exact id, a pinned phrase or EXACT similarity.**
 Tools annotated `destructiveHint: true` (or `readOnlyHint: false` without a

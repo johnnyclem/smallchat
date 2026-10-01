@@ -73,6 +73,7 @@ export {
 export type {
   DispatchConfig,
   DispatchOptions,
+  DispatchOutcome,
   DispatchByIdOptions,
   RegisteredTool,
   Resolution,
@@ -81,7 +82,7 @@ export type {
 } from './runtime/dispatch.js';
 export { ToolRuntime, runtimeOptionsFromPolicy } from './runtime/runtime.js';
 export type { RuntimeOptions } from './runtime/runtime.js';
-export { DispatchBuilder } from './runtime/dispatch-builder.js';
+export { DispatchBuilder, DispatchError } from './runtime/dispatch-builder.js';
 
 // --- Confidence-tiered resolution + the serializable resolution proof ---
 export { computeTier, requiresVerification, requiresDecomposition, requiresRefinement, DEFAULT_THRESHOLDS, quantizeScore, compareRanked, SCORE_QUANTUM } from './core/confidence.js';

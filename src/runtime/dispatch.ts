@@ -123,6 +123,17 @@ export interface DispatchConfig {
   decisionLog?: DecisionLog;
 }
 
+/**
+ * `metadata.outcome` of a dispatch result: a ResolutionOutcome, or
+ * - 'invalid-arguments': the arguments failed the tool's inputSchema;
+ * - 'aborted': the caller's signal fired before the tool started;
+ * - 'not-dispatched': a decomposition sub-intent past the sub-dispatch limit
+ *   (inside a decomposed result's content).
+ * Only 'resolved' means a tool ran; its own failure is `isError: true` with
+ * outcome 'resolved'. Every other outcome ran nothing and is `isError: true`.
+ */
+export type DispatchOutcome = ResolutionOutcome | 'invalid-arguments' | 'aborted' | 'not-dispatched';
+
 /** Per-dispatch options. */
 export interface DispatchOptions {
   /**
