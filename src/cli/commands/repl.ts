@@ -97,18 +97,22 @@ export const replCommand = new Command('repl')
     };
 
     // Lines are resolved one at a time, in order; input that ends (a pipe)
-    // closes the REPL only after the last line has been answered.
+    // closes the REPL only after the last line has been answered. Once the
+    // interface has closed there is no prompt to show (Node 24 throws
+    // ERR_USE_AFTER_CLOSE from prompt()).
     let pending = Promise.resolve();
+    let closed = false;
     rl.prompt();
     rl.on('line', (line) => {
       const input = line.trim();
       pending = pending.then(async () => {
         if (input) await resolveLine(input);
-        rl.prompt();
+        if (!closed) rl.prompt();
       });
     });
 
     rl.on('close', () => {
+      closed = true;
       void pending.then(async () => {
         await upstreams.close();
         console.log('\nGoodbye.');
