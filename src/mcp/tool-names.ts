@@ -23,6 +23,13 @@ import type { ArtifactTool, ArtifactV1 } from '../artifact/types.js';
 /** Characters and length every aggregate tool name satisfies. */
 export const MCP_TOOL_NAME_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 
+/**
+ * Longest tool name the MCP specification recommends (and every aggregate
+ * name satisfies). Longer names a caller sends get no "did you mean"
+ * suggestions and are shortened in messages and audit entries.
+ */
+export const MAX_TOOL_NAME_LENGTH = 128;
+
 /** Separator between provider id and upstream tool name in aggregate mode. */
 export const AGGREGATE_SEPARATOR = '__';
 
@@ -122,11 +129,24 @@ export function buildToolTable(artifact: ArtifactV1, options: { provider?: strin
 }
 
 /**
+ * A caller-supplied tool name, shortened to MAX_TOOL_NAME_LENGTH (plus a
+ * note of how much was cut) for error messages and audit entries.
+ */
+export function displayToolName(name: string): string {
+  if (name.length <= MAX_TOOL_NAME_LENGTH) return name;
+  return `${name.slice(0, MAX_TOOL_NAME_LENGTH)}…(+${name.length - MAX_TOOL_NAME_LENGTH} chars)`;
+}
+
+/**
  * Names close to `name`, best first: same name in another provider,
  * substring matches, then small edit distances. For "did you mean"
- * messages only — nothing is ever executed from this list.
+ * messages only — nothing is ever executed from this list. A name longer
+ * than MAX_TOOL_NAME_LENGTH gets no suggestions, and edit distances are
+ * only computed where the lengths allow a match, so the work per call is
+ * bounded whatever the caller sends.
  */
 export function closeMatches(name: string, names: Iterable<string>, limit = 5): string[] {
+  if (name.length > MAX_TOOL_NAME_LENGTH) return [];
   const needle = name.toLowerCase();
   const bare = needle.includes(AGGREGATE_SEPARATOR) ? needle.slice(needle.indexOf(AGGREGATE_SEPARATOR) + 2) : needle;
   const scored: Array<{ name: string; score: number }> = [];
@@ -137,10 +157,12 @@ export function closeMatches(name: string, names: Iterable<string>, limit = 5): 
     if (candidateBare === bare || lower.endsWith(`${AGGREGATE_SEPARATOR}${needle}`)) score = 0;
     else if (lower.includes(needle) || needle.includes(lower)) score = 1;
     else {
-      const distance = editDistance(needle, lower);
-      const bareDistance = editDistance(bare, candidateBare);
+      const max = Math.max(2, Math.floor(Math.min(needle.length, lower.length) / 3));
+      // An edit distance is at least the difference in length.
+      const distance = Math.abs(needle.length - lower.length) <= max ? editDistance(needle, lower) : Infinity;
+      const bareDistance = Math.abs(bare.length - candidateBare.length) <= max ? editDistance(bare, candidateBare) : Infinity;
       const best = Math.min(distance, bareDistance);
-      if (best > Math.max(2, Math.floor(Math.min(needle.length, lower.length) / 3))) continue;
+      if (best > max) continue;
       score = 1 + best;
     }
     scored.push({ name: candidate, score });

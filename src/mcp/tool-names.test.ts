@@ -7,6 +7,7 @@ import {
   aggregateToolName,
   buildToolTable,
   closeMatches,
+  MAX_TOOL_NAME_LENGTH,
   isAggregateProviderId,
   MCP_TOOL_NAME_PATTERN,
 } from './tool-names.js';
@@ -78,5 +79,13 @@ describe('closeMatches', () => {
     expect(closeMatches('github__get_isue', names)[0]).toBe('github__get_issue');
     expect(closeMatches('github/get_issue', names)[0]).toBe('github__get_issue');
     expect(closeMatches('send_email', names)).toEqual([]);
+  });
+
+  it('does no edit-distance work for a name longer than any valid tool name', () => {
+    const many = Array.from({ length: 200 }, (_, i) => `provider${i}__tool_number_${i}`);
+    const started = performance.now();
+    expect(closeMatches('q'.repeat(200_000), many)).toEqual([]);
+    expect(closeMatches('x'.repeat(MAX_TOOL_NAME_LENGTH + 1), many)).toEqual([]);
+    expect(performance.now() - started).toBeLessThan(100);
   });
 });

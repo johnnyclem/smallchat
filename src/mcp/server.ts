@@ -78,9 +78,11 @@ import { UpstreamPool, withUpstreamCallContext, type UpstreamPoolOptions } from 
 import {
   buildToolTable,
   closeMatches,
+  displayToolName,
   RESOLVE_TOOL_NAME,
   type ToolTable,
 } from './tool-names.js';
+import { compileArgumentValidator, InputSchemaError } from '../core/argument-validator.js';
 import { compactResolution, errorResult, RESOLUTION_META_KEY, toCallToolResult } from './results.js';
 import {
   bearerMatches,
@@ -953,17 +955,20 @@ export class MCPServer {
   ): Promise<CallToolResult> {
     const name = request.params.name;
     const args = (request.params.arguments ?? {}) as Record<string, unknown>;
-    const details: Pick<AuditEntry, 'toolName' | 'toolId' | 'callDigest'> & { isError?: boolean } = { toolName: name };
+    const details: Pick<AuditEntry, 'toolName' | 'toolId' | 'callDigest'> & { isError?: boolean } = { toolName: displayToolName(name) };
     connection.callDetails.set(extra.requestId, details);
 
     let result: CallToolResult;
     if (this.resolveToolEnabled() && this.runtime && name === RESOLVE_TOOL_NAME) {
       result = await this.resolveIntent(args);
     } else if (this.registeredTools.has(name)) {
-      const { executor } = this.registeredTools.get(name)!;
-      result = executor
-        ? toCallToolResult(await executor(args))
-        : errorResult(`Tool "${name}" has no server-side implementation; nothing was executed.`);
+      const { tool, executor } = this.registeredTools.get(name)!;
+      if (!executor) {
+        result = errorResult(`Tool "${name}" has no server-side implementation; nothing was executed.`);
+      } else {
+        const checked = this.checkRegisteredArguments(tool, args);
+        result = checked.ok ? toCallToolResult(await executor(checked.args)) : checked.result;
+      }
     } else {
       const entry = this.table?.byName.get(name);
       if (!entry || !this.runtime) {
@@ -994,6 +999,30 @@ export class MCPServer {
     return result;
   }
 
+  /**
+   * Validate a programmatic tool's arguments against its inputSchema, as
+   * artifact tools are (same JSON Schema dialects and coercion setting).
+   * Nothing runs when they fail, or when the schema itself is invalid.
+   */
+  private checkRegisteredArguments(
+    tool: McpTool,
+    args: Record<string, unknown>,
+  ): { ok: true; args: Record<string, unknown> } | { ok: false; result: CallToolResult } {
+    let checked;
+    try {
+      const validator = compileArgumentValidator(tool.inputSchema ?? { type: 'object' }, {
+        coerce: this.runtime?.context.argumentCoercion ?? 'none',
+      });
+      checked = validator.check(args);
+    } catch (err) {
+      if (!(err instanceof InputSchemaError)) throw err;
+      return { ok: false, result: errorResult(`Tool "${tool.name}" has an unusable inputSchema; nothing was executed: ${err.message}`) };
+    }
+    if (checked.valid) return { ok: true, args: checked.value };
+    const lines = checked.errors.map(e => `- ${e.path ? `${e.path}: ${e.message}` : e.message}`);
+    return { ok: false, result: errorResult([`Invalid arguments for ${tool.name}; the tool was not called.`, ...lines].join('\n')) };
+  }
+
   private unknownTool(name: string): CallToolResult {
     const names = this.listTools().map(t => t.name);
     const close = closeMatches(name, names);
@@ -1001,7 +1030,7 @@ export class MCPServer {
     const resolve = this.resolveToolEnabled() && this.runtime
       ? ` To find a tool from a description, call ${RESOLVE_TOOL_NAME}.`
       : '';
-    return errorResult(`Unknown tool "${name}"; nothing was executed.${hint}${resolve}`);
+    return errorResult(`Unknown tool "${displayToolName(name)}"; nothing was executed.${hint}${resolve}`);
   }
 
   private async resolveIntent(args: Record<string, unknown>): Promise<CallToolResult> {

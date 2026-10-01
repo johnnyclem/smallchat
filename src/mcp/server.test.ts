@@ -27,6 +27,7 @@ import { introspectMcpConfigFile } from './client.js';
 import { runConformance } from './conformance.js';
 import { AuditLog } from './audit-log.js';
 import { RESOLUTION_META_KEY } from './results.js';
+import { MAX_TOOL_NAME_LENGTH } from './tool-names.js';
 import { ensureTokenFile } from './http-guard.js';
 import { registerLocalHandler, unregisterLocalHandler } from './transport.js';
 import { ToolCompiler } from '../compiler/compiler.js';
@@ -264,6 +265,22 @@ describe('serve is an exact aggregator over the SDK (SC-SURF-01, 05, 07, 08, 19)
     const intent = await client.callTool({ name: 'repeat my words back to me', arguments: {} }) as CallToolResult;
     expect(intent.isError).toBe(true);
     expect(text(intent)).toContain('smallchat_resolve');
+  });
+
+  it('answers an oversized tool name quickly, without echoing or auditing it whole', async () => {
+    const { server, url } = await serveHttp();
+    const client = await connectHttp(url);
+    const name = 'q'.repeat(500_000);
+
+    const started = performance.now();
+    const result = await client.callTool({ name, arguments: {} }) as CallToolResult;
+    expect(performance.now() - started).toBeLessThan(1_000);
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain('nothing was executed');
+    expect(text(result).length).toBeLessThan(1_000);
+    const audited = server.audit.recent().filter(e => e.method === 'tools/call').at(-1)!;
+    expect(audited.toolName!.length).toBeLessThanOrEqual(MAX_TOOL_NAME_LENGTH + 32);
   });
 
   it('reaches a Streamable HTTP upstream through its launch URL', async () => {
@@ -674,6 +691,35 @@ describe('programmatic tools and MCP Apps views', () => {
     const { server } = await serveHttp();
     expect(() => server.registerTool({ name: 'fixture__echo', inputSchema: { type: 'object' } })).toThrow('already served');
     expect(() => server.registerTool({ name: 'smallchat_resolve', inputSchema: { type: 'object' } })).toThrow('already served');
+  });
+
+  it('validates a programmatic tool\'s arguments against its inputSchema before running it', async () => {
+    const server = new MCPServer({ log: () => {} });
+    running.push(server);
+    const seen: unknown[] = [];
+    server.registerTool(
+      { name: 'search_tool', inputSchema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] } },
+      async args => { seen.push(args); return { content: 'found' }; },
+    );
+    server.registerTool({ name: 'broken_schema', inputSchema: { type: 'object', properties: { q: { type: 7 } } } as never }, async () => ({ content: 'ran' }));
+    const { url } = await server.startHttp({ port: 0, token: TOKEN });
+    const client = await connectHttp(url);
+
+    const wrongType = await client.callTool({ name: 'search_tool', arguments: { query: 42 } }) as CallToolResult;
+    expect(wrongType.isError).toBe(true);
+    expect(text(wrongType)).toContain('Invalid arguments for search_tool; the tool was not called.');
+    expect(text(wrongType)).toMatch(/query.*must be string/);
+    const missing = await client.callTool({ name: 'search_tool', arguments: {} }) as CallToolResult;
+    expect(missing.isError).toBe(true);
+    expect(seen).toEqual([]);
+
+    const ok = await client.callTool({ name: 'search_tool', arguments: { query: 'cats' } }) as CallToolResult;
+    expect(text(ok)).toBe('found');
+    expect(seen).toEqual([{ query: 'cats' }]);
+
+    const broken = await client.callTool({ name: 'broken_schema', arguments: {} }) as CallToolResult;
+    expect(broken.isError).toBe(true);
+    expect(text(broken)).toContain('not a valid JSON Schema');
   });
 
   it('serves programmatic tools without an artifact', async () => {

@@ -36,14 +36,14 @@ describe('ChannelServer', () => {
     const ok = server.injectEvent({
       channel: 'test-channel',
       content: 'Hello from test',
-      meta: { sender: 'alice', 'invalid-key': 'dropped' },
+      meta: { room: 'general', sender: 'mallory', 'invalid-key': 'dropped' },
     });
 
     expect(ok).toBe(true);
     expect(events).toHaveLength(1);
     expect(events[0].content).toBe('Hello from test');
-    // Meta should be filtered — invalid-key dropped
-    expect(events[0].meta).toEqual({ sender: 'alice' });
+    // Meta should be filtered — invalid-key and the reserved sender dropped
+    expect(events[0].meta).toEqual({ room: 'general' });
   });
 
   it('rejects oversized payloads', () => {

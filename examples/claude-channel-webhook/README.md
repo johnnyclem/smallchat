@@ -80,7 +80,8 @@ curl -X POST http://127.0.0.1:3002/event \
     }
   }'
 
-# Observe outbound events (replies, etc.) via SSE — also authenticated
+# Observe the channel via SSE — also authenticated. Every credential sees
+# all channel events and replies; permission requests go to approvers only.
 curl -N -H "X-Channel-Secret: $SMALLCHAT_CHANNEL_SECRET" http://127.0.0.1:3002/sse
 
 # Check health (the only unauthenticated endpoint)
@@ -88,13 +89,16 @@ curl http://127.0.0.1:3002/health
 ```
 
 `meta.source` is reserved (it is the channel name in the `<channel
-source="...">` tag) and is dropped. A `channel` or `sender` field in the
-body is ignored.
+source="...">` tag) and is dropped. So are `meta.sender` and `meta.user`:
+the bridge sets `meta.sender` on the notification Claude Code receives to
+the credential's identity, so the tag reads `<channel source="webhook"
+sender="bridge" ...>` whatever the body claims. A `channel` or `sender`
+field in the body is ignored.
 
 ### 4. Test permission relay
 
 ```bash
-# The SSE stream will show permission requests like:
+# An approver's SSE stream shows permission requests like:
 # event: permission-request
 # data: {"request_id":"abcde","description":"Run shell command: rm -rf /tmp/old"}
 

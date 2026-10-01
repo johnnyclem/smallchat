@@ -106,7 +106,16 @@ pin `delete:record` matching the intent "delete the record") needs the
 phrase as an alias: `{ canonical: 'db.delete_record', policy: 'exact',
 aliases: ['delete the record'] }`. Pass pins with
 `RuntimeOptions.intentPins` (or a `"policy": { "pins": [...] }` block in
-`smallchat.json` for `serve`).
+`smallchat.json` for `serve`). A pin covers every tool its selector
+dispatches to — overload variants and every class that declares the
+selector — so pinning a shared selector gates all of them.
+
+**Learned preferences name a tool.** `resolveRefinement()` records the
+chosen option's `toolId` with the selector, and the same intent later runs
+that tool. Hosts that call `reinforceRefinement(intent, selectorId)`
+directly should pass the tool id as a third argument when a selector has
+overloads or several classes; without it the preference stands for the
+selector's default tool, as before.
 
 **Proofs changed shape.** Read `proof.chosen`/`proof.ran` instead of
 `proof.resolvedTool`, `proof.timings.totalMs` instead of `proof.elapsed`,
@@ -304,7 +313,10 @@ await server.startHttp({ port: 3001, host: '127.0.0.1', token });  // or: await 
 `SseBroker`, the `registry.ts` registries, `wire-format`, `MCP_ERROR` and
 `formatContent` (use `toCallToolResult`) are removed. `AuditEntry.success` is
 now `outcome: 'ok' | 'error' | 'rejected'`. `MCP_PROTOCOL_VERSIONS` lists the
-versions the SDK negotiates.
+versions the SDK negotiates. `registerTool` / `registerApp` executors now
+receive only arguments that pass the tool's `inputSchema`; a call that
+fails gets an `isError` result and the executor is not called, so declare
+the schema your executor actually accepts.
 
 **`loadRuntime()` returns `upstreams`.** MCP tools now execute on their
 upstream servers. Call `await upstreams.close()` when you are done, or stdio
@@ -442,7 +454,16 @@ a configured sender allowlist was enough. Read the approver from the
 `Content-Type: application/json`. Bridges bound to `0.0.0.0` need
 `--http-bridge-allowed-host <name>`. Browser clients need
 `httpBridgeCorsOrigin`. `meta.source` is dropped (the tag's `source` is
-the channel name), so rename that key, e.g. to `origin`.
+the channel name), so rename that key, e.g. to `origin`. `meta.sender` and
+`meta.user` are dropped too: the notification Claude Code receives carries
+`meta.sender` = the credential's identity. Put other people's names under
+another key (e.g. `author`) if the event needs them.
+
+**`/sse` permission requests go to approvers.** A non-approver's stream
+still carries channel events and replies, but no `permission-request`
+events. Watch for approvals with an approver's token.
+`serializeChannelTag` takes the sender as a fourth argument instead of
+reading `meta.sender`.
 
 ## `smallchat setup`, `smallchat rtk setup` and `smallchat init`
 

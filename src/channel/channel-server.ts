@@ -80,7 +80,8 @@ export class ChannelServer extends EventEmitter {
   private senderGate: SenderGate;
   private rl: Interface | null = null;
   private httpServer: Server | null = null;
-  private sseClients: Set<ServerResponse> = new Set();
+  /** Open /sse streams and the identity each one authenticated as */
+  private sseClients: Map<ServerResponse, string> = new Map();
   private initialized = false;
   private nextId = 1;
   private pendingPermissions: Map<string, PermissionRequest> = new Map();
@@ -137,7 +138,7 @@ export class ChannelServer extends EventEmitter {
 
     if (this.httpServer) {
       // Close SSE clients
-      for (const client of this.sseClients) {
+      for (const client of this.sseClients.keys()) {
         try { client.end(); } catch { /* ignore */ }
       }
       this.sseClients.clear();
@@ -171,7 +172,7 @@ export class ChannelServer extends EventEmitter {
       return false;
     }
 
-    // Filter meta keys
+    // Filter meta keys (reserved ones included: a body cannot set sender)
     const filteredMeta = filterMetaKeys(event.meta);
 
     const cleanEvent: ChannelEvent = {
@@ -185,11 +186,13 @@ export class ChannelServer extends EventEmitter {
     // Ingest into adapter
     this.adapter.ingest(cleanEvent);
 
-    // Emit MCP notification over stdio
+    // Emit MCP notification over stdio. meta.sender is stamped here with the
+    // event's sender — for bridge events the identity of the credential that
+    // posted it — so Claude Code sees who posted, not who the body claims.
     this.sendNotification('notifications/claude/channel', {
       channel: cleanEvent.channel,
       content: cleanEvent.content,
-      meta: cleanEvent.meta,
+      meta: cleanEvent.sender ? { ...cleanEvent.meta, sender: cleanEvent.sender } : cleanEvent.meta,
     });
 
     // Broadcast to SSE clients
@@ -405,8 +408,8 @@ export class ChannelServer extends EventEmitter {
 
     this.pendingPermissions.set(request.request_id, request);
 
-    // Broadcast to SSE clients for remote approval
-    this.broadcastSSE('permission-request', request);
+    // Stream to approvers only: the request carries the pending tool call.
+    this.broadcastSSE('permission-request', request, identity => this.isApprover(identity));
     this.emit('permission-request', request);
   }
 
@@ -554,7 +557,7 @@ export class ChannelServer extends EventEmitter {
     }
 
     if (req.method === 'GET' && url === '/sse') {
-      return this.handleSSEConnection(req, res);
+      return this.handleSSEConnection(req, res, identity);
     }
 
     if (req.method === 'POST' && url === '/event') {
@@ -650,7 +653,7 @@ export class ChannelServer extends EventEmitter {
       req.resume();
       return sendJson(res, 403, { error: 'No permission approvers are configured (permissionApprovers / --permission-approvers)' });
     }
-    if (!this.approvers.has(normalizeIdentity(identity))) {
+    if (!this.isApprover(identity)) {
       req.resume();
       this.emit('approver-rejected', identity);
       return sendJson(res, 403, { error: `"${identity}" is not a permission approver` });
@@ -711,7 +714,17 @@ export class ChannelServer extends EventEmitter {
     sendJson(res, 500, { error: 'Internal error' });
   }
 
-  private handleSSEConnection(_req: IncomingMessage, res: ServerResponse): void {
+  /** Whether an authenticated identity is in permissionApprovers. */
+  private isApprover(identity: string): boolean {
+    return this.approvers.has(normalizeIdentity(identity));
+  }
+
+  /**
+   * GET /sse — every authenticated identity receives channel events and
+   * replies (the channel's traffic, whoever posted it); permission requests
+   * go only to approvers.
+   */
+  private handleSSEConnection(_req: IncomingMessage, res: ServerResponse, identity: string): void {
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
@@ -721,7 +734,7 @@ export class ChannelServer extends EventEmitter {
     // Send connected event
     res.write(`event: connected\ndata: ${JSON.stringify({ channel: this.config.channelName, timestamp: Date.now() })}\n\n`);
 
-    this.sseClients.add(res);
+    this.sseClients.set(res, identity);
 
     // Keep-alive
     const keepAlive = setInterval(() => {
@@ -734,9 +747,11 @@ export class ChannelServer extends EventEmitter {
     });
   }
 
-  private broadcastSSE(event: string, data: unknown): void {
+  /** Write an SSE event to every open stream, or to those whose identity `to` accepts. */
+  private broadcastSSE(event: string, data: unknown, to?: (identity: string) => boolean): void {
     const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
-    for (const client of this.sseClients) {
+    for (const [client, identity] of this.sseClients) {
+      if (to && !to(identity)) continue;
       try { client.write(payload); } catch { /* ignore */ }
     }
   }

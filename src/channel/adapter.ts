@@ -144,7 +144,7 @@ export class ClaudeCodeChannelAdapter {
    */
   serializeForPrompt(): string {
     return this.messages
-      .map(m => serializeChannelTag(m.channel, m.content, m.meta))
+      .map(m => serializeChannelTag(m.channel, m.content, m.meta, m.sender))
       .join('\n\n');
   }
 
@@ -152,7 +152,7 @@ export class ClaudeCodeChannelAdapter {
    * Serialize a single event to a <channel> tag.
    */
   serializeEvent(event: ChannelEvent): string {
-    return serializeChannelTag(event.channel, event.content, event.meta);
+    return serializeChannelTag(event.channel, event.content, event.meta, event.sender);
   }
 
   /**
