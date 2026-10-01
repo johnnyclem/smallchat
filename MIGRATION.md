@@ -198,6 +198,55 @@ decides where the tool runs.
 `http://127.0.0.1:3001`). Use `--mcp-source <artifact>` to check `serve`
 over stdio.
 
+## Outbound MCP clients, config introspection and the container sandbox
+
+**`McpSseTransport` → `McpHttpTransport`.** The old name still works as a
+deprecated alias. Both now speak real MCP: an initialize handshake, a
+session, Streamable HTTP with a legacy SSE fallback, and per-call timeouts
+that cancel the request upstream. A server that only accepted a bare
+`tools/call` POST, with no handshake, is not an MCP server and will not
+work. `executeStream` yields one final result.
+
+```typescript
+// 0.5
+new McpSseTransport({ url, auth, reconnectDelayMs: 1000 });
+// 1.0
+new McpHttpTransport({ url, auth, transport: 'auto', timeoutMs: 30_000 });
+```
+
+**`MCPTransport` (`transportType: 'mcp'`)** now uses the same client, with
+a 60 s default `timeoutMs`. Close its session with `await transport.close()`
+or `clearTransports()`. It no longer yields token deltas from
+`executeInference`.
+
+**`McpStdioTransport`** drains the server's stderr (read it with
+`stderrTail()`), restarts a server that failed to start on the next call
+(after `restartBackoffMs`), and returns every `tools/list` page. Call
+`await transport.dispose()` to stop the process.
+
+**`smallchat compile` / `setup` with an MCP config.** Remote entries
+(`"type": "http"` / `"sse"`, or a bare `"url"`) are now introspected.
+Before, they made the whole command fail. An entry that cannot be
+introspected is reported (`<id>: skipped — …` or `<id>: FAILED — …`) and
+left out, and the others still compile, so check the output. `${VAR}`
+references are expanded the way Claude Code expands them. The artifact
+keeps the unexpanded templates (`"args": ["${HOME}/server.js"]`), so set
+those variables in the environment `serve` runs in. Remote servers that
+need headers (e.g. `Authorization`) are introspected with them, but the
+artifact records only the URL: pass the headers to `UpstreamPool` /
+`MCPServer` through `upstream.headers`.
+
+**Container sandbox.** `buildDockerArgs()` now returns `-e NAME` without a
+value. If you spawn docker yourself from `buildDockerArgs()`, put the values
+in docker's environment, or use `buildMcpSpawnSpec()`, which returns
+`{ command, args, env }` with both. The docker client no longer inherits
+your whole environment, only the safe allowlist, `DOCKER_*` connection
+settings and the server's variables.
+
+**Behind a proxy.** Spawned servers no longer see `HTTPS_PROXY`,
+`NO_PROXY` or `NODE_EXTRA_CA_CERTS` unless you set
+`SMALLCHAT_FORWARD_PROXY_ENV=1` (or pass `forwardProxyEnv: true`).
+
 ---
 
 # Migration Guide: 0.1.0 → 0.2.0

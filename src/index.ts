@@ -515,6 +515,7 @@ export type {
   HttpTransportRoute,
   GeneratedHttpConfig,
   McpStdioTransportConfig,
+  McpHttpTransportConfig,
   McpSseTransportConfig,
   LocalTransportConfig,
   LocalHandler,
@@ -541,6 +542,7 @@ export {
   // Transport implementations
   HttpTransport,
   McpStdioTransport,
+  McpHttpTransport,
   McpSseTransport,
   LocalTransport,
   // Middleware

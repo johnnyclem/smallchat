@@ -201,7 +201,7 @@ The `compile` command accepts three types of input:
 | Source | Example | What it does |
 |--------|---------|--------------|
 | **Directory** | `--source ./manifests` | Reads all `.json` manifest files from the directory |
-| **MCP config file** | `--source ~/.mcp.json` | Parses `mcpServers`, spawns each server via stdio, and introspects tools via JSON-RPC |
+| **MCP config file** | `--source ~/.mcp.json` | Parses `mcpServers` and connects to each server with the MCP SDK client: stdio entries are spawned, remote entries (`type: "http"` / `"sse"`, or a bare `url`) are reached over Streamable HTTP or legacy SSE. `${VAR}` / `${VAR:-default}` are expanded as Claude Code does, every `tools/list` page is read, and an entry that cannot be introspected is reported and skipped |
 | **Auto-detect** | _(no --source)_ | Detects if cwd is an MCP server repo, builds & introspects it |
 
 **MCP config file format** (used by Claude Desktop, Claude Code `.mcp.json`, etc.):
@@ -268,7 +268,7 @@ const original = runtime.swizzle(toolClass, selector, newImp);
 | **Intent Pinning** | `src/core/intent-pin.ts` | Lock sensitive selectors against semantic collision |
 | **Selector Namespacing** | `src/core/selector-namespace.ts` | Prevent cross-provider selector shadowing |
 | **Semantic Rate Limiting** | `src/core/semantic-rate-limiter.ts` | Throttle vector embedding operations to prevent DoS |
-| **Container Sandboxing** | `src/transport/container-sandbox.ts` | Docker isolation for untrusted MCP subprocesses |
+| **Container Sandboxing** | `src/transport/container-sandbox.ts` | Docker isolation for untrusted MCP subprocesses; env values reach the container through the docker client's environment (`-e NAME`), never its command line |
 | **Type Confusion Prevention** | `src/core/overload-table.ts` | Strict signature validation on overloaded dispatch |
 
 ## Claude Code Channel Protocol

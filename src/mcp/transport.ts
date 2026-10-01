@@ -1,24 +1,42 @@
 import type { ToolResult, TransportType, InferenceDelta } from '../core/types.js';
+import { McpHttpTransport } from '../transport/mcp-client-transport.js';
+
+const DEFAULT_TIMEOUT_MS = 60_000;
 
 /**
- * MCPTransport — bridges ToolProxy.execute to real MCP tool calls.
+ * MCPTransport — bridges ToolProxy.execute to real tool calls.
  *
  * Supports three tiers of execution matching the runtime's streaming pipeline:
- *   1. executeInference — token-level deltas (SSE streams)
+ *   1. executeInference — token-level deltas (no transport here produces them)
  *   2. executeStream    — chunk-level results
- *   3. execute          — single-shot JSON-RPC call
+ *   3. execute          — single-shot call
  *
- * Each transport type (mcp, rest, local, grpc) gets its own execution strategy.
+ * Each transport type (mcp, rest, local, grpc) gets its own execution
+ * strategy. MCP endpoints are reached with the official SDK client
+ * (McpHttpTransport: initialize handshake, session, Streamable HTTP with a
+ * legacy SSE fallback), and every call has a timeout that cancels it
+ * upstream. Stdio MCP servers in a compiled artifact are run by serve's
+ * UpstreamPool, not by this class.
  */
 export class MCPTransport {
   private endpoint: string | null;
   private transportType: TransportType;
   private headers: Record<string, string>;
+  private timeoutMs: number;
+  private mcpClient: McpHttpTransport | null = null;
 
   constructor(options: TransportOptions) {
     this.endpoint = options.endpoint ?? null;
     this.transportType = options.transportType;
     this.headers = options.headers ?? {};
+    this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  }
+
+  /** Close the MCP session, if one is open. */
+  async close(): Promise<void> {
+    const client = this.mcpClient;
+    this.mcpClient = null;
+    await client?.dispose();
   }
 
   /**
@@ -72,20 +90,19 @@ export class MCPTransport {
   /**
    * Token-level inference streaming via SSE.
    */
+  // eslint-disable-next-line require-yield
   async *executeInference(
-    toolName: string,
-    args: Record<string, unknown>,
+    _toolName: string,
+    _args: Record<string, unknown>,
   ): AsyncGenerator<InferenceDelta> {
-    if (this.transportType !== 'mcp') {
-      // Only MCP transport supports inference-level streaming
-      return;
-    }
-
-    yield* this.executeInferenceMCP(toolName, args);
+    // MCP has no token-level tool output (the 0.x "X-MCP-Stream-Mode:
+    // inference" request was not part of the protocol); callers fall back
+    // to executeStream / execute.
+    return;
   }
 
   // ---------------------------------------------------------------------------
-  // MCP Transport — JSON-RPC 2.0 over HTTP + SSE
+  // MCP Transport — the SDK client over Streamable HTTP (or legacy SSE)
   // ---------------------------------------------------------------------------
 
   private async executeMCP(
@@ -100,196 +117,32 @@ export class MCPTransport {
       };
     }
 
-    const rpcRequest = {
-      jsonrpc: '2.0' as const,
-      id: generateRequestId(),
-      method: 'tools/call',
-      params: { name: toolName, arguments: args },
-    };
-
-    try {
-      const response = await fetch(this.endpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...this.headers,
-        },
-        body: JSON.stringify(rpcRequest),
-      });
-
-      if (!response.ok) {
-        return {
-          content: null,
-          isError: true,
-          metadata: { error: `MCP request failed: ${response.status} ${response.statusText}` },
-        };
-      }
-
-      const rpcResponse = (await response.json()) as {
-        jsonrpc: string;
-        id: number;
-        result?: { content: unknown[]; isError?: boolean };
-        error?: { code: number; message: string };
-      };
-
-      if (rpcResponse.error) {
-        return {
-          content: null,
-          isError: true,
-          metadata: { error: rpcResponse.error.message, code: rpcResponse.error.code },
-        };
-      }
-
-      return {
-        content: rpcResponse.result?.content ?? null,
-        isError: rpcResponse.result?.isError ?? false,
-      };
-    } catch (err) {
+    this.mcpClient ??= new McpHttpTransport({
+      url: this.endpoint,
+      headers: this.headers,
+      timeoutMs: this.timeoutMs,
+      initTimeoutMs: this.timeoutMs,
+    });
+    const output = await this.mcpClient.execute({ toolName, args });
+    if (output.isError && output.content === null) {
       return {
         content: null,
         isError: true,
-        metadata: { error: `MCP transport error: ${(err as Error).message}` },
+        metadata: { error: `MCP transport error: ${String(output.metadata?.error ?? 'unknown error')}`, ...output.metadata },
       };
     }
+    return {
+      content: output.content,
+      isError: output.isError,
+      ...(output.metadata ? { metadata: output.metadata } : {}),
+    };
   }
 
   private async *executeStreamMCP(
     toolName: string,
     args: Record<string, unknown>,
   ): AsyncGenerator<ToolResult> {
-    if (!this.endpoint) {
-      yield {
-        content: null,
-        isError: true,
-        metadata: { error: 'No MCP endpoint configured' },
-      };
-      return;
-    }
-
-    const rpcRequest = {
-      jsonrpc: '2.0' as const,
-      id: generateRequestId(),
-      method: 'tools/call',
-      params: { name: toolName, arguments: args },
-    };
-
-    try {
-      const response = await fetch(this.endpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'text/event-stream',
-          ...this.headers,
-        },
-        body: JSON.stringify(rpcRequest),
-      });
-
-      if (!response.ok) {
-        yield {
-          content: null,
-          isError: true,
-          metadata: { error: `MCP stream request failed: ${response.status}` },
-        };
-        return;
-      }
-
-      // If server responds with SSE, parse the event stream
-      const contentType = response.headers.get('content-type') ?? '';
-      if (contentType.includes('text/event-stream') && response.body) {
-        yield* parseSSEStream(response.body);
-      } else {
-        // Standard JSON-RPC response — yield as single chunk
-        const rpcResponse = (await response.json()) as {
-          result?: { content: unknown[]; isError?: boolean };
-          error?: { code: number; message: string };
-        };
-
-        if (rpcResponse.error) {
-          yield {
-            content: null,
-            isError: true,
-            metadata: { error: rpcResponse.error.message },
-          };
-        } else {
-          yield {
-            content: rpcResponse.result?.content ?? null,
-            isError: rpcResponse.result?.isError ?? false,
-          };
-        }
-      }
-    } catch (err) {
-      yield {
-        content: null,
-        isError: true,
-        metadata: { error: `MCP stream error: ${(err as Error).message}` },
-      };
-    }
-  }
-
-  private async *executeInferenceMCP(
-    toolName: string,
-    args: Record<string, unknown>,
-  ): AsyncGenerator<InferenceDelta> {
-    if (!this.endpoint) return;
-
-    const rpcRequest = {
-      jsonrpc: '2.0' as const,
-      id: generateRequestId(),
-      method: 'tools/call',
-      params: { name: toolName, arguments: args },
-    };
-
-    try {
-      const response = await fetch(this.endpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'text/event-stream',
-          'X-MCP-Stream-Mode': 'inference',
-          ...this.headers,
-        },
-        body: JSON.stringify(rpcRequest),
-      });
-
-      if (!response.ok || !response.body) return;
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() ?? '';
-
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          const data = line.slice(6).trim();
-          if (data === '[DONE]') return;
-
-          try {
-            const event = JSON.parse(data) as {
-              method?: string;
-              params?: { delta?: { text?: string; finishReason?: string } };
-            };
-
-            if (event.params?.delta?.text !== undefined) {
-              yield {
-                text: event.params.delta.text,
-                finishReason: (event.params.delta.finishReason as InferenceDelta['finishReason']) ?? null,
-              };
-            }
-          } catch {
-            // Skip malformed SSE events
-          }
-        }
-      }
-    } catch {
-      // Inference stream failed — caller will fall back to chunk/single-shot
-    }
+    yield await this.executeMCP(toolName, args);
   }
 
   // ---------------------------------------------------------------------------
@@ -317,6 +170,7 @@ export class MCPTransport {
           ...this.headers,
         },
         body: JSON.stringify(args),
+        signal: AbortSignal.timeout(this.timeoutMs),
       });
 
       const body = await response.json();
@@ -357,6 +211,7 @@ export class MCPTransport {
           ...this.headers,
         },
         body: JSON.stringify(args),
+        signal: AbortSignal.timeout(this.timeoutMs),
       });
 
       if (!response.ok || !response.body) {
@@ -433,6 +288,8 @@ export interface TransportOptions {
   transportType: TransportType;
   endpoint?: string;
   headers?: Record<string, string>;
+  /** Per-call timeout in ms for mcp and rest calls (default 60 s); MCP calls are cancelled upstream */
+  timeoutMs?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -469,20 +326,15 @@ export function getTransport(providerId: string, options: TransportOptions): MCP
   return transport;
 }
 
-/** Clear the transport registry */
+/** Clear the transport registry (closing any open MCP sessions) */
 export function clearTransports(): void {
+  for (const transport of transportRegistry.values()) void transport.close();
   transportRegistry.clear();
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-let requestCounter = 0;
-
-function generateRequestId(): number {
-  return ++requestCounter;
-}
 
 /** Parse an SSE stream body into ToolResult chunks */
 async function* parseSSEStream(body: ReadableStream<Uint8Array>): AsyncGenerator<ToolResult> {

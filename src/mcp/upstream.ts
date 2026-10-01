@@ -2,10 +2,12 @@
  * UpstreamPool — the MCP clients `smallchat serve` forwards tool calls to.
  *
  * One official-SDK Client per MCP provider, started or reached from the
- * provider's launch spec in the artifact:
- *   - stdio: `command args`, with the default safe environment plus the
+ * provider's launch spec in the artifact (through transport/mcp-connect):
+ *   - stdio: `command args`, with the platform's safe environment plus the
  *     variables the spec names, read from serve's own environment (an
- *     artifact records variable NAMES only, never values);
+ *     artifact records variable NAMES only, never values). `${VAR}` and
+ *     `${VAR:-default}` in the command and args are expanded from that
+ *     environment too, as Claude Code expands them;
  *   - streamable-http (or a bare MCP endpoint): Streamable HTTP;
  *   - sse: the legacy HTTP+SSE transport.
  *
@@ -20,12 +22,9 @@
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport, getDefaultEnvironment } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
-import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
+import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { CallToolResultSchema, type CallToolResult, type Progress } from '@modelcontextprotocol/sdk/types.js';
+import { connectMcp, expandEnvRefs, listAllTools, type McpConnectSpec } from '../transport/mcp-connect.js';
 import type { InferenceDelta, ToolResult, ToolTransport } from '../core/types.js';
 import type { ArtifactProvider, ArtifactV1 } from '../artifact/types.js';
 
@@ -39,8 +38,14 @@ export interface UpstreamPoolOptions {
   requestTimeoutMs?: number;
   /** Where the variables named by stdio launch specs are read from (default process.env) */
   env?: Record<string, string | undefined>;
-  /** What to do with stdio upstreams' stderr (default 'inherit': serve's stderr) */
+  /**
+   * What to do with stdio upstreams' stderr (default 'inherit': serve's
+   * stderr). 'pipe' drains it into a bounded tail that connection errors
+   * quote, so a chatty server can never fill the pipe and stall.
+   */
   stderr?: 'inherit' | 'ignore' | 'pipe';
+  /** Also forward proxy/CA settings (HTTPS_PROXY, NODE_EXTRA_CA_CERTS, ...) to stdio upstreams */
+  forwardProxyEnv?: boolean;
   /** Extra HTTP headers per provider id, for remote upstreams (e.g. Authorization) */
   headers?: Record<string, Record<string, string>>;
   /** clientInfo sent to upstreams */
@@ -139,16 +144,11 @@ export class UpstreamPool {
   private async connect(providerId: string): Promise<Client> {
     const provider = this.artifact.providers[providerId];
     if (!provider) throw new Error(`unknown provider "${providerId}"`);
-    const transport = this.createTransport(provider);
-
-    const client = new Client(this.options.clientInfo ?? { name: 'smallchat', version: '1.0.0' }, { capabilities: {} });
-    try {
-      await client.connect(transport, { timeout: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS });
-    } catch (err) {
-      // Do not leave a half-started stdio server behind.
-      await client.close().catch(() => {});
-      throw err;
-    }
+    const { client } = await connectMcp(this.connectSpec(provider), {
+      clientInfo: this.options.clientInfo,
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      stderr: this.options.stderr === 'pipe' ? 'tail' : this.options.stderr ?? 'inherit',
+    });
     this.live.set(providerId, client);
     client.onclose = () => {
       // Drop the dead client so the next call reconnects.
@@ -161,7 +161,7 @@ export class UpstreamPool {
     return client;
   }
 
-  private createTransport(provider: ArtifactProvider): Transport {
+  private connectSpec(provider: ArtifactProvider): McpConnectSpec {
     const launch = provider.launch;
     if (!launch) {
       throw new Error(
@@ -169,9 +169,9 @@ export class UpstreamPool {
         'Recompile from an MCP config (smallchat compile --source .mcp.json) or give the manifest a "launch" or "endpoint".',
       );
     }
+    const source = this.options.env ?? process.env;
     if (launch.transport === 'stdio') {
-      const source = this.options.env ?? process.env;
-      const env: Record<string, string> = { ...getDefaultEnvironment() };
+      const env: Record<string, string> = {};
       const missing: string[] = [];
       for (const name of launch.env) {
         const value = source[name];
@@ -181,21 +181,21 @@ export class UpstreamPool {
       if (missing.length > 0) {
         this.log(`upstream ${provider.id}: ${missing.join(', ')} not set in serve's environment; starting without ${missing.length === 1 ? 'it' : 'them'}`);
       }
-      return new StdioClientTransport({
-        command: launch.command,
-        args: launch.args,
+      return {
+        transport: 'stdio',
+        command: expandEnvRefs(launch.command, source),
+        args: launch.args.map(arg => expandEnvRefs(arg, source)),
         env,
-        stderr: this.options.stderr ?? 'inherit',
-      });
+        forwardProxyEnv: this.options.forwardProxyEnv,
+      };
     }
-    const url = new URL(launch.url);
     const headers = this.options.headers?.[provider.id];
-    const requestInit = headers ? { headers } : undefined;
-    if (launch.transport === 'sse') {
-      return new SSEClientTransport(url, requestInit ? { requestInit } : undefined);
-    }
-    // 'streamable-http', or an MCP provider recorded with a bare endpoint
-    return new StreamableHTTPClientTransport(url, requestInit ? { requestInit } : undefined);
+    return {
+      // 'streamable-http', or an MCP provider recorded with a bare endpoint
+      transport: launch.transport === 'sse' ? 'sse' : 'streamable-http',
+      url: expandEnvRefs(launch.url, source),
+      ...(headers ? { headers } : {}),
+    };
   }
 
   /**
@@ -206,13 +206,9 @@ export class UpstreamPool {
   private async reportDrift(providerId: string, client: Client): Promise<void> {
     if (!client.getServerCapabilities()?.tools) return;
     const listed = new Set<string>();
-    let cursor: string | undefined;
     try {
-      do {
-        const page = await client.listTools(cursor ? { cursor } : undefined, { timeout: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS });
-        for (const tool of page.tools) listed.add(tool.name);
-        cursor = page.nextCursor;
-      } while (cursor);
+      const tools = await listAllTools(client, { timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS });
+      for (const tool of tools) listed.add(tool.name);
     } catch (err) {
       this.log(`upstream ${providerId}: tools/list failed (${(err as Error).message})`);
       return;

@@ -9,7 +9,7 @@ vi.mock('node:child_process', () => ({
 }));
 
 // Import after mocking
-import { spawnMcpProcess, buildDockerArgs, isDockerAvailable } from './container-sandbox.js';
+import { spawnMcpProcess, buildDockerArgs, isDockerAvailable, safeInheritedEnv } from './container-sandbox.js';
 
 function makeFakeProcess(exitCode = 0): ChildProcess {
   const handlers: Record<string, Function[]> = {};
@@ -205,7 +205,7 @@ describe('container-sandbox', () => {
       expect(dockerArgs).not.toContain('--network=none');
     });
 
-    it('passes environment variables via -e flags', () => {
+    it('names environment variables with -e and passes their values out of band (SC-SURF-20)', () => {
       spawnMcpProcess({
         command: 'node',
         args: ['server.js'],
@@ -218,8 +218,31 @@ describe('container-sandbox', () => {
       for (let i = 0; i < dockerArgs.length; i++) {
         if (dockerArgs[i] === '-e') eFlags.push(dockerArgs[i + 1]);
       }
-      expect(eFlags).toContain('API_KEY=secret');
-      expect(eFlags).toContain('DB_HOST=localhost');
+      expect(eFlags).toEqual(['API_KEY', 'DB_HOST']);
+      // No value ever reaches the docker command line (readable via ps / /proc/<pid>/cmdline).
+      expect(dockerArgs.join(' ')).not.toContain('secret');
+      // The docker client reads the values from its own environment.
+      const spawnEnv = (mockSpawn.mock.calls[0][2] as { env: Record<string, string> }).env;
+      expect(spawnEnv.API_KEY).toBe('secret');
+      expect(spawnEnv.DB_HOST).toBe('localhost');
+    });
+
+    it('does not hand the docker client unrelated parent secrets', () => {
+      process.env.SMALLCHAT_TEST_SECRET_Z = 'leaked';
+      process.env.DOCKER_HOST = 'unix:///tmp/test-docker.sock';
+      try {
+        spawnMcpProcess({
+          command: 'node',
+          containerSandbox: { enabled: true, image: 'node:20-slim' },
+        });
+        const spawnEnv = (mockSpawn.mock.calls[0][2] as { env: Record<string, string> }).env;
+        expect(spawnEnv.SMALLCHAT_TEST_SECRET_Z).toBeUndefined();
+        // ...but keeps what the docker CLI itself needs to reach the daemon.
+        expect(spawnEnv.DOCKER_HOST).toBe('unix:///tmp/test-docker.sock');
+      } finally {
+        delete process.env.SMALLCHAT_TEST_SECRET_Z;
+        delete process.env.DOCKER_HOST;
+      }
     });
 
     it('adds read-only volume mounts', () => {
@@ -306,7 +329,7 @@ describe('container-sandbox', () => {
         '--memory=512m',
         '--cpus=2',
         '-v', '/data:/data:ro',
-        '-e', 'TOKEN=abc',
+        '-e', 'TOKEN',
         '--read-only',
         'node:20-slim',
         'node', 'index.js',
@@ -346,5 +369,56 @@ describe('container-sandbox', () => {
       const result = await isDockerAvailable();
       expect(result).toBe(false);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// safeInheritedEnv — platform-aware allowlist (SC-SURF-20)
+// ---------------------------------------------------------------------------
+
+describe('safeInheritedEnv', () => {
+  const windowsEnv = {
+    PATH: 'C:\\Windows\\system32',
+    SYSTEMROOT: 'C:\\Windows',
+    APPDATA: 'C:\\Users\\a\\AppData\\Roaming',
+    LOCALAPPDATA: 'C:\\Users\\a\\AppData\\Local',
+    USERPROFILE: 'C:\\Users\\a',
+    TEMP: 'C:\\Temp',
+    PATHEXT: '.COM;.EXE;.BAT;.CMD',
+    ComSpec: 'C:\\Windows\\system32\\cmd.exe',
+    GITHUB_TOKEN: 'ghp_secret',
+  };
+
+  it('keeps what npx/.cmd shims need on Windows', () => {
+    const env = safeInheritedEnv({ source: windowsEnv, platform: 'win32' });
+    for (const key of ['PATH', 'SYSTEMROOT', 'APPDATA', 'LOCALAPPDATA', 'USERPROFILE', 'TEMP', 'PATHEXT', 'ComSpec']) {
+      expect(env[key], key).toBe(windowsEnv[key as keyof typeof windowsEnv]);
+    }
+    expect(env.GITHUB_TOKEN).toBeUndefined();
+  });
+
+  it('keeps the POSIX basics and never secrets', () => {
+    const env = safeInheritedEnv({
+      source: { PATH: '/usr/bin', HOME: '/home/a', LANG: 'C.UTF-8', LC_TIME: 'C', AWS_SECRET_ACCESS_KEY: 'x' },
+      platform: 'linux',
+    });
+    expect(env).toEqual({ PATH: '/usr/bin', HOME: '/home/a', LANG: 'C.UTF-8', LC_TIME: 'C' });
+  });
+
+  it('forwards proxy and CA settings only when asked', () => {
+    const source = { PATH: '/usr/bin', HTTPS_PROXY: 'http://proxy:3128', no_proxy: 'localhost', NODE_EXTRA_CA_CERTS: '/etc/ca.pem' };
+    expect(safeInheritedEnv({ source, platform: 'linux' }).HTTPS_PROXY).toBeUndefined();
+    const forwarded = safeInheritedEnv({ source, platform: 'linux', forwardProxyEnv: true });
+    expect(forwarded).toMatchObject({ HTTPS_PROXY: 'http://proxy:3128', no_proxy: 'localhost', NODE_EXTRA_CA_CERTS: '/etc/ca.pem' });
+  });
+
+  it('turns proxy forwarding on with SMALLCHAT_FORWARD_PROXY_ENV=1', () => {
+    const source = { PATH: '/usr/bin', HTTPS_PROXY: 'http://proxy:3128', SMALLCHAT_FORWARD_PROXY_ENV: '1' };
+    expect(safeInheritedEnv({ source, platform: 'linux' }).HTTPS_PROXY).toBe('http://proxy:3128');
+  });
+
+  it('skips exported shell functions', () => {
+    const env = safeInheritedEnv({ source: { PATH: '/usr/bin', SHELL: '() { evil; }' }, platform: 'linux' });
+    expect(env.SHELL).toBeUndefined();
   });
 });

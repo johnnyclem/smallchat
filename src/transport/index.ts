@@ -20,6 +20,7 @@ export type {
   HttpTransportRoute,
   GeneratedHttpConfig,
   McpStdioTransportConfig,
+  McpHttpTransportConfig,
   McpSseTransportConfig,
   LocalTransportConfig,
   LocalHandler,
@@ -50,7 +51,7 @@ export { BearerTokenAuth, OAuth2ClientCredentialsAuth } from './auth.js';
 
 // Transport implementations
 export { HttpTransport } from './http-transport.js';
-export { McpStdioTransport, McpSseTransport } from './mcp-client-transport.js';
+export { McpStdioTransport, McpHttpTransport, McpSseTransport } from './mcp-client-transport.js';
 export { LocalTransport } from './local-transport.js';
 
 // MCP protocol handler
@@ -97,7 +98,8 @@ export { ConnectionPool } from './connection-pool.js';
 export type { ConnectionPoolConfig } from './connection-pool.js';
 
 // Container sandbox
-export { spawnMcpProcess, buildDockerArgs, isDockerAvailable } from './container-sandbox.js';
+export { spawnMcpProcess, buildDockerArgs, buildMcpSpawnSpec, safeInheritedEnv, isDockerAvailable } from './container-sandbox.js';
+export type { SpawnMcpProcessOptions, McpSpawnSpec } from './container-sandbox.js';
 
 // Generators
 export { generateFromOpenAPI, openAPIToToolDefinitions, fetchOpenAPISpec } from './openapi-generator.js';

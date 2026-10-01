@@ -40,7 +40,7 @@ export interface ITransport {
 // Transport kinds
 // ---------------------------------------------------------------------------
 
-export type TransportKind = 'http' | 'mcp-stdio' | 'mcp-sse' | 'local' | 'grpc';
+export type TransportKind = 'http' | 'mcp-stdio' | 'mcp-http' | 'mcp-sse' | 'local' | 'grpc';
 
 // ---------------------------------------------------------------------------
 // TransportInput — what goes into a transport
@@ -201,24 +201,47 @@ export interface McpStdioTransportConfig {
   command: string;
   /** Arguments for the command */
   args?: string[];
-  /** Environment variables */
+  /** Environment variables (added to the safe inherited environment) */
   env?: Record<string, string>;
   /** Working directory */
   cwd?: string;
-  /** Timeout for initialization in ms (default: 10000) */
+  /** Timeout for the initialize handshake in ms (default: 10000) */
   initTimeoutMs?: number;
+  /** Default per-call timeout in ms (default: 30000; TransportInput.timeoutMs overrides) */
+  timeoutMs?: number;
+  /** Delay before restarting after a failed start, doubled per consecutive failure, max 30 s (default: 1000) */
+  restartBackoffMs?: number;
+  /** Forward the whole parent environment instead of the safe allowlist (trusted servers only) */
+  inheritEnv?: boolean;
+  /** Also forward proxy/CA settings (HTTPS_PROXY, NODE_EXTRA_CA_CERTS, ...) */
+  forwardProxyEnv?: boolean;
   /** Optional container sandbox for process isolation */
   containerSandbox?: ContainerSandboxConfig;
 }
 
-export interface McpSseTransportConfig {
-  /** SSE endpoint URL */
+export interface McpHttpTransportConfig {
+  /** MCP endpoint URL (Streamable HTTP endpoint, or the legacy SSE URL) */
   url: string;
-  /** Authentication strategy */
+  /**
+   * 'streamable-http', 'sse' (legacy HTTP+SSE), or 'auto' (default):
+   * Streamable HTTP, falling back to SSE when the server rejects it with a 4xx.
+   */
+  transport?: 'streamable-http' | 'sse' | 'auto';
+  /** Authentication strategy, applied to every request */
   auth?: AuthStrategy;
   /** Additional headers */
   headers?: Record<string, string>;
-  /** Reconnect delay in ms (default: 1000) */
+  /** Timeout for the initialize handshake in ms (default: 10000) */
+  initTimeoutMs?: number;
+  /** Default per-call timeout in ms (default: 30000; TransportInput.timeoutMs overrides) */
+  timeoutMs?: number;
+  /** Delay before reconnecting after a failed connection, doubled per consecutive failure, max 30 s (default: 1000) */
+  restartBackoffMs?: number;
+}
+
+/** @deprecated Use McpHttpTransportConfig. */
+export interface McpSseTransportConfig extends McpHttpTransportConfig {
+  /** @deprecated Unused; reconnection is governed by restartBackoffMs */
   reconnectDelayMs?: number;
 }
 
