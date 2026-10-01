@@ -221,7 +221,8 @@ Each finding below is closed by the change described above or in the entry that 
 - **Web satellites fail closed.** `@smallchat/nextjs` handlers need `authorize` or an explicit `unsafePublic: true` (SAT-25); `AppView` no longer grants `allow-same-origin` by default, accepts messages only from its own frame, and binds them to the frame's origin when the sandbox gives it one (SAT-26).
 - **Parsing.** Manifests, configs and artifacts are parsed with `safeJsonParse` (rejects `__proto__`, `prototype` and `constructor` keys); `SCDictionary.unwrap()` builds a null-prototype object; local manifest dependencies that escape the config directory are skipped; the playground HTML-escapes every value from a toolkit and refuses foreign Host and Origin headers and non-JSON POSTs (SAT-15).
 - `.gitignore` covers common secret files (`.env*`, `*.key`, `*.pem`, …) and SQLite write-ahead files.
-- `vitest` `^3.2.7` (GHSA-5xrq-8626-4rwp). `npm audit fix` applied at the root and in `packages/docs` (Docusaurus 3.10.2). Accepted risk: `adm-zip` < 0.6.0 via `onnxruntime-node`'s install-time script, which only unpacks its own npm-hosted binary.
+- `vitest` `^3.2.7` (GHSA-5xrq-8626-4rwp). `npm audit fix` applied at the root and in `packages/docs` (Docusaurus 3.10.2).
+- Dependencies: `next` 16.3.8 (remote code execution in `next/og` `ImageResponse`, 16.2.0–16.3.5), `onnxruntime-node` 1.30.0 (its install script now uses `adm-zip` 0.6.1, which closes the earlier accepted risk), and patched `fast-uri`, `hono`, `ip-address` and `qs`. One moderate advisory remains: `@vitest/mocker` (GHSA-82fw-gwwq-j7x9), test-time only; its fix is vitest 5.
 
 ### Known issues
 
