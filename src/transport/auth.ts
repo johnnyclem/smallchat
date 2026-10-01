@@ -53,6 +53,8 @@ interface CachedToken {
 export class OAuth2ClientCredentialsAuth implements AuthStrategy {
   private config: OAuth2ClientCredentialsConfig;
   private cachedToken: CachedToken | null = null;
+  /** The token request in flight, shared by concurrent callers */
+  private pendingToken: Promise<CachedToken> | null = null;
   /** Buffer in ms before actual expiry to trigger refresh (default: 30s) */
   private refreshBufferMs: number;
 
@@ -75,7 +77,12 @@ export class OAuth2ClientCredentialsAuth implements AuthStrategy {
     if (this.cachedToken && Date.now() < this.cachedToken.expiresAt - this.refreshBufferMs) {
       return this.cachedToken;
     }
+    // Single flight: concurrent requests wait for one token request.
+    this.pendingToken ??= this.fetchToken().finally(() => { this.pendingToken = null; });
+    return this.pendingToken;
+  }
 
+  private async fetchToken(): Promise<CachedToken> {
     const params = new URLSearchParams();
     params.set('grant_type', 'client_credentials');
     params.set('client_id', this.config.clientId);

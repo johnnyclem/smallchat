@@ -80,7 +80,10 @@ export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH' | 'HEAD' | 
 export interface FileUpload {
   /** Field name in the multipart form */
   fieldName: string;
-  /** File content as Buffer or ReadableStream */
+  /**
+   * File content. HttpTransport reads a ReadableStream to the end (up to
+   * maxUploadBytes) before sending; buildMultipartBody itself takes Buffers.
+   */
   content: Buffer | ReadableStream<Uint8Array>;
   /** Original filename */
   filename: string;
@@ -190,6 +193,9 @@ export interface HttpTransportConfig {
 
   /** Connection pool size (default: 10) */
   poolSize?: number;
+
+  /** Largest ReadableStream file upload buffered for a multipart request, in bytes (default: 50 MiB) */
+  maxUploadBytes?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -318,6 +324,16 @@ export interface RetryConfig {
   jitter?: number;
   /** Which status codes to retry on (default: [408, 429, 500, 502, 503, 504]) */
   retryableStatuses?: number[];
+  /**
+   * HttpTransport retries only idempotent methods (GET, HEAD, PUT, DELETE,
+   * OPTIONS) and requests that already carry an Idempotency-Key. Set this
+   * to also retry POST and PATCH: each logical call then gets one generated
+   * Idempotency-Key, sent on every attempt, so a server that honours it
+   * performs the side effect once. Only enable it for APIs that do.
+   */
+  retryNonIdempotent?: boolean;
+  /** Header that carries the idempotency key (default: "Idempotency-Key") */
+  idempotencyKeyHeader?: string;
 }
 
 // ---------------------------------------------------------------------------

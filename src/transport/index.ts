@@ -91,7 +91,7 @@ export { withTimeout, createTimeoutSignal } from './timeout.js';
 export { parseSSEStream, parseNDJSONStream, parseTextStream, getStreamParser } from './streaming.js';
 
 // File uploads
-export { buildMultipartBody, requiresMultipart } from './file-upload.js';
+export { buildMultipartBody, bufferFileUploads, requiresMultipart, DEFAULT_MAX_UPLOAD_BYTES } from './file-upload.js';
 
 // Connection pooling
 export { ConnectionPool } from './connection-pool.js';

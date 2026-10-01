@@ -247,6 +247,32 @@ settings and the server's variables.
 `NO_PROXY` or `NODE_EXTRA_CA_CERTS` unless you set
 `SMALLCHAT_FORWARD_PROXY_ENV=1` (or pass `forwardProxyEnv: true`).
 
+## `HttpTransport` retries and uploads
+
+**POST/PATCH are no longer retried by default.** If your API deduplicates
+on an idempotency key, opt back in:
+
+```typescript
+new HttpTransport({
+  baseUrl,
+  retry: { maxRetries: 3, retryNonIdempotent: true },   // sends one Idempotency-Key per call
+});
+```
+
+Or pass your own key in `input.headers['Idempotency-Key']`, which also
+makes the call retryable. GET, HEAD, PUT, DELETE and OPTIONS are retried as
+before. The retry loop now honours `retryableStatuses`.
+
+**Error responses keep their body.** A 4xx/5xx result has the parsed body
+in `content` and `isError: true`, with or without retries. Code that read
+`metadata.body` after exhausted retries should read `content`.
+
+**Streams in `FileUpload.content`** are read into memory, up to
+`maxUploadBytes` (default 50 MiB, configurable on `HttpTransport`). If you
+call `buildMultipartBody` yourself, first pass the files through
+`await bufferFileUploads(files)`. Passing a stream directly now throws
+instead of sending an empty file.
+
 ---
 
 # Migration Guide: 0.1.0 → 0.2.0
