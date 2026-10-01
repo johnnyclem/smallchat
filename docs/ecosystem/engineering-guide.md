@@ -1,5 +1,34 @@
 # The Agent Stack: Engineering Guide (SmallChat vantage point)
 
+> **Archived (pre-1.0 snapshot, July 2026).** Sections 1, 2, 3, 5, 6 and 7 describe smallchat
+> before 1.0. Corrected for 1.0 (XSUITE-16):
+>
+> - **Entry points.** `.` is the inference core plus the compiler, artifacts, MCP server and
+>   clients, transports and the channel bridge; it no longer re-exports any satellite. Subpaths:
+>   `./inference`, `./runtime`, `./compiler`, `./artifact`, `./mcp`, `./embedding`, `./channel`,
+>   `./app`, the deprecated `./compaction`, `./crdt`, `./importance`, `./truth` (re-exports of
+>   `@shorthand/core`) and the experimental `./memex`, `./dream`.
+> - **Dispatch.** `ToolRuntime` takes `(vectorIndex, embedder, options)`. Resolution is separate
+>   from execution (`resolve` / `dispatchById` / `dispatch`), tools are named by
+>   `<providerId>/<toolName>`, below-HIGH matches need an LLM verifier to run, and the rate
+>   limiter is opt-in per principal (the resolution cache is not rate-limited). `LocalEmbedder`
+>   was always a hash placeholder and is now `HashEmbedder`; `ONNXEmbedder` is the ONNX model.
+> - **CLI.** 16 commands: `setup`, `init`, `compile`, `serve`, `resolve`, `explain`, `replay`,
+>   `inspect`, `doctor`, `docs`, `repl`, `channel`, `dream`, `memex`, `app`, `rtk`.
+> - **Short-Hand.** `@shorthand/core` 1.0 is published from the short-hand repository, which merged
+>   the vendored copy; smallchat depends on it from npm, and `shorthand/` is an exact mirror
+>   checked in CI. The repository URL points at `short-hand`. `@shorthand/core` has no runtime
+>   dependencies and no embedding module. The importance fork (section 2) and the version-skew
+>   risk (sections 3 and 7) are closed.
+> - **Stenographer** is wired by contract: Truth Format v2 (read by `@shorthand/core`, fixtures run
+>   in CI) and objections delivered to the channel bridge. Section 2's "zero references" row is
+>   out of date.
+> - **CI exists** (`.github/workflows/ci.yml`, Node 22 and 24); the version is 1.0.0, unreleased
+>   (npm has only 0.1.0).
+>
+> Sections 4 (AgentVault's Gap C) and the AgentVault and Stenographer descriptions were not
+> re-verified.
+
 Companion to [`executive-summary.md`](./executive-summary.md). Technical detail behind that
 summary, gathered from source access to this repo (`johnnyclem/smallchat`) plus AgentVault's public
 ecosystem docs and a README-level look at Stenographer and upstream Short-Hand.
@@ -103,7 +132,7 @@ source), this repo has a real, shipping integration with one of the two:
 | SmallChat → Short-Hand compaction | **Wired, shipped since v0.4.0** | `package.json` (`@shorthand/core: file:./shorthand`); `src/index.ts:304-358` re-exports `DefaultCompactor`, `runRecallTest`, `checkInvariants`, entropy/rate-distortion analysis, etc. from `@shorthand/core/compaction`, exposed publicly at `@smallchat/core/compaction` |
 | SmallChat → Short-Hand CRDT | **Wired, shipped since v0.4.0** | `src/index.ts:434-479` re-exports `LWWRegister`, `ORSet`, `GSet`, `RGA`, `AgentMemory`, `ConflictDetector` from `@shorthand/core/crdt`, exposed at `@smallchat/core/crdt` |
 | SmallChat → Short-Hand importance scoring | **Claimed wired, actually forked and drifting** | PR #58's title claims extraction "from compaction, CRDT, and importance modules," but `src/index.ts` exports `ImportanceDetector` from local `src/importance/index.ts`, not `@shorthand/core/importance`. `src/importance/types.ts` already differs from `shorthand/src/importance/types.ts` (self-contained `ConversationMessage` interface vs. one imported from Short-Hand's shared `types.ts`, plus a missing `normalizeTimestamp` re-export) |
-| SmallChat ↔ Stenographer | **Zero references** | Repo-wide case-insensitive search for `stenograph` across source, tests, docs, `package.json`, `package-lock.json`, and `examples/` returns nothing |
+| SmallChat ↔ Stenographer | **Zero references** *(pre-1.0; 1.0 is wired by contract, see the correction at the top)* | Repo-wide case-insensitive search for `stenograph` across source, tests, docs, `package.json`, `package-lock.json`, and `examples/` returns nothing |
 | SmallChat ↔ AgentVault | **Zero references** | Same search for `agentvault` returns nothing |
 
 The importance-module finding is the one piece of evidence in this whole evaluation (across both

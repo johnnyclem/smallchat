@@ -90,7 +90,8 @@ export const initCommand = new Command('init')
       console.log('  npm install');
     }
     // `npm run` uses the locally installed smallchat bin; never the unscoped
-    // `npx smallchat`, which would fetch an unrelated (unregistered) package.
+    // `smallchat` name through npx, which would fetch an unrelated
+    // (unregistered) package.
     console.log('  npm run compile        # smallchat compile --source ./manifests');
     if (template === 'basic') {
       console.log('  npm run build && npm start');

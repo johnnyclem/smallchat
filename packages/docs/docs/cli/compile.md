@@ -10,7 +10,7 @@ Reads tool manifests from a source directory, generates semantic embeddings, gro
 ## Usage
 
 ```bash
-npx @smallchat/core compile --source <dir> --output <file> [--watch]
+npx -y @smallchat/core compile --source <dir> --output <file> [--watch]
 ```
 
 ## Options
@@ -29,7 +29,7 @@ npx @smallchat/core compile --source <dir> --output <file> [--watch]
 ### Basic compilation
 
 ```bash
-npx @smallchat/core compile -s ./tools -o tools.json
+npx -y @smallchat/core compile -s ./tools -o tools.json
 ```
 
 Output:
@@ -48,7 +48,7 @@ Wrote tools.json (48 KB)
 In development, use `--watch` to automatically recompile when manifests change:
 
 ```bash
-npx @smallchat/core compile -s ./tools -o tools.json --watch
+npx -y @smallchat/core compile -s ./tools -o tools.json --watch
 ```
 
 Output:
@@ -80,7 +80,7 @@ watch('./tools.json', async () => {
 Compile manifests from multiple directories by running separate `compile` invocations and merging, or by placing all manifests under a single root:
 
 ```bash
-npx @smallchat/core compile -s ./tools -o tools.json
+npx -y @smallchat/core compile -s ./tools -o tools.json
 ```
 
 ## Output format

@@ -10,7 +10,7 @@ Shows why the runtime would (or would not) pick a tool for an intent. Nothing ex
 ## Usage
 
 ```bash
-npx @smallchat/core explain <artifact> "<intent>" [--args '{...}'] [--principal id] [--config smallchat.json] [--decision-log file] [--json]
+npx -y @smallchat/core explain <artifact> "<intent>" [--args '{...}'] [--principal id] [--config smallchat.json] [--decision-log file] [--json]
 ```
 
 ## Output

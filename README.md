@@ -15,10 +15,10 @@ Your agent has 50 tools. The LLM sees all 50 in its context window every single 
 > **Dispatch, not retrieval.** smallchat is not a knowledge engine or a RAG layer — it doesn't compile documents or answer questions. It infers *which tool to call* from a natural-language intent. The data substrate is your agent's tool registry (`.toolkit.json`), not enterprise documents.
 
 ```bash
-npx @smallchat/core compile --source ~/.mcp.json
+npx -y @smallchat/core compile --source ~/.mcp.json
 ```
 
-One command. Point it at your MCP config, a directory of manifests, or any MCP server repo. Out comes a compiled artifact with embedded vectors, dispatch tables, and resolution caching — ready to serve.
+One command (once 1.0.0 is on npm; until then [build from source](#quick-start)). Point it at your MCP config, a directory of manifests, or any MCP server repo. Out comes a compiled artifact (format 1.0): every tool with its upstream schema and annotations, selector vectors pinned to the embedder that produced them, and a content hash — ready to serve.
 
 ## Where smallchat fits
 
@@ -60,7 +60,7 @@ That's it: your agent can now reach every upstream tool through one server, with
 
 > **Prefer non-interactive mode?** `smallchat setup --no-interactive` auto-detects and compiles without prompts. Add `--config <file> --install [--disable-originals]` to also update that config.
 >
-> **Published on npm?** `@smallchat/core` is on the registry, but currently pinned at `0.1.0` — well behind this repo (`1.0.0`, unreleased; see [What's New](#whats-new) below), and missing commands like `setup`, `doctor`, `memex`, and `rtk` entirely. Build from source as shown above until a fresh version ships; watch [CHANGELOG.md](./CHANGELOG.md) for the publish.
+> **Published on npm?** Only `@smallchat/core@0.1.0` is on the registry — well behind this repo (`1.0.0`, unreleased; see [What's New](#whats-new) below), and missing commands like `setup`, `doctor`, `explain` and `replay` entirely. `@smallchat/core@1.0.0` depends on `@shorthand/core@1.0.0`, which is published from the [short-hand](https://github.com/johnnyclem/short-hand) repository first. Build from source as shown above until 1.0.0 ships; watch [CHANGELOG.md](./CHANGELOG.md) for the publish.
 
 ## Install
 
@@ -73,7 +73,7 @@ npm install
 npm run build
 ```
 
-**From npm** (currently `0.1.0` only):
+**From npm** (once 1.0.0 is published; the registry has only `0.1.0` today):
 
 ```bash
 npm install @smallchat/core
@@ -107,18 +107,21 @@ smallchat init my-app --template agent
 smallchat repl tools.toolkit.json
 ```
 
-(Assumes the `npm link` step from [Quick Start](#quick-start). Swap in `npx @smallchat/core@0.1.0` if you're deliberately targeting the currently-published package instead — most of the commands above post-date it.)
+(Assumes the `npm link` step from [Quick Start](#quick-start). Once 1.0.0 is published, `npx -y @smallchat/core <command>` runs the same commands without a checkout. Never run the unscoped `smallchat` name with `npx`: that npm name is not this project.)
 
 ## Use It in Code
 
 For the durable engine and nothing else, import the dedicated entry point — it
-excludes the token-era optimization satellites (compaction, memex, CRDT, …):
+has no transport, MCP or satellite code:
 
 ```typescript
 import { ToolRuntime, MemoryVectorIndex, HashEmbedder } from '@smallchat/core/inference';
 ```
 
-Or from the package root, which additionally re-exports the satellites. The
+Or from the package root, which adds the compiler, artifacts, the MCP server
+and clients, transports and the channel bridge. (Compaction, CRDT memory,
+importance scoring and truth-ledger interop are `@shorthand/core`'s; memex and
+dream are the experimental `@smallchat/core/memex` and `/dream` subpaths.) The
 usual starting point is a compiled artifact:
 
 ```typescript
@@ -204,21 +207,24 @@ See the [Architecture doc](./ARCHITECTURE.md) for the full design and the [Refer
 | `docs` | Generate Markdown docs from a compiled artifact |
 | `repl` | Interactive shell for testing resolution |
 | `channel` | Claude Code channel-protocol bridge |
-| `dream` | Memory-driven recompilation from session logs |
-| `memex` | Compile a knowledge base (separate from the tool dispatch pipeline) |
+| `dream` | *Experimental.* Recompile with usage hints from session logs and memory files (advisory; proposes exclusions, never applies one unless configured) |
+| `memex` | *Experimental.* Compile a knowledge base (separate from the tool dispatch pipeline) |
 | `app` | Compile and inspect MCP Apps Extension manifests |
 | `rtk` | RTK output-compression setup and tooling |
 
 ## Packages
 
+All packages are versioned in lockstep (1.0.0); satellites take `@smallchat/core` `^1.0.0` as a peer dependency.
+
 | Package | Description | On npm? |
 |---------|-------------|---------|
-| `@smallchat/core` | Core runtime, compiler, MCP server, CLI | Yes, pinned at `0.1.0` (source is ahead — see [What's New](#whats-new)) |
-| `@smallchat/react` | React hooks: `useToolDispatch`, `useToolStream`, `SmallchatProvider` | Not yet — build from source |
-| `@smallchat/nextjs` | Next.js App Router helpers | Not yet — build from source |
+| `@smallchat/core` | Core runtime, compiler, MCP server, CLI | Only `0.1.0` so far; 1.0.0 is unreleased (see [What's New](#whats-new)) |
+| `@shorthand/core` | Compaction, CRDT memory, importance scoring, truth-ledger interop — a dependency, developed in [short-hand](https://github.com/johnnyclem/short-hand) | Not yet — published before `@smallchat/core` 1.0.0 |
+| `@smallchat/react` | React hooks (`useToolDispatch`, `useToolStream`, `SmallchatProvider`) and `AppView` | Not yet — build from source |
+| `@smallchat/nextjs` | Next.js App Router handlers (require an `authorize` hook) | Not yet — build from source |
 | `@smallchat/testing` | `MockEmbedder`, `MockVectorIndex`, assertion helpers | Not yet — build from source |
 | `smallchat-vscode` | VS Code syntax highlighting, manifest schema validation, snippets | Not yet — build from source |
-| `@smallchat/playground` | Browser-based resolution chain visualizer | Not yet — build from source |
+| `@smallchat/playground` | Browser UI showing how the runtime resolves an intent | Private — run from source |
 
 ## Documentation
 
@@ -228,29 +234,38 @@ See the [Architecture doc](./ARCHITECTURE.md) for the full design and the [Refer
 | [Architecture](./ARCHITECTURE.md) | Full design document |
 | [Reference](./docs/REFERENCE.md) | Runtime, dispatch, streaming, MCP server, CLI details |
 | [Concept Mapping](./docs/REFERENCE.md#concept-mapping) | Smalltalk/Obj-C → smallchat translation table |
-| [Migration Guide](./MIGRATION.md) | Upgrading from 0.1.0 to 0.2.0 |
+| [Migration Guide](./MIGRATION.md) | Upgrading from 0.5 to 1.0 |
 | [LoomMCP integration](./packages/docs/docs/integrations/loom-mcp.md) | Pair smallchat with LoomMCP for semantic dispatch over symbol-level retrieval |
 | [Changelog](./CHANGELOG.md) | Release history |
 
 ## Ecosystem
 
-smallchat is one of four related projects by the same author (AgentVault, SmallChat, Stenographer,
-Short-Hand) exploring a layered agent runtime — durable execution, tool dispatch, conversation
-memory, and context compaction as separate concerns. See
-[`docs/ecosystem/executive-summary.md`](./docs/ecosystem/executive-summary.md) and
-[`docs/ecosystem/engineering-guide.md`](./docs/ecosystem/engineering-guide.md) for what's actually
-wired up today (notably: Short-Hand's compaction and CRDT modules are vendored directly into this
-package) versus what's still aspirational.
+smallchat is part of a suite by the same author: [short-hand](https://github.com/johnnyclem/short-hand)
+(`@shorthand/core`: compaction, CRDT memory, importance, truth-ledger interop — a dependency of
+this package), [stenographer](https://github.com/johnnyclem/stenographer) (the truth ledger whose
+Truth Format v2 `@shorthand/core` reads, and whose objections arrive over smallchat's
+authenticated channel bridge), [smallchat-swift](https://github.com/johnnyclem/smallchat-swift)
+(the Swift implementation, which runs this repo's `spec/` vectors) and
+[polytician](https://github.com/johnnyclem/polytician). The integrations are file-format and
+wire contracts (`spec/`, Truth Format v2, the channel `POST /event` body), not code dependencies,
+except `@shorthand/core`. [`docs/ecosystem/`](./docs/ecosystem/executive-summary.md) holds a pre-1.0
+evaluation of the ecosystem, with corrections at the top of each page.
 
 ## Development
 
 ```bash
-npm test          # ~1,100+ specs across the core runtime, compiler, embeddings, and transports
-npm test --workspace=shorthand  # ~260 specs for the vendored compaction/CRDT/importance modules
-npm run dev       # Watch mode
-npm run lint      # Type check
-npm run docs:api  # Generate API reference
+npm test                        # ~1,400 tests: runtime, compiler, embeddings, MCP, transports, satellites
+npm test --workspace=shorthand  # ~680 tests of the @shorthand/core mirror (CRDT properties, truth v2 fixtures)
+npm run check:shorthand         # shorthand/ still matches the short-hand release it mirrors
+npm run build && npm run test:pack   # pack, install and load the package as npm would publish it
+npm run test:traces             # golden dispatch traces (after a build)
+npm run dev                     # Watch mode
+npm run lint                    # Type check
+npm run docs:api                # Generate API reference
 ```
+
+`shorthand/` is a byte-for-byte mirror of `@shorthand/core` (see `shorthand/README.md`); change
+short-hand and re-run `SHORTHAND_DIR=../short-hand npm run sync:shorthand` instead of editing it.
 
 ## License
 

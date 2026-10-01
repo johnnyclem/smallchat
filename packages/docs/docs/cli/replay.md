@@ -10,7 +10,7 @@ Checks golden dispatch traces against a compiled artifact: for each intent, the 
 ## Usage
 
 ```bash
-npx @smallchat/core replay <artifact> <traces...> [--json] [--config smallchat.json] [--semantic-map map.json]
+npx -y @smallchat/core replay <artifact> <traces...> [--json] [--config smallchat.json] [--semantic-map map.json]
 ```
 
 | Argument / option | Description |

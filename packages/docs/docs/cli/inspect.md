@@ -10,7 +10,7 @@ Inspects a compiled artifact and prints structured information about its content
 ## Usage
 
 ```bash
-npx @smallchat/core inspect <file> [--providers] [--selectors]
+npx -y @smallchat/core inspect <file> [--providers] [--selectors]
 ```
 
 ## Arguments
@@ -33,7 +33,7 @@ If neither `--providers` nor `--selectors` is specified, a summary is printed.
 ### Summary (no flags)
 
 ```bash
-npx @smallchat/core inspect tools.json
+npx -y @smallchat/core inspect tools.json
 ```
 
 Output:
@@ -57,7 +57,7 @@ embedder fingerprint the artifact was compiled with.
 ### Providers
 
 ```bash
-npx @smallchat/core inspect tools.json --providers
+npx -y @smallchat/core inspect tools.json --providers
 ```
 
 Output:
@@ -72,7 +72,7 @@ Providers (3):
 ### Selectors
 
 ```bash
-npx @smallchat/core inspect tools.json --selectors
+npx -y @smallchat/core inspect tools.json --selectors
 ```
 
 Output:
@@ -97,7 +97,7 @@ Selectors (13):
 ### Both flags
 
 ```bash
-npx @smallchat/core inspect tools.json --providers --selectors
+npx -y @smallchat/core inspect tools.json --providers --selectors
 ```
 
 Prints providers followed by selectors.

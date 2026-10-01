@@ -16,7 +16,7 @@ npm install @smallchat/core
 After installation, the `smallchat` binary is available via `npx`:
 
 ```bash
-npx @smallchat/core <command> [options]
+npx -y @smallchat/core <command> [options]
 ```
 
 Or install globally:
@@ -48,14 +48,14 @@ smallchat <command> [options]
 
 ```bash
 # Compile all manifests in ./tools → tools.json
-npx @smallchat/core compile --source ./tools --output tools.json
+npx -y @smallchat/core compile --source ./tools --output tools.json
 
 # Inspect what's in tools.json
-npx @smallchat/core inspect tools.json --providers --selectors
+npx -y @smallchat/core inspect tools.json --providers --selectors
 
 # Test a dispatch
-npx @smallchat/core resolve tools.json "search for code"
+npx -y @smallchat/core resolve tools.json "search for code"
 
 # Serve the toolkit over stdio (or --http for Streamable HTTP at :3001/mcp)
-npx @smallchat/core serve --source tools.json
+npx -y @smallchat/core serve --source tools.json
 ```

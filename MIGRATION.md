@@ -1,6 +1,41 @@
 # Migration Guide: 0.5 → 1.0
 
 1.0 is a major release; the sections below cover each breaking change.
+The [CHANGELOG](./CHANGELOG.md) says why each one was made.
+
+**Checklist**
+
+1. Run Node.js 22 or newer ([toolchain](#toolchain-node-22-and-the-dependencies-that-need-it)).
+2. Install `@smallchat/core@^1.0.0`; it depends on `@shorthand/core@^1.0.0`
+   from npm. Import compaction, CRDT, importance and truth from
+   `@shorthand/core`, and memex and dream from their subpaths
+   ([root entry](#the-root-entry-is-the-inference-core-satellites-moved-to-subpaths)).
+3. Recompile every artifact with 1.0 ([artifacts](#compiled-artifacts-format-10-and-embedder-identity)).
+4. Treat `isError` dispatch results and `metadata.outcome` as the way
+   "nothing ran" is reported, run tools by id with `dispatchById`, and
+   expect below-HIGH matches to come back as `needs-disambiguation`
+   without an LLM verifier ([dispatch](#resolve-vs-execute-argument-validation-and-the-dispatch-policy)).
+5. MCP clients of `smallchat serve`: tools are `<providerId>__<toolName>`,
+   stdio is the default, and `--http` needs a bearer token
+   ([serve](#smallchat-serve-sdk-based-stdio-by-default-exact-aggregate-names)).
+6. Channel bridge users: give it a credential
+   ([channel](#smallchat-channel---http-bridge-credentials-and-identity)).
+7. Replace configs that launch the unscoped `smallchat` npm name
+   ([setup](#smallchat-setup-smallchat-rtk-setup-and-smallchat-init)).
+8. Next.js, React, playground and dream users: see
+   [satellites](#satellites-nextjs-react-playground-dream-and-memex).
+
+## Toolchain: Node 22 and the dependencies that need it
+
+`engines.node` is `>=22.0.0` (it was `>=20.0.0`); CI runs Node 22 and 24.
+`commander` 15 and `better-sqlite3` 13 require Node 22. `better-sqlite3` 13
+ships prebuilt Node-API binaries for Linux (glibc and musl), macOS and
+Windows on x64 and arm64. A fresh `npm install` uses them directly; an
+install from a lockfile (`npm ci`) runs npm's implicit `node-gyp rebuild`,
+which compiles nothing when a prebuild matches but needs Python 3 and make
+on the machine. On a slim image or an offline runner use
+`npm ci --ignore-scripts` (the prebuilt binary still loads).
+`@types/better-sqlite3` is `^9.6.0`.
 
 ## The root entry is the inference core; satellites moved to subpaths
 
@@ -569,9 +604,9 @@ setup now writes:
 { "type": "stdio", "command": "npx", "args": ["-y", "@smallchat/core@1.0.0", "serve", "--source", "/abs/tools.toolkit.json"] }
 ```
 
-`npx smallchat` refers to an unregistered npm name: anyone could publish a
-package under it, and npx installs without prompting when an MCP host
-starts it. Never use the unscoped name.
+The unscoped `smallchat` npm name is unregistered: anyone could publish a
+package under it, and `npx` installs without prompting when an MCP host
+starts it. Never launch the unscoped name; use `npx -y @smallchat/core@<version>`.
 
 **Scripted setup:** `smallchat setup --no-interactive --config .mcp.json
 --install [--disable-originals] [--embedder hash]`. Before, non-interactive
@@ -588,11 +623,93 @@ permission rules then see the rewritten command, so an allow rule such as
 **`init` runs `git init` and `npm install`** unless you pass `--no-git` /
 `--no-install`.
 
+## Satellites: Next.js, React, playground, dream and memex
+
+**`@smallchat/nextjs` handlers need an authorization decision.**
+`createDispatchHandler()`, `createStreamHandler()` and
+`createToolListHandler()` throw without one:
+
+```typescript
+// app/api/dispatch/route.ts
+import { createDispatchHandler } from '@smallchat/nextjs';
+
+export const POST = createDispatchHandler({
+  // true: allow; false: 403; or return a Response (e.g. a 401) to send as-is
+  authorize: async (request, call) => (await getSession(request))?.user != null,
+});
+```
+
+Pass `unsafePublic: true` instead only for a route that should run tools
+for anyone. `call` is `{ kind: 'dispatch' | 'stream', intent, args }`, or
+`{ kind: 'list' }` for the tool list. Requests over `maxBodyBytes` (64 KiB
+by default) get 413; errors go to `onError` and the response body is a
+generic `{ error: 'Dispatch failed.' }`. The handlers refuse a runtime
+built with `requireLLMForSubHighDispatch: false` unless you also pass
+`allowSubHighDispatch: true`; with the default runtime, intents below HIGH
+confidence come back as `needs-disambiguation` results for your UI to
+refine (or run with an LLM verifier configured). `createToolListHandler`'s
+`GET(request)` now receives the request.
+
+**`@smallchat/react`.** Calling `stream()` or `infer()` again, `cancel()`
+or unmounting aborts the previous run (its tool is cancelled through the
+dispatch signal) and drops its events; `useToolDispatch` and
+`useAppDispatch` show only the latest call's result. If you relied on two
+streams appending to one hook's state, use one hook per stream.
+`AppView` renders a `ui://` resource only from its HTML: pass `html` (the
+text of the MCP `resources/read` result) or `readResource={(uri) => …}`.
+An `http(s)` `componentUri` still loads as the iframe `src`. The default
+`sandbox` is now `allow-scripts`; add `allow-same-origin` back only for
+views you trust (with `allow-scripts` it lets a same-origin view remove its
+sandbox).
+
+**`@smallchat/playground`** is private (run it from source:
+`node packages/playground/dist/index.js tools.toolkit.json [port]`). Its
+`/api/resolve` returns the runtime's `{ outcome, tier, chosen, confidence,
+reason, candidates, proofDigest }` instead of `{ resolvedSelector, matches }`,
+and it listens on 127.0.0.1.
+
+**`smallchat dream` no longer excludes tools on its own.** Tools the
+heuristics would exclude are listed as "Proposed exclusions" (and in
+`ToolPriorityHints.proposedExclusions`). To remove a tool, name it:
+
+```jsonc
+// smallchat.dream.json
+{ "exclude": ["legacy_search"] }
+```
+
+or `smallchat dream --exclude legacy_search`; add
+`"applyProposedExclusions": true` (`--apply-proposed-exclusions`) to apply
+the proposals as 0.5 did. Boosts and demotions are advisory (recorded in
+the artifact's `extensions.dream`, not applied to dispatch). Usage success
+is the log's `is_error` flag only. Archives created by 0.5 are all labelled
+manual; after upgrading, the next `dream --auto` runs label correctly, and
+`--rollback` restores the newest archive labelled manual.
+`archiveCurrentArtifact(projectDir, outputPath)` detects provenance when
+you omit the third argument; `promoteArtifact` takes `isAutoGenerated`
+(default `true`).
+
+**Memex and dream are experimental** (`@smallchat/core/memex`,
+`@smallchat/core/dream`): their APIs, file formats and heuristics may
+change in any 1.x release. Memex no longer merges near-duplicate claims
+that disagree (a negation on one side, or different numbers), so a
+knowledge base can keep both and report the contradiction; query results
+carry `disputes`.
+
+## Developing smallchat: the `shorthand/` mirror
+
+`shorthand/` is an exact copy of `@shorthand/core` from the short-hand
+repository, written by `scripts/sync-shorthand.mjs`. Do not edit it:
+change short-hand, then run `SHORTHAND_DIR=../short-hand npm run
+sync:shorthand` (and `npm install --package-lock-only` if its dev
+dependencies changed). `npm run check:shorthand` and the test suite fail
+when the files differ from `shorthand/SOURCE`. `npm run build` now
+cleans `dist/` before compiling.
+
 ---
 
 # Migration Guide: 0.1.0 → 0.2.0
 
-> **Historical document.** This guide is preserved for users upgrading from the original 0.1.0 release. The current published version is 0.5.0; see the [Changelog](./CHANGELOG.md) for changes since 0.2.0. Newer migrations (if any are required) will be added to that file.
+> **Historical document.** This guide is preserved for users upgrading from the original 0.1.0 release. For 0.5 → 1.0 see the top of this file; the [Changelog](./CHANGELOG.md) lists every release. (Only 0.1.0 was ever published to npm before 1.0.)
 
 This guide covers all changes and new patterns when upgrading from smallchat 0.1.0 to 0.2.0.
 

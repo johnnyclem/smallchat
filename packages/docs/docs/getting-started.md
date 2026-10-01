@@ -102,7 +102,7 @@ The `compile` command reads your manifests, generates semantic embeddings for ea
 <TabItem value="typescript" label="TypeScript">
 
 ```bash
-npx @smallchat/core compile --source ./tools --output tools.json
+npx -y @smallchat/core compile --source ./tools --output tools.json
 ```
 
 </TabItem>
@@ -131,7 +131,7 @@ Before integrating into your application, verify that intents resolve to the too
 <TabItem value="typescript" label="TypeScript">
 
 ```bash
-npx @smallchat/core resolve tools.json "search for code"
+npx -y @smallchat/core resolve tools.json "search for code"
 ```
 
 </TabItem>
@@ -156,10 +156,10 @@ Try variations to check robustness:
 <TabItem value="typescript" label="TypeScript">
 
 ```bash
-npx @smallchat/core resolve tools.json "find code in a repo"
+npx -y @smallchat/core resolve tools.json "find code in a repo"
 # Matched: github.search_code (confidence: 0.91)
 
-npx @smallchat/core resolve tools.json "open a bug report"
+npx -y @smallchat/core resolve tools.json "open a bug report"
 # Matched: github.create_issue (confidence: 0.87)
 ```
 
@@ -186,10 +186,10 @@ smallchat serves a compiled toolkit as one MCP server (built on the official MCP
 
 ```bash
 # stdio, what MCP hosts launch
-npx @smallchat/core serve --source tools.json
+npx -y @smallchat/core serve --source tools.json
 
 # or Streamable HTTP at http://127.0.0.1:3001/mcp (bearer token in ~/.smallchat/serve-token)
-npx @smallchat/core serve --source tools.json --http
+npx -y @smallchat/core serve --source tools.json --http
 ```
 
 </TabItem>

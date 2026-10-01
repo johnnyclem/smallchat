@@ -10,7 +10,7 @@ Shows which tool the runtime would choose for a natural-language intent, and why
 ## Usage
 
 ```bash
-npx @smallchat/core resolve <file> "<intent>" [--execute [--force]] [--args '<json>'] [--json]
+npx -y @smallchat/core resolve <file> "<intent>" [--execute [--force]] [--args '<json>'] [--json]
 ```
 
 ## Arguments and options
@@ -30,7 +30,7 @@ npx @smallchat/core resolve <file> "<intent>" [--execute [--force]] [--args '<js
 ## Example
 
 ```bash
-npx @smallchat/core resolve tools.toolkit.json "search for code"
+npx -y @smallchat/core resolve tools.toolkit.json "search for code"
 ```
 
 ```

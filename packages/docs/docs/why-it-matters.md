@@ -65,18 +65,18 @@ const result = await runtime.dispatch('search for code', args);
 | Tool dispatch | Chain/Agent hierarchy | One `smallchat_dispatchStream` call |
 | Caching | External wrappers | Built-in resolution cache |
 | Extensibility | Subclass and register | `toolClass.addMethod` or swizzle |
-| Bundle size | Multiple adapter packages | &lt; 5 MB, zero dependencies |
+| Runs where | Framework runtime | In your process: embedding and resolution need no network or LLM API |
 | Architecture | Framework owns your loop | You own your loop |
 
-## Zero dependencies
+## No external services
 
-`@smallchat/core` ships under 5 MB with zero runtime dependencies. The local embedder runs entirely in-process — no external API call required for embedding or dispatch. Add a provider client when you need actual tool execution.
+Embedding runs in-process with the bundled ONNX model (all-MiniLM-L6-v2), so resolving an intent needs no network or LLM API. `@smallchat/core` does have runtime dependencies — the MCP SDK, Ajv, ONNX Runtime, SQLite (`better-sqlite3`, `sqlite-vec`) and `@shorthand/core` — and tools run on their own servers (MCP, REST, local handlers).
 
 ## MCP native
 
-smallchat implements the **MCP 2025-11-25** specification. The built-in `MCPServer` exposes a standards-compliant HTTP/SSE endpoint so any MCP-aware LLM client can discover and call your tools without any custom integration code.
+`smallchat serve` is an MCP server built on the official SDK, which negotiates the protocol version with each client (2025-11-25 down to 2024-10-07). It serves stdio by default, or Streamable HTTP at `/mcp` with `--http` and a bearer token, and forwards each `tools/call`, by exact name, to the upstream server that owns the tool.
 
 ```bash
 # Your tools, available to any MCP client, in one command
-npx @smallchat/core serve ./tools --port 3001
+npx -y @smallchat/core serve --source tools.toolkit.json
 ```

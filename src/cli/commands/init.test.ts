@@ -1,7 +1,7 @@
 /**
  * `smallchat init` (SC-SURF-31): --no-git / --no-install do what they say,
  * the basic template dispatches against its own manifest, and next steps
- * never suggest the unscoped `npx smallchat`.
+ * never suggest running the unscoped `smallchat` name through npx.
  */
 
 import { describe, it, expect, afterAll } from 'vitest';
@@ -65,7 +65,7 @@ describe('smallchat init', () => {
     expect(entry).toContain('dispatchById');
     expect(entry).not.toMatch(/new ToolRuntime\(/);
     // Next steps run the locally installed CLI, never the unscoped npm name.
-    expect(stdout).not.toMatch(/npx smallchat/);
+    expect(stdout).not.toMatch(/npx (-y )?smallchat\b/);
   }, 60_000);
 
   it('compiles the scaffold it wrote, with and without --source (each manifest once)', async () => {

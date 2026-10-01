@@ -180,7 +180,7 @@ Embedding runs in-process with the bundled ONNX model (all-MiniLM-L6-v2); resolu
 
 ### MCP native
 
-The built-in `MCPServer` speaks MCP 2025-11-25 out of the box. No glue code required to connect smallchat to Claude, GPT-4, or any other MCP-aware client.
+The built-in `MCPServer` runs on the official MCP SDK, which negotiates the protocol version with each client (2025-11-25 down to 2024-10-07). No glue code required to connect smallchat to Claude or any other MCP-aware client.
 
 ## Key source files
 
