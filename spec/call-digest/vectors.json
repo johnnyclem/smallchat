@@ -108,6 +108,21 @@
       "name": "tool id with an empty provider",
       "toolId": "/get_issue",
       "arguments": {}
+    },
+    {
+      "name": "tool id with an empty tool name",
+      "toolId": "github/",
+      "arguments": {}
+    },
+    {
+      "name": "tool id containing U+0000 (the separator)",
+      "toolId": "p/t\u0000x",
+      "arguments": {}
+    },
+    {
+      "name": "tool id containing a lone UTF-16 surrogate",
+      "toolId": "p/t\ud800",
+      "arguments": {}
     }
   ]
 }

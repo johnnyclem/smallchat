@@ -1,0 +1,137 @@
+{
+  "version": "smallchat.resolve.v1",
+  "description": "Resolve-outcome conformance vectors, independent of any embedder: each tool's cosine similarity to the intent is given. See README.md for how to run them.",
+  "cases": [
+    {
+      "name": "EXACT match resolves",
+      "intent": "look up issue",
+      "tools": [{ "id": "github/get_issue", "score": 0.97 }],
+      "expect": { "outcome": "resolved", "decision": "ranked", "tier": "exact", "chosen": "github/get_issue", "candidates": ["github/get_issue"] }
+    },
+    {
+      "name": "HIGH match resolves without a verifier",
+      "intent": "look up issue",
+      "tools": [{ "id": "github/get_issue", "score": 0.9 }, { "id": "github/list_issues", "score": 0.7 }],
+      "expect": { "outcome": "resolved", "decision": "ranked", "tier": "high", "chosen": "github/get_issue", "candidates": ["github/get_issue", "github/list_issues"] }
+    },
+    {
+      "name": "MEDIUM match without an LLM verifier needs disambiguation",
+      "intent": "look up issue",
+      "tools": [{ "id": "github/get_issue", "score": 0.8 }],
+      "expect": { "outcome": "needs-disambiguation", "decision": "needs-llm-verifier", "tier": "medium", "chosen": null, "candidates": ["github/get_issue"] }
+    },
+    {
+      "name": "LOW match without an LLM verifier needs disambiguation",
+      "intent": "look up issue",
+      "tools": [{ "id": "github/get_issue", "score": 0.65 }],
+      "expect": { "outcome": "needs-disambiguation", "decision": "needs-llm-verifier", "tier": "low", "chosen": null, "candidates": ["github/get_issue"] }
+    },
+    {
+      "name": "MEDIUM match the LLM verifier approves resolves",
+      "intent": "look up issue",
+      "tools": [{ "id": "github/get_issue", "score": 0.8 }],
+      "options": { "llm": { "approve": ["get_issue"] } },
+      "expect": { "outcome": "resolved", "decision": "llm-verified", "tier": "medium", "chosen": "github/get_issue", "candidates": ["github/get_issue"] }
+    },
+    {
+      "name": "MEDIUM match the LLM verifier rejects needs disambiguation",
+      "intent": "look up issue",
+      "tools": [{ "id": "github/get_issue", "score": 0.8 }],
+      "options": { "llm": { "approve": [] } },
+      "expect": { "outcome": "needs-disambiguation", "decision": "verification-failed", "tier": "medium", "chosen": null, "candidates": ["github/get_issue"] }
+    },
+    {
+      "name": "an alternate gets the same verification as the best candidate",
+      "intent": "look up issue",
+      "tools": [{ "id": "github/get_issue", "score": 0.8 }, { "id": "gitlab/get_issue_v2", "score": 0.78 }],
+      "options": { "llm": { "approve": ["get_issue_v2"] } },
+      "expect": { "outcome": "resolved", "decision": "llm-verified", "tier": "medium", "chosen": "gitlab/get_issue_v2", "candidates": ["github/get_issue", "gitlab/get_issue_v2"] }
+    },
+    {
+      "name": "nothing at or above LOW is unresolved",
+      "intent": "look up issue",
+      "tools": [{ "id": "github/get_issue", "score": 0.5 }],
+      "expect": { "outcome": "unresolved", "decision": "no-candidates", "tier": "none", "chosen": null, "candidates": [] }
+    },
+    {
+      "name": "equal scores are ordered by tool id",
+      "intent": "look up issue",
+      "tools": [{ "id": "zeta/get_issue", "score": 0.9 }, { "id": "alpha/get_issue", "score": 0.9 }],
+      "expect": { "outcome": "resolved", "decision": "ranked", "tier": "high", "chosen": "alpha/get_issue", "candidates": ["alpha/get_issue", "zeta/get_issue"] }
+    },
+    {
+      "name": "a destructive tool at HIGH is refused even with LLM approval",
+      "intent": "purge the logs",
+      "tools": [{ "id": "db/purge_logs", "score": 0.9, "annotations": { "destructiveHint": true } }],
+      "options": { "llm": { "approve": ["purge_logs"] } },
+      "expect": { "outcome": "needs-disambiguation", "decision": "destructive-needs-exact", "tier": "high", "chosen": null, "candidates": ["db/purge_logs"] }
+    },
+    {
+      "name": "a destructive tool at EXACT similarity resolves",
+      "intent": "purge the logs",
+      "tools": [{ "id": "db/purge_logs", "score": 0.97, "annotations": { "destructiveHint": true } }],
+      "expect": { "outcome": "resolved", "decision": "ranked", "tier": "exact", "chosen": "db/purge_logs", "candidates": ["db/purge_logs"] }
+    },
+    {
+      "name": "readOnlyHint false without destructiveHint counts as destructive",
+      "intent": "purge the logs",
+      "tools": [{ "id": "db/purge_logs", "score": 0.9, "annotations": { "readOnlyHint": false } }],
+      "expect": { "outcome": "needs-disambiguation", "decision": "destructive-needs-exact", "tier": "high", "chosen": null, "candidates": ["db/purge_logs"] }
+    },
+    {
+      "name": "a read-only tool is never destructive",
+      "intent": "purge the logs",
+      "tools": [{ "id": "db/purge_logs", "score": 0.9, "annotations": { "readOnlyHint": true, "destructiveHint": true } }],
+      "expect": { "outcome": "resolved", "decision": "ranked", "tier": "high", "chosen": "db/purge_logs", "candidates": ["db/purge_logs"] }
+    },
+    {
+      "name": "treatUnannotatedAsDestructive refuses an unannotated tool below EXACT",
+      "intent": "purge the logs",
+      "tools": [{ "id": "db/purge_logs", "score": 0.9 }],
+      "options": { "treatUnannotatedAsDestructive": true },
+      "expect": { "outcome": "needs-disambiguation", "decision": "destructive-needs-exact", "tier": "high", "chosen": null, "candidates": ["db/purge_logs"] }
+    },
+    {
+      "name": "an exact pin excludes its tool for any intent but its phrases",
+      "intent": "move money to bob",
+      "tools": [{ "id": "bank/transfer", "score": 0.97 }, { "id": "bank/check_balance", "score": 0.7 }],
+      "pins": [{ "toolId": "bank/transfer", "policy": "exact", "phrases": ["transfer funds"] }],
+      "expect": { "outcome": "needs-disambiguation", "decision": "needs-llm-verifier", "tier": "low", "chosen": null, "candidates": ["bank/check_balance"], "excluded": [{ "toolId": "bank/transfer", "reason": "pin-exact-required" }] }
+    },
+    {
+      "name": "an exact pin's phrase resolves to its tool",
+      "intent": "Transfer  Funds",
+      "tools": [{ "id": "bank/transfer", "score": 0.2 }],
+      "pins": [{ "toolId": "bank/transfer", "policy": "exact", "phrases": ["transfer funds"] }],
+      "expect": { "outcome": "resolved", "decision": "pin-exact", "tier": "exact", "chosen": "bank/transfer", "candidates": ["bank/transfer"] }
+    },
+    {
+      "name": "a negated phrase is not the pinned phrase",
+      "intent": "do not transfer funds",
+      "tools": [{ "id": "bank/transfer", "score": 0.97 }],
+      "pins": [{ "toolId": "bank/transfer", "policy": "exact", "phrases": ["transfer funds"] }],
+      "expect": { "outcome": "unresolved", "decision": "no-candidates", "tier": "none", "chosen": null, "candidates": [], "excluded": [{ "toolId": "bank/transfer", "reason": "pin-exact-required" }] }
+    },
+    {
+      "name": "an elevated pin excludes its tool below its threshold",
+      "intent": "move money to bob",
+      "tools": [{ "id": "bank/transfer", "score": 0.96 }],
+      "pins": [{ "toolId": "bank/transfer", "policy": "elevated", "threshold": 0.98 }],
+      "expect": { "outcome": "unresolved", "decision": "no-candidates", "tier": "none", "chosen": null, "candidates": [], "excluded": [{ "toolId": "bank/transfer", "reason": "pin-elevated-required" }] }
+    },
+    {
+      "name": "an elevated pin admits its tool at or above its threshold",
+      "intent": "move money to bob",
+      "tools": [{ "id": "bank/transfer", "score": 0.99 }],
+      "pins": [{ "toolId": "bank/transfer", "policy": "elevated", "threshold": 0.98 }],
+      "expect": { "outcome": "resolved", "decision": "ranked", "tier": "exact", "chosen": "bank/transfer", "candidates": ["bank/transfer"] }
+    },
+    {
+      "name": "requireLLMForSubHighDispatch false lets keyword verification pass a MEDIUM match",
+      "intent": "look up issue",
+      "tools": [{ "id": "github/get_issue", "score": 0.8 }],
+      "options": { "requireLLMForSubHighDispatch": false },
+      "expect": { "outcome": "resolved", "decision": "verified", "tier": "medium", "chosen": "github/get_issue", "candidates": ["github/get_issue"] }
+    }
+  ]
+}

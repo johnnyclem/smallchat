@@ -58,7 +58,7 @@ describe('callDigest — golden vectors (spec/call-digest/vectors.json)', () => 
       const args = v.nonFinite
         ? { [v.nonFinite.key]: Number(v.nonFinite.value) }
         : v.arguments;
-      expect(() => callDigest(v.toolId, args as Record<string, unknown>)).toThrow();
+      expect(() => callDigest(v.toolId, args as Record<string, unknown>)).toThrow(TypeError);
     });
   }
 

@@ -1,0 +1,26 @@
+{
+  "version": "smallchat.tool-id.v1",
+  "description": "Canonical tool id <providerId>/<toolName>: parsing, and the MCP name smallchat serve exposes in aggregate mode (<providerId>__<toolName>, or null when the tool can only be served with --provider). See README.md.",
+  "valid": [
+    {"id": "github/get_issue", "providerId": "github", "toolName": "get_issue", "aggregateName": "github__get_issue"},
+    {"id": "my-app/echo", "providerId": "my-app", "toolName": "echo", "aggregateName": "my-app__echo"},
+    {"id": "p/a/b", "providerId": "p", "toolName": "a/b", "aggregateName": null},
+    {"id": "files/read.file", "providerId": "files", "toolName": "read.file", "aggregateName": null},
+    {"id": "notes/create note", "providerId": "notes", "toolName": "create note", "aggregateName": null},
+    {"id": "intl/r\u00e9sum\u00e9", "providerId": "intl", "toolName": "r\u00e9sum\u00e9", "aggregateName": null},
+    {"id": "p/a__b", "providerId": "p", "toolName": "a__b", "aggregateName": "p__a__b"},
+    {"id": "p/_x", "providerId": "p", "toolName": "_x", "aggregateName": "p___x"},
+    {"id": "a__b/c", "providerId": "a__b", "toolName": "c", "aggregateName": null},
+    {"id": "a_/b", "providerId": "a_", "toolName": "b", "aggregateName": null},
+    {"id": "my.server/tool", "providerId": "my.server", "toolName": "tool", "aggregateName": null},
+    {"id": "p/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "providerId": "p", "toolName": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "aggregateName": "p__xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"},
+    {"id": "p/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "providerId": "p", "toolName": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "aggregateName": null}
+  ],
+  "invalid": [
+    {"id": "", "reason": "empty"},
+    {"id": "get_issue", "reason": "no '/'"},
+    {"id": "/get_issue", "reason": "empty provider id"},
+    {"id": "github/", "reason": "empty tool name"},
+    {"id": "/", "reason": "empty provider id and tool name"}
+  ]
+}

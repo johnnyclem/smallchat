@@ -18,9 +18,10 @@ export const CALL_DIGEST_DOMAIN = 'smallchat.call.v1';
 
 /**
  * Digest of a call to `toolId` with `args`. Throws TypeError when the id
- * is not `<providerId>/<toolName>`, when `args` is not a JSON object, or
- * when it holds a value JSON cannot represent exactly (NaN, ±Infinity,
- * bigint, undefined array elements, typed arrays, non-plain objects).
+ * is not `<providerId>/<toolName>` or contains U+0000 (the separator) or
+ * a lone UTF-16 surrogate, when `args` is not a JSON object, or when it
+ * holds a value JSON cannot represent exactly (NaN, ±Infinity, bigint,
+ * undefined array elements, typed arrays, non-plain objects).
  */
 export function callDigest(toolId: string, args: Record<string, unknown>): string {
   parseToolId(toolId);
