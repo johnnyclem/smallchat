@@ -5,9 +5,10 @@
  *
  * @shorthand/core is a registry dependency (^1.0.0, published from the
  * short-hand repository). Until that version is on npm, the tarball of the
- * shorthand/ development stand-in is installed next to it to satisfy the
- * range; nothing from this repository's source tree is visible to the
- * installed package. Run after `npm run build`.
+ * shorthand/ workspace (an exact mirror of that release, see
+ * scripts/sync-shorthand.mjs) is installed next to it to satisfy the range;
+ * nothing from this repository's source tree is visible to the installed
+ * package. Run after `npm run build`.
  *
  * Checks: the tarball holds dist/, the CLI and spec/ and nothing from the
  * workspace (shorthand/, src/); its package.json has no file:, link: or

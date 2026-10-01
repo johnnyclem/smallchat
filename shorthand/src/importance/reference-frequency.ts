@@ -66,6 +66,10 @@ export class ReferenceGraph {
   private messages: ConversationMessage[] = [];
   private references: MessageReference[] = [];
   private scores: Map<string, ReferenceScore> = new Map();
+  /** referencedBy membership per target, so updates stay O(1). */
+  private referencedBySets: Map<string, Set<string>> = new Map();
+  /** Highest weightedScore so far — kept incrementally (scores only grow). */
+  private maxWeighted = 0;
   private entityIntroductions: Map<string, string> = new Map(); // entity → messageId
 
   private readonly semanticThreshold: number;
@@ -191,6 +195,11 @@ export class ReferenceGraph {
     return this.scores.get(messageId);
   }
 
+  /** The highest weighted score of any message, in O(1). */
+  getMaxWeightedScore(): number {
+    return this.maxWeighted;
+  }
+
   /**
    * Get all scores, sorted by weighted score descending.
    */
@@ -204,6 +213,8 @@ export class ReferenceGraph {
    */
   recompute(): void {
     this.scores.clear();
+    this.referencedBySets.clear();
+    this.maxWeighted = 0;
     for (const ref of this.references) {
       this.updateScore(ref);
     }
@@ -219,6 +230,8 @@ export class ReferenceGraph {
     this.messages = [];
     this.references = [];
     this.scores.clear();
+    this.referencedBySets.clear();
+    this.maxWeighted = 0;
     this.entityIntroductions.clear();
   }
 
@@ -240,7 +253,14 @@ export class ReferenceGraph {
 
     score.inboundCount++;
     score.weightedScore += ref.strength;
-    if (!score.referencedBy.includes(ref.sourceId)) {
+    if (score.weightedScore > this.maxWeighted) this.maxWeighted = score.weightedScore;
+    let referencedBy = this.referencedBySets.get(ref.targetId);
+    if (!referencedBy) {
+      referencedBy = new Set(score.referencedBy);
+      this.referencedBySets.set(ref.targetId, referencedBy);
+    }
+    if (!referencedBy.has(ref.sourceId)) {
+      referencedBy.add(ref.sourceId);
       score.referencedBy.push(ref.sourceId);
     }
   }

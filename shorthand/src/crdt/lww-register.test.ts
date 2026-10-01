@@ -148,3 +148,24 @@ describe('LWWRegister merge', () => {
     expect(order1.get('key')).toBe(order2.get('key'));
   });
 });
+
+// ===========================================================================
+// Ties converge: equal Lamport counters are broken by agentId (SH-09 — the
+// short-hand register had no tie-breaker and replicas kept their own value).
+// ===========================================================================
+
+describe('LWWRegister ties', () => {
+  it('replicas converge when concurrent writes carry equal counters', () => {
+    const a = new LWWRegister<string>('agent-a');
+    const b = new LWWRegister<string>('agent-b');
+    a.set('db', 'postgres');
+    b.set('db', 'sqlite');
+
+    const stateA = a.serialize();
+    const stateB = b.serialize();
+    a.merge(stateB);
+    b.merge(stateA);
+
+    expect(a.get('db')).toBe(b.get('db'));
+  });
+});

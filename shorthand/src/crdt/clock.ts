@@ -36,6 +36,16 @@ export class LamportClock {
     return { counter: this.counter, agentId: this.agentId };
   }
 
+  /**
+   * Advance the clock to at least `counter` without ticking. State merges
+   * use this: the next local event is then ordered after everything the
+   * replica has observed, and merging the same state twice (or a replica's
+   * own state back into it) leaves the clock unchanged.
+   */
+  observe(counter: number): void {
+    if (counter > this.counter) this.counter = counter;
+  }
+
   /** Current counter value (without ticking). */
   current(): number {
     return this.counter;

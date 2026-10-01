@@ -6,9 +6,15 @@
  * GraphQL for the same API. That's a semantic conflict.
  *
  * This detector compares memory states across agents to identify:
- * 1. L4 invariant conflicts — same key, different values (detected structurally)
- * 2. L3 graph contradictions — contradictory edges between the same entities
+ * 1. L4 invariant conflicts — same key, different values written concurrently
+ * 2. L3 graph contradictions — contradictory edges written concurrently
  * 3. L2 summary divergence — same topic, structurally incompatible summaries
+ *
+ * L4 and L3 entries carry the writer's vector clock, so an overwrite made
+ * after the writer had seen the other value (a causal overwrite — an
+ * ordinary update) is not a conflict. Only concurrent writes are reported.
+ * Entries from pre-1.0 states carry no vector clock and are treated as
+ * concurrent. L2 has no causal metadata; its check stays structural.
  *
  * For full semantic conflict detection, an embedding pipeline would compare
  * subgraphs in embedding space. This implementation provides the structural
@@ -16,7 +22,37 @@
  */
 
 import type { AgentId } from '../types.js';
-import type { AgentMemoryState, L3Edge } from './types.js';
+import type { AgentMemoryState } from './types.js';
+import { isLWWTombstone, type LWWEntry } from '../lww-register.js';
+import { canonicalJson } from '../wire.js';
+
+/** Whether `a` is in the causal past of `b` (b's writer had seen a). */
+function happenedBefore<V>(a: LWWEntry<V>, b: LWWEntry<V>): boolean {
+  return b.vc !== undefined && (b.vc[a.timestamp.agentId] ?? 0) >= a.timestamp.counter;
+}
+
+/**
+ * Whether two entries for one key were written concurrently: neither
+ * writer had seen the other's write. Two entries with the same timestamp
+ * but different content (two writers sharing a replica id) count as
+ * concurrent.
+ */
+function concurrentWrites<V>(a: LWWEntry<V>, b: LWWEntry<V>): boolean {
+  if (a.timestamp.counter === b.timestamp.counter && a.timestamp.agentId === b.timestamp.agentId) {
+    return true;
+  }
+  return !happenedBefore(a, b) && !happenedBefore(b, a);
+}
+
+function sameContent<V>(a: LWWEntry<V>, b: LWWEntry<V>): boolean {
+  const aDeleted = isLWWTombstone(a);
+  if (aDeleted !== isLWWTombstone(b)) return false;
+  return aDeleted || canonicalJson(a.value) === canonicalJson(b.value);
+}
+
+function describeValue<V>(entry: LWWEntry<V>): string {
+  return isLWWTombstone(entry) ? '(deleted)' : String(entry.value);
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -76,9 +112,11 @@ export class ConflictDetector {
   // -------------------------------------------------------------------------
 
   /**
-   * Detect L4 conflicts: same invariant key, different values.
-   * This is the clearest form of conflict — agent A says "database=PostgreSQL"
-   * while agent B says "database=SQLite".
+   * Detect L4 conflicts: same invariant key, different values, written
+   * concurrently. This is the clearest form of conflict — agent A says
+   * "database=PostgreSQL" while agent B, without having seen it, says
+   * "database=SQLite". An update made after seeing the old value is not
+   * reported.
    *
    * Note: LWW-Register will resolve this by timestamp, but we still flag it
    * so humans can review whether the resolution was correct.
@@ -95,17 +133,19 @@ export class ConflictDetector {
       const entryB = entriesB[key];
       if (!entryB) continue;
 
-      // Same key, different values → conflict
-      if (JSON.stringify(entryA.value) !== JSON.stringify(entryB.value)) {
+      // Same key, different values, neither write saw the other → conflict
+      if (!sameContent(entryA, entryB) && concurrentWrites(entryA, entryB)) {
+        const valueA = describeValue(entryA);
+        const valueB = describeValue(entryB);
         conflicts.push({
           layer: 'L4',
           severity: 'critical',
           key,
-          valueA: String(entryA.value),
-          valueB: String(entryB.value),
+          valueA,
+          valueB,
           agentA: stateA.agentId,
           agentB: stateB.agentId,
-          description: `Invariant "${key}" differs: agent ${stateA.agentId} says "${entryA.value}" but agent ${stateB.agentId} says "${entryB.value}". LWW resolves to the later timestamp.`,
+          description: `Invariant "${key}" was written concurrently: agent ${stateA.agentId} says "${valueA}" but agent ${stateB.agentId} says "${valueB}". LWW resolves to the later timestamp.`,
         });
       }
     }
@@ -118,9 +158,10 @@ export class ConflictDetector {
   // -------------------------------------------------------------------------
 
   /**
-   * Detect L3 conflicts: contradictory edges between the same entity pair.
-   * E.g., agent A says "API → REST" while agent B says "API → GraphQL"
-   * for the same from/to pair.
+   * Detect L3 conflicts: contradictory edges between the same entity pair,
+   * written concurrently. E.g., agent A says "API → REST" while agent B
+   * says "API → GraphQL" for the same from/to pair. Deleted edges are not
+   * compared.
    */
   private detectL3Conflicts(
     stateA: AgentMemoryState,
@@ -133,9 +174,11 @@ export class ConflictDetector {
     for (const [key, entryA] of Object.entries(edgesA)) {
       const entryB = edgesB[key];
       if (!entryB) continue;
+      if (isLWWTombstone(entryA) || isLWWTombstone(entryB)) continue;
+      if (!concurrentWrites(entryA, entryB)) continue;
 
-      const edgeA = entryA.value;
-      const edgeB = entryB.value;
+      const edgeA = entryA.value!;
+      const edgeB = entryB.value!;
 
       // Same edge key but different relation or properties
       if (edgeA.from === edgeB.from && edgeA.to === edgeB.to) {

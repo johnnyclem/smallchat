@@ -204,3 +204,31 @@ describe('GSet merge', () => {
     expect(restored.getByKey('greeting')?.value).toBe('hello');
   });
 });
+
+// ===========================================================================
+// Entries without a dedupeKey get an explicit id from the replica
+// (`__id:<replicaId>:<counter>`), never a content key, so keyless entries
+// from different replicas never collide (SAT-04).
+// ===========================================================================
+
+describe('GSet keyless entries', () => {
+  it('keeps keyless entries from two replicas after a merge', () => {
+    const a = new GSet<string>();
+    const b = new GSet<string>();
+    a.add({ value: 'alpha-summary', sourceAgent: 'agent-A', isDirectParticipant: true });
+    b.add({ value: 'beta--summary', sourceAgent: 'agent-B', isDirectParticipant: true });
+
+    a.merge(b.serialize());
+
+    expect(a.size).toBe(2);
+    expect(a.value().map((e) => e.value).sort()).toEqual(['alpha-summary', 'beta--summary']);
+  });
+
+  it('keeps two keyless adds of the same value as two entries', () => {
+    const a = new GSet<string>();
+    const first = a.add({ value: 'same', sourceAgent: 'agent-A', isDirectParticipant: true });
+    const second = a.add({ value: 'same', sourceAgent: 'agent-A', isDirectParticipant: true });
+    expect(first).not.toBe(second);
+    expect(a.size).toBe(2);
+  });
+});

@@ -114,3 +114,69 @@ describe('ImportanceDetector', () => {
     expect(detector.getEntityGraph().size).toBe(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Behaviours carried over from short-hand's former single-file detector
+// (same scenarios, canonical addMessage/recomputeScores API)
+// ---------------------------------------------------------------------------
+
+describe('ImportanceDetector — carried scenarios', () => {
+  const at = (id: string, content: string): ConversationMessage => ({
+    id,
+    role: 'user',
+    content,
+    timestamp: Date.now(),
+  });
+
+  it('scores noise messages low', () => {
+    const detector = new ImportanceDetector();
+    expect(detector.addMessage(at('1', 'Sounds good, thanks!')).importance).toBeLessThan(0.3);
+  });
+
+  it('scores corrections on the state-delta signal', () => {
+    const detector = new ImportanceDetector();
+    detector.addMessage(at('1', "Let's use PostgreSQL for the database."));
+    const score = detector.addMessage(at('2', 'Actually, switch to SQLite instead.'));
+    expect(score.stateDelta).toBeGreaterThan(0.3);
+    expect(score.importance).toBeGreaterThan(0.2);
+  });
+
+  it('retrospective recomputation raises the reference signal of a re-mentioned message', () => {
+    const detector = new ImportanceDetector();
+    detector.addMessage(at('1', 'We chose "React" for the frontend framework.'));
+    detector.addMessage(at('2', 'The color scheme should be blue.'));
+    detector.addMessage(at('3', 'Going back to "React", we need server-side rendering.'));
+
+    const before = detector.getScore('1')!.referenceFrequency;
+    const after = detector.recomputeScores().get('1')!.referenceFrequency;
+    expect(after).toBeGreaterThan(before);
+  });
+
+  it('accepts ISO 8601 timestamps', () => {
+    const detector = new ImportanceDetector();
+    const score = detector.addMessage({ id: 'iso', role: 'tool', content: 'Created `users` table', timestamp: '2026-01-01T00:00:00Z' });
+    expect(score.messageId).toBe('iso');
+  });
+});
+
+describe('ImportanceDetector cost (SH-29)', () => {
+  // Bound: scoring is linear in the number of messages — 16000 chained
+  // references take under 8x the time of 4000 (measured ~4-5x; the
+  // per-message sort of every reference score made it ~14x and growing).
+  it('scores a long chain of references in near-linear time', () => {
+    const run = (n: number) => {
+      const d = new ImportanceDetector();
+      const start = performance.now();
+      for (let i = 0; i < n; i++) {
+        d.addMessage({ id: `m${i}`, role: 'user', content: `Then \`ent${i}\` follows \`ent${i - 1}\`.`, timestamp: i });
+      }
+      d.recomputeScores();
+      return performance.now() - start;
+    };
+    run(500); // warm up
+    // Best of two runs each, to keep GC pauses out of the ratio
+    const small = Math.min(run(4_000), run(4_000));
+    const large = Math.min(run(16_000), run(16_000));
+    expect(large).toBeLessThan(Math.max(small * 8, 250));
+  });
+});

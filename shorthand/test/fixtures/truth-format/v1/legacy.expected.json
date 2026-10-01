@@ -1,0 +1,28 @@
+[
+  {
+    "line": 1,
+    "outcome": "proposal",
+    "reason": "unverifiable",
+    "note": "a v1 TB carries no hash: it is filed for a person to sign"
+  },
+  {
+    "line": 2,
+    "outcome": "proposal",
+    "reason": "unverifiable",
+    "draftEvidenceKinds": [
+      "claimed-command"
+    ],
+    "note": "v1 'command' evidence is read as claimed-command"
+  },
+  {
+    "line": 3,
+    "outcome": "inserted",
+    "status": "open"
+  },
+  {
+    "line": 4,
+    "outcome": "inserted",
+    "status": "refuted",
+    "note": "a terminal v1 status is kept"
+  }
+]

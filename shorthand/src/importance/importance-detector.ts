@@ -109,10 +109,7 @@ export class ImportanceDetector {
    */
   recomputeScores(): Map<string, ImportanceScore> {
     // Update max reference score
-    const allRefScores = this.referenceGraph.getAllScores();
-    this.maxReferenceScore = allRefScores.length > 0
-      ? allRefScores[0].weightedScore
-      : 0;
+    this.maxReferenceScore = this.referenceGraph.getMaxWeightedScore();
 
     // Recompute each message's combined score
     const trajectoryPoints = this.trajectoryTracker.getPoints();
@@ -215,10 +212,11 @@ export class ImportanceDetector {
       ? deltaMagnitude / this.maxStateDelta
       : (deltaMagnitude > 0 ? 1 : 0);
 
-    // Reference frequency — use current score (will be updated in recompute)
+    // Reference frequency — use current score (will be updated in recompute).
+    // The running max is O(1); sorting every score per message made
+    // scoring quadratic in conversation length.
     const refScore = this.referenceGraph.getScore(messageId);
-    const allRefScores = this.referenceGraph.getAllScores();
-    const currentMaxRef = allRefScores.length > 0 ? allRefScores[0].weightedScore : 0;
+    const currentMaxRef = this.referenceGraph.getMaxWeightedScore();
     const normalizedRef = currentMaxRef > 0 && refScore
       ? refScore.weightedScore / currentMaxRef
       : 0;

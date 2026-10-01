@@ -158,3 +158,63 @@ describe('ORSet merge', () => {
     }
   });
 });
+
+// ===========================================================================
+// Carried from short-hand: removes are tombstoned and travel with the state
+// (smallchat's fork dropped them — SAT-03), and a restored replica never
+// reissues a tag it already used (SH-10).
+// ===========================================================================
+
+describe('ORSet remove propagation', () => {
+  it('a remove reaches a replica that already observed the add', () => {
+    const a = new ORSet<string>('agent-A');
+    const b = new ORSet<string>('agent-B');
+
+    a.add('secret');
+    b.merge(a.serialize());
+
+    a.remove('secret');
+    b.merge(a.serialize());
+    a.merge(b.serialize());
+
+    expect(a.has('secret')).toBe(false);
+    expect(b.has('secret')).toBe(false);
+  });
+
+  it('a removed element is not resurrected by merging a stale replica', () => {
+    const a = new ORSet<string>('agent-A');
+    a.add('secret');
+    const stale = a.serialize();
+
+    a.remove('secret');
+    a.merge(stale);
+
+    expect(a.has('secret')).toBe(false);
+  });
+
+  it('serializes removed tags', () => {
+    const a = new ORSet<string>('agent-A');
+    const tag = a.add('x');
+    a.remove('x');
+    expect(a.serialize().removed).toEqual([tag]);
+  });
+
+  it('does not reuse tags after a serialize/from round-trip', () => {
+    const a = new ORSet<string>('agent-A');
+    a.add('React');
+    a.remove('React'); // tag agent-A:1 is now tombstoned
+
+    const b = ORSet.from<string>('agent-A', a.serialize());
+    b.add('Vue'); // must not be issued the tombstoned tag agent-A:1
+
+    expect(b.has('Vue')).toBe(true);
+    expect(b.size).toBe(1);
+  });
+
+  it('deduplicates repeated adds of the same value', () => {
+    const set = new ORSet<string>('agent-A');
+    set.add('React');
+    set.add('React');
+    expect(set.size).toBe(1);
+  });
+});

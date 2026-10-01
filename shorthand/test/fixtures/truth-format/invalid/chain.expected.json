@@ -1,0 +1,16 @@
+{
+  "chain-gap.jsonl": [
+    {
+      "line": 3,
+      "reason": "a line is missing",
+      "error": "chain broken: seq"
+    }
+  ],
+  "chain-fork.jsonl": [
+    {
+      "line": 3,
+      "reason": "a line from another stream",
+      "error": "chain broken: prevHash"
+    }
+  ]
+}

@@ -1,24 +1,64 @@
 /**
- * Compaction Verification Module
+ * Compaction — two pipelines over one message type.
  *
- * Provides multi-level conversation state compaction with formal verification
- * of compaction correctness using three complementary strategies:
- *
- *   1. Round-trip recall testing (practical eval harness)
- *   2. Invariant preservation proofs (semi-formal, mechanically checkable)
- *   3. Information-theoretic bounds (rate-distortion framework)
+ * - LSM pipeline (`CompactionEngine`, `RegexCompactor`): incremental,
+ *   token-budgeted compaction of a live conversation into L0–L4
+ *   (`CompactedState`) and context frames (typed sections with provenance,
+ *   rendered by one escaping renderer).
+ * - Snapshot pipeline (`DefaultCompactor`): compacts a whole
+ *   `ConversationHistory` into one `CompactedSnapshot` at L0–L3, with three
+ *   verification strategies (recall testing, invariant checks,
+ *   information-theoretic bounds) and the `VerificationHarness`.
  */
 
-// Types
+// Shared types
 export type {
-  CompactedState,
-  CompactionInvariant,
-  CompactionLevel,
-  CompactionVerificationConfig,
-  Compactor,
-  ConversationHistory,
   ConversationMessage,
+  MessageRole,
+  CompactedState,
+  CompactedEntry,
+  CodeSpan,
+  ArchivedItem,
+  ArchiveReason,
+  CompactionConfig,
+  Compactor,
+  CompactorTier,
+  ContextFrame,
+  ContextSection,
+  ContextSectionKind,
+  ContextItem,
+  Tombstone,
   Decision,
+  Invariant,
+  TopicSummary,
+  VerificationResult,
+} from '../types.js';
+export { CompactionLevel, DEFAULT_COMPACTION_CONFIG, normalizeTimestamp } from '../types.js';
+
+// LSM pipeline
+export { RegexCompactor } from './regex-compactor.js';
+export { CompactionEngine } from './compaction-engine.js';
+export type { CorrectionInput } from './compaction-engine.js';
+
+// Frames: the single escaping renderer
+export { escapeUntrusted, renderContextFrame } from './frame.js';
+export type { EscapeOptions } from './frame.js';
+
+// Corrections: the shared supersession matcher and level-complete application
+export { statesOnlySuperseded, isValidCorrectionSubject } from './matching.js';
+export { applyTombstone, revertTombstone, retractMessages } from './corrections.js';
+export type { ApplyTombstoneOptions } from './corrections.js';
+
+// Snapshot pipeline — types
+export type {
+  CompactedSnapshot,
+  CompactionInvariant,
+  BuiltinInvariantCategory,
+  SnapshotLevel,
+  CompactionVerificationConfig,
+  SnapshotCompactor,
+  ConversationHistory,
+  SnapshotDecision,
   EntityCorrection,
   EntityRetention,
   EntropyMetrics,
@@ -32,13 +72,11 @@ export type {
   RecallAnswer,
   RecallQuestion,
   RecallTestResult,
-  Tombstone,
-  VerificationResult,
-} from './types.js';
+  SnapshotVerificationResult,
+} from './snapshot/types.js';
+export { DEFAULT_VERIFICATION_CONFIG } from './snapshot/types.js';
 
-export { DEFAULT_VERIFICATION_CONFIG } from './types.js';
-
-// Compactor
+// Snapshot pipeline — compactor
 export {
   DefaultCompactor,
   estimateTokens,
@@ -46,7 +84,7 @@ export {
   extractEntities,
   extractDecisions,
   detectTombstones,
-} from './compactor.js';
+} from './snapshot/compactor.js';
 
 // Strategy 1: Recall testing
 export {
@@ -54,9 +92,9 @@ export {
   DefaultQuizEvaluator,
   tokenOverlapScore,
   runRecallTest,
-} from './recall-test.js';
+} from './snapshot/recall-test.js';
 
-// Strategy 2: Invariant checking
+// Strategy 2: Invariant checking (pluggable — pass your own invariants)
 export {
   correctionPropagation,
   entityProvenance,
@@ -65,7 +103,7 @@ export {
   temporalOrdering,
   BUILTIN_INVARIANTS,
   checkInvariants,
-} from './invariant-check.js';
+} from './snapshot/invariant-check.js';
 
 // Strategy 3: Information-theoretic
 export {
@@ -76,7 +114,7 @@ export {
   computeRateDistortion,
   measureEntityRetention,
   analyzeInformationTheoretic,
-} from './information-theoretic.js';
+} from './snapshot/information-theoretic.js';
 
 // Verification harness
-export { VerificationHarness } from './verification-harness.js';
+export { VerificationHarness } from './snapshot/verification-harness.js';

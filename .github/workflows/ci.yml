@@ -32,11 +32,14 @@ jobs:
       - name: Test
         run: npm test
 
-      # shorthand/ is a workspace member (not a standalone install like
-      # packages/docs) but its own test suite — compaction, CRDT, and
-      # importance-scoring, ~260 specs — was never run by root `npm test`,
-      # since the root vitest.config.ts only globs the root src/. Run it
-      # explicitly so this coverage is actually checked in CI.
+      # shorthand/ is a byte-for-byte mirror of @shorthand/core from the
+      # short-hand repository (scripts/sync-shorthand.mjs). Fail when it
+      # differs from what shorthand/SOURCE records: it is never edited here.
+      - name: Check the @shorthand/core mirror
+        run: npm run check:shorthand
+
+      # The mirror's own suite (compaction, CRDT properties, importance,
+      # truth format v2 conformance) is not globbed by the root vitest config.
       - name: Test shorthand
         run: npm test --workspace=shorthand
 

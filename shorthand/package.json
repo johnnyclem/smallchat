@@ -2,11 +2,10 @@
   "name": "@shorthand/core",
   "version": "1.0.0",
   "private": true,
-  "description": "Development stand-in for @shorthand/core 1.0, which is published from the short-hand repository. Never published from here; see README.md.",
+  "description": "Mirror of @shorthand/core 1.0.0 from the short-hand repository (commit c300f7f5c549), written by scripts/sync-shorthand.mjs. Development only; never published from here. See README.md and SOURCE.",
   "type": "module",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
-  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -16,10 +15,6 @@
       "types": "./dist/compaction/index.d.ts",
       "import": "./dist/compaction/index.js"
     },
-    "./truth": {
-      "types": "./dist/truth/index.d.ts",
-      "import": "./dist/truth/index.js"
-    },
     "./crdt": {
       "types": "./dist/crdt/index.d.ts",
       "import": "./dist/crdt/index.js"
@@ -28,54 +23,85 @@
       "types": "./dist/importance/index.d.ts",
       "import": "./dist/importance/index.js"
     },
-    "./embedding": {
-      "types": "./dist/embedding/local-embedder.d.ts",
-      "import": "./dist/embedding/local-embedder.js"
-    }
+    "./truth": {
+      "types": "./dist/truth/index.d.ts",
+      "import": "./dist/truth/index.js"
+    },
+    "./wiki": {
+      "types": "./dist/wiki/index.d.ts",
+      "import": "./dist/wiki/index.js"
+    },
+    "./ingestion": {
+      "types": "./dist/ingestion/index.d.ts",
+      "import": "./dist/ingestion/index.js"
+    },
+    "./interpreter": {
+      "types": "./dist/interpreter/index.d.ts",
+      "import": "./dist/interpreter/index.js"
+    },
+    "./verification": {
+      "types": "./dist/verification/index.d.ts",
+      "import": "./dist/verification/index.js"
+    },
+    "./benchmark": {
+      "types": "./dist/benchmark/index.d.ts",
+      "import": "./dist/benchmark/index.js"
+    },
+    "./package.json": "./package.json"
   },
   "files": [
     "dist",
-    "models",
-    "README.md",
+    "src",
+    "!src/**/*.test.ts",
     "LICENSE",
-    "CHANGELOG.md"
+    "README.md",
+    "CHANGELOG.md",
+    "MIGRATION.md"
   ],
-  "scripts": {
-    "prepare": "npm run build",
-    "build": "tsc",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "lint": "tsc --noEmit",
-    "prepublishOnly": "npm run build"
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.4",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
+    "fast-check": "^4.10.2",
+    "typescript": "^5.8.3",
+    "vitest": "^3.1.1"
   },
   "keywords": [
     "llm",
-    "context-window",
+    "context",
     "compaction",
+    "lsm-tree",
     "crdt",
+    "conversation",
+    "memory",
+    "progressive",
+    "context-compaction",
+    "token",
+    "summarization",
     "agent-memory",
     "importance-detection",
-    "conversation",
-    "token-optimization"
+    "truth-ledger"
   ],
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/johnnyclem/short-hand.git"
-  },
   "author": "Johnny Clem",
   "license": "MIT",
-  "devDependencies": {
-    "@types/better-sqlite3": "^7.6.12",
-    "@types/node": "^22.0.0",
-    "typescript": "^5.7.0",
-    "vitest": "^3.2.7"
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/johnnyclem/short-hand.git"
   },
-  "dependencies": {
-    "better-sqlite3": "^13.0.3",
-    "onnxruntime-node": "^1.20.0",
-    "sqlite-vec": "^0.1.7"
+  "bugs": {
+    "url": "https://github.com/johnnyclem/short-hand/issues"
   },
-  "engines": {
-    "node": ">=22.0.0"
+  "homepage": "https://github.com/johnnyclem/short-hand#readme",
+  "scripts": {
+    "prepare": "npm run build",
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "build": "npm run clean && tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "tsc --noEmit"
   }
 }

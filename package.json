@@ -76,6 +76,8 @@
     "test:watch": "vitest",
     "test:traces": "node scripts/replay-example-traces.mjs",
     "test:pack": "node scripts/pack-smoke.mjs",
+    "sync:shorthand": "node scripts/sync-shorthand.mjs",
+    "check:shorthand": "node scripts/sync-shorthand.mjs --check",
     "lint": "tsc --noEmit",
     "dev": "tsc --watch",
     "docs:api": "typedoc --entryPoints src/index.ts --out docs/api --plugin typedoc-plugin-markdown",

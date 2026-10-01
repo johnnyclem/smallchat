@@ -158,3 +158,16 @@ describe('computeStateDelta', () => {
     expect(delta2.magnitude).toBeGreaterThanOrEqual(delta1.magnitude);
   });
 });
+
+describe('state-delta extraction cost (SAT-13)', () => {
+  // Bound: a 64 KB message without punctuation is scored in well under a
+  // second (the unbounded relation patterns took ~14 s at 69 KB).
+  it('extracts entities and relations from a 64 KB unpunctuated message in linear time', () => {
+    const text = 'the service uses the cache and the worker '.repeat(1_600);
+    const start = performance.now();
+    computeStateDelta({ id: 'big', role: 'tool', content: text, timestamp: 0 }, new EntityGraph());
+    extractEntities(text, 'big');
+    extractRelations(text, 'big');
+    expect(performance.now() - start).toBeLessThan(500);
+  });
+});

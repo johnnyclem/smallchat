@@ -6,13 +6,15 @@
  * conflicts (via ConflictDetector), and produces a unified merged memory.
  *
  * Because all underlying CRDTs are commutative, associative, and idempotent,
- * merges can happen in any order with any subset of agents and will always
- * converge to the same final state. No central coordinator needed.
+ * merges can happen in any order with any subset of agents and converge to
+ * the same final state (for replicas with unique agent ids; see
+ * docs/crdt-format.md). No central coordinator needed.
  */
 
-import type { AgentId, VectorClock } from '../types.js';
-import { compareVectorClocks, mergeVectorClocks } from '../clock.js';
-import { AgentMemory } from './agent-memory.js';
+import type { AgentId } from '../types.js';
+import { compareVectorClocks } from '../clock.js';
+import { compareStrings } from '../wire.js';
+import { AgentMemory, type MemoryLayerChanges } from './agent-memory.js';
 import type { AgentMemoryState } from './types.js';
 import { ConflictDetector, type SemanticConflict } from './conflict-detector.js';
 
@@ -31,13 +33,7 @@ export interface MergeReport {
   /** Whether any CRDT state actually changed. */
   hadChanges: boolean;
   /** Per-layer change flags. */
-  layerChanges: {
-    l4: boolean;
-    l3: boolean;
-    l2: boolean;
-    l1: boolean;
-    l0: boolean;
-  };
+  layerChanges: MemoryLayerChanges;
 }
 
 /** Options for the merge operation. */
@@ -75,19 +71,20 @@ export class MemoryMerge {
     const { dryRun = false, conflictThreshold = 0.7 } = options;
 
     // Sort by agent ID for deterministic ordering
-    const sorted = [...remoteStates].sort((a, b) => a.agentId.localeCompare(b.agentId));
+    const sorted = [...remoteStates].sort((a, b) => compareStrings(a.agentId, b.agentId));
 
     const mergedAgents: AgentId[] = [];
     let hadChanges = false;
-    const layerChanges = { l4: false, l3: false, l2: false, l1: false, l0: false };
+    const layerChanges: MemoryLayerChanges = { l4: false, l3: false, l2: false, l1: false, l0: false, engrams: false };
 
     // Detect semantic conflicts before merging
     const allConflicts: SemanticConflict[] = [];
 
-    // Check each pair of remote states for conflicts
+    // Check each remote state against the target
+    const targetState = target.serialize();
     for (let i = 0; i < sorted.length; i++) {
       const conflicts = this.conflictDetector.detectConflicts(
-        target.serialize(),
+        targetState,
         sorted[i],
         conflictThreshold,
       );
@@ -111,27 +108,13 @@ export class MemoryMerge {
 
     if (!dryRun) {
       for (const remote of sorted) {
-        // Track per-layer changes by comparing before/after
-        const beforeL4 = JSON.stringify(target.l4.serialize());
-        const beforeL3Nodes = JSON.stringify(target.l3Nodes.serialize());
-        const beforeL3Edges = JSON.stringify(target.l3Edges.serialize());
-        const beforeL2 = JSON.stringify(target.l2.serialize());
-        const beforeL1 = JSON.stringify(target.l1.serialize());
-        const beforeL0 = JSON.stringify(target.l0.serialize());
-
-        const changed = target.mergeFrom(remote);
-
-        if (changed) {
+        const changes = target.mergeLayersFrom(remote);
+        if (Object.values(changes).some(Boolean)) {
           hadChanges = true;
           mergedAgents.push(remote.agentId);
-
-          // Check which layers changed
-          if (JSON.stringify(target.l4.serialize()) !== beforeL4) layerChanges.l4 = true;
-          if (JSON.stringify(target.l3Nodes.serialize()) !== beforeL3Nodes) layerChanges.l3 = true;
-          if (JSON.stringify(target.l3Edges.serialize()) !== beforeL3Edges) layerChanges.l3 = true;
-          if (JSON.stringify(target.l2.serialize()) !== beforeL2) layerChanges.l2 = true;
-          if (JSON.stringify(target.l1.serialize()) !== beforeL1) layerChanges.l1 = true;
-          if (JSON.stringify(target.l0.serialize()) !== beforeL0) layerChanges.l0 = true;
+          for (const layer of Object.keys(changes) as Array<keyof MemoryLayerChanges>) {
+            if (changes[layer]) layerChanges[layer] = true;
+          }
         }
       }
     }

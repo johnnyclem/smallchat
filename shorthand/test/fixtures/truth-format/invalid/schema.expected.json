@@ -1,0 +1,78 @@
+[
+  {
+    "line": 1,
+    "reason": "a TB without evidence"
+  },
+  {
+    "line": 2,
+    "reason": "a TB with an empty evidence list"
+  },
+  {
+    "line": 3,
+    "reason": "a bare literal with no subject"
+  },
+  {
+    "line": 4,
+    "reason": "a literal with surrounding whitespace"
+  },
+  {
+    "line": 5,
+    "reason": "seq below 1"
+  },
+  {
+    "line": 6,
+    "reason": "seq as a string"
+  },
+  {
+    "line": 7,
+    "reason": "a first line (seq 1) with a prevHash"
+  },
+  {
+    "line": 8,
+    "reason": "a later line without a prevHash"
+  },
+  {
+    "line": 9,
+    "reason": "a line without a hash"
+  },
+  {
+    "line": 10,
+    "reason": "a hash in uppercase hex"
+  },
+  {
+    "line": 11,
+    "reason": "an unknown schemaVersion"
+  },
+  {
+    "line": 12,
+    "reason": "a timestamp that is not RFC 3339"
+  },
+  {
+    "line": 13,
+    "reason": "a line type the format does not define"
+  },
+  {
+    "line": 14,
+    "reason": "a ruling with a blank opinion"
+  },
+  {
+    "line": 15,
+    "reason": "a TRANSITION without a cause"
+  },
+  {
+    "line": 16,
+    "reason": "a link listed twice"
+  },
+  {
+    "line": 17,
+    "reason": "a date that does not exist (February 30)"
+  },
+  {
+    "line": 18,
+    "reason": "an hour out of range (24:00)"
+  },
+  {
+    "line": 19,
+    "reason": "an empty status"
+  }
+]

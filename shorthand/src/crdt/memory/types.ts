@@ -8,11 +8,13 @@
  * L0: Raw message buffer → RGA sequence
  */
 
-import type { AgentId, LamportTimestamp, VectorClock } from '../types.js';
+import type { AgentId, VectorClock } from '../types.js';
+import type { MessageRole } from '../../types.js';
 import type { LWWRegisterState } from '../lww-register.js';
 import type { ORSetState } from '../or-set.js';
-import type { GSetState, GSetEntry } from '../g-set.js';
+import type { GSetState } from '../g-set.js';
 import type { RGAState } from '../rga.js';
+import type { SerializedActiveEngramStore } from '../active-engram-store.js';
 
 // ---------------------------------------------------------------------------
 // L4 — Core invariants
@@ -114,7 +116,7 @@ export interface L0Message {
   /** Agent that sent this message. */
   agentId: AgentId;
   /** Message role. */
-  role: 'user' | 'assistant' | 'system';
+  role: MessageRole;
   /** Message content. */
   content: string;
   /** Wall-clock timestamp (informational, not used for ordering). */
@@ -132,6 +134,8 @@ export type MemoryLayer = 'L0' | 'L1' | 'L2' | 'L3' | 'L4';
 
 /** Complete serialized state of an agent's memory across all layers. */
 export interface AgentMemoryState {
+  /** Wire-format version (absent on pre-1.0 states). */
+  schemaVersion?: number;
   /** Agent that owns this memory state. */
   agentId: AgentId;
   /** Vector clock reflecting this agent's causal knowledge. */
@@ -146,4 +150,10 @@ export interface AgentMemoryState {
   l1: RGAState<L1Context>;
   /** L0: Raw message buffer (RGA sequence). */
   l0: RGAState<L0Message>;
+  /**
+   * Agential memory entries (interpret before inject). Merged as a union by
+   * engram id minus removal tombstones. Optional so states written without
+   * engrams still load.
+   */
+  activeEngrams?: SerializedActiveEngramStore;
 }
