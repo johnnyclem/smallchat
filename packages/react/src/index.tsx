@@ -22,6 +22,38 @@ export function useSmallchatRuntime(): ToolRuntime {
 }
 
 // ---------------------------------------------------------------------------
+// One run at a time
+//
+// Starting a run (or cancel(), or unmounting) aborts the previous one, and
+// only the current run writes state. A shared boolean cancel flag, reset on
+// every call, let a previous stream keep appending to the same state
+// (SAT-27).
+// ---------------------------------------------------------------------------
+
+function useLatestRun(): {
+  start: () => { signal: AbortSignal; isCurrent: () => boolean };
+  cancel: () => void;
+} {
+  const current = useRef<AbortController | null>(null);
+
+  const cancel = useCallback(() => {
+    current.current?.abort();
+    current.current = null;
+  }, []);
+
+  const start = useCallback(() => {
+    current.current?.abort();
+    const controller = new AbortController();
+    current.current = controller;
+    return { signal: controller.signal, isCurrent: () => current.current === controller };
+  }, []);
+
+  useEffect(() => cancel, [cancel]);
+
+  return { start, cancel };
+}
+
+// ---------------------------------------------------------------------------
 // useToolDispatch — fire-and-forget dispatch with state tracking
 // ---------------------------------------------------------------------------
 
@@ -55,6 +87,9 @@ export function useToolDispatch<T = unknown>(
   const [result, setResult] = useState<ToolResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
+  // Every call runs to completion (a dispatch may have side effects), but
+  // only the latest call's outcome becomes the hook's state.
+  const latest = useRef(0);
 
   const dispatch = useCallback(
     async (intent: string, args?: Record<string, unknown>): Promise<ToolResult> => {
@@ -65,19 +100,24 @@ export function useToolDispatch<T = unknown>(
         );
       }
 
+      const call = ++latest.current;
       setLoading(true);
       setError(null);
 
       try {
         const res = await runtime.dispatch(intent, args ?? {});
-        setResult(res);
-        setData(res.content as T);
-        setLoading(false);
+        if (call === latest.current) {
+          setResult(res);
+          setData(res.content as T);
+          setLoading(false);
+        }
         return res;
       } catch (err) {
         const e = err instanceof Error ? err : new Error(String(err));
-        setError(e);
-        setLoading(false);
+        if (call === latest.current) {
+          setError(e);
+          setLoading(false);
+        }
         throw e;
       }
     },
@@ -85,6 +125,7 @@ export function useToolDispatch<T = unknown>(
   );
 
   const reset = useCallback(() => {
+    latest.current++;
     setData(null);
     setResult(null);
     setLoading(false);
@@ -125,11 +166,12 @@ export function useToolStream(options?: UseToolStreamOptions): UseToolStreamResu
   const [chunks, setChunks] = useState<unknown[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<Error | null>(null);
-  const cancelRef = useRef(false);
+  const run = useLatestRun();
 
   const cancel = useCallback(() => {
-    cancelRef.current = true;
-  }, []);
+    run.cancel();
+    setStreaming(false);
+  }, [run.cancel]);
 
   const stream = useCallback(
     (intent: string, args?: Record<string, unknown>) => {
@@ -140,7 +182,8 @@ export function useToolStream(options?: UseToolStreamOptions): UseToolStreamResu
         );
       }
 
-      cancelRef.current = false;
+      // Aborts the previous stream (and the tool it is running).
+      const { signal, isCurrent } = run.start();
       setEvents([]);
       setChunks([]);
       setStreaming(true);
@@ -148,8 +191,8 @@ export function useToolStream(options?: UseToolStreamOptions): UseToolStreamResu
 
       (async () => {
         try {
-          for await (const event of runtime.dispatchStream(intent, args)) {
-            if (cancelRef.current) break;
+          for await (const event of runtime.dispatchStream(intent, args, { signal })) {
+            if (!isCurrent()) break;
 
             setEvents((prev) => [...prev, event]);
 
@@ -160,13 +203,13 @@ export function useToolStream(options?: UseToolStreamOptions): UseToolStreamResu
             }
           }
         } catch (err) {
-          setError(err instanceof Error ? err : new Error(String(err)));
+          if (isCurrent()) setError(err instanceof Error ? err : new Error(String(err)));
         } finally {
-          setStreaming(false);
+          if (isCurrent()) setStreaming(false);
         }
       })();
     },
-    [runtime],
+    [runtime, run.start],
   );
 
   return { stream, events, chunks, streaming, error, cancel };
@@ -196,11 +239,12 @@ export function useInferenceStream(options?: UseToolStreamOptions): UseInference
   const [text, setText] = useState('');
   const [inferring, setInferring] = useState(false);
   const [error, setError] = useState<Error | null>(null);
-  const cancelRef = useRef(false);
+  const run = useLatestRun();
 
   const cancel = useCallback(() => {
-    cancelRef.current = true;
-  }, []);
+    run.cancel();
+    setInferring(false);
+  }, [run.cancel]);
 
   const infer = useCallback(
     (intent: string, args?: Record<string, unknown>) => {
@@ -211,25 +255,25 @@ export function useInferenceStream(options?: UseToolStreamOptions): UseInference
         );
       }
 
-      cancelRef.current = false;
+      const { signal, isCurrent } = run.start();
       setText('');
       setInferring(true);
       setError(null);
 
       (async () => {
         try {
-          for await (const token of runtime.inferenceStream(intent, args)) {
-            if (cancelRef.current) break;
+          for await (const token of runtime.inferenceStream(intent, args, { signal })) {
+            if (!isCurrent()) break;
             setText((prev) => prev + token);
           }
         } catch (err) {
-          setError(err instanceof Error ? err : new Error(String(err)));
+          if (isCurrent()) setError(err instanceof Error ? err : new Error(String(err)));
         } finally {
-          setInferring(false);
+          if (isCurrent()) setInferring(false);
         }
       })();
     },
-    [runtime],
+    [runtime, run.start],
   );
 
   return { infer, text, inferring, error, cancel };
@@ -285,6 +329,7 @@ export function useAppDispatch(options?: UseAppDispatchOptions): UseAppDispatchR
   const [appImp, setAppImp] = useState<AppIMP | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
+  const latest = useRef(0);
 
   const dispatch = useCallback(
     async (intent: string): Promise<AppIMP | null> => {
@@ -295,18 +340,23 @@ export function useAppDispatch(options?: UseAppDispatchOptions): UseAppDispatchR
         );
       }
 
+      const call = ++latest.current;
       setLoading(true);
       setError(null);
 
       try {
         const imp = await runtime.ui_dispatch(intent);
-        setAppImp(imp);
-        setLoading(false);
+        if (call === latest.current) {
+          setAppImp(imp);
+          setLoading(false);
+        }
         return imp;
       } catch (err) {
         const e = err instanceof Error ? err : new Error(String(err));
-        setError(e);
-        setLoading(false);
+        if (call === latest.current) {
+          setError(e);
+          setLoading(false);
+        }
         throw e;
       }
     },
@@ -314,6 +364,7 @@ export function useAppDispatch(options?: UseAppDispatchOptions): UseAppDispatchR
   );
 
   const reset = useCallback(() => {
+    latest.current++;
     setAppImp(null);
     setLoading(false);
     setError(null);
@@ -353,11 +404,12 @@ export function useAppStream(options?: UseAppStreamOptions): UseAppStreamResult 
   const [uiEvents, setUIEvents] = useState<DispatchEvent[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<Error | null>(null);
-  const cancelRef = useRef(false);
+  const run = useLatestRun();
 
   const cancel = useCallback(() => {
-    cancelRef.current = true;
-  }, []);
+    run.cancel();
+    setStreaming(false);
+  }, [run.cancel]);
 
   const stream = useCallback(
     (intent: string, toolResult: ToolResult) => {
@@ -368,7 +420,7 @@ export function useAppStream(options?: UseAppStreamOptions): UseAppStreamResult 
         );
       }
 
-      cancelRef.current = false;
+      const { isCurrent } = run.start();
       setEvents([]);
       setUIEvents([]);
       setStreaming(true);
@@ -377,7 +429,7 @@ export function useAppStream(options?: UseAppStreamOptions): UseAppStreamResult 
       (async () => {
         try {
           for await (const event of runtime.ui_dispatchStream(intent, toolResult)) {
-            if (cancelRef.current) break;
+            if (!isCurrent()) break;
 
             setEvents(prev => [...prev, event]);
 
@@ -395,13 +447,13 @@ export function useAppStream(options?: UseAppStreamOptions): UseAppStreamResult 
             }
           }
         } catch (err) {
-          setError(err instanceof Error ? err : new Error(String(err)));
+          if (isCurrent()) setError(err instanceof Error ? err : new Error(String(err)));
         } finally {
-          setStreaming(false);
+          if (isCurrent()) setStreaming(false);
         }
       })();
     },
-    [runtime],
+    [runtime, run.start],
   );
 
   return { stream, events, uiEvents, streaming, error, cancel };
@@ -410,110 +462,168 @@ export function useAppStream(options?: UseAppStreamOptions): UseAppStreamResult 
 // ---------------------------------------------------------------------------
 // AppView — sandboxed iframe component for rendering MCP Apps views
 //
-// Manages the AppBridgeWrapper lifecycle via useEffect: mounts the bridge
-// when componentUri changes, tears it down on unmount.
+// A ui:// view is an MCP resource, not a URL a browser can load: AppView
+// renders its HTML (given as `html`, or read with `readResource`) through
+// srcdoc. An http(s) view URI is loaded as the iframe src and messaged at
+// its own origin. The bridge lives as long as the frame's content; new tool
+// results are delivered to it without re-mounting (SAT-26).
 //
 // Obj-C analogy: AppView ≈ NSView — it owns the visual representation of
 // an AppIMP, just as NSView owns pixels on screen.
 // ---------------------------------------------------------------------------
 
 export interface AppViewProps {
-  /** The ui:// resource URI to render */
+  /** The view's URI: a ui:// resource (see html / readResource) or an http(s) URL */
   componentUri: string;
-  /** Tool result to deliver to the view on mount */
+  /** HTML of a ui:// resource (the MCP resources/read result's text) */
+  html?: string;
+  /** Reads a ui:// resource's HTML, e.g. through your MCP client's resources/read; used when html is not given */
+  readResource?: (uri: string) => Promise<string>;
+  /** Tool result delivered to the view once it is ready, and again whenever it changes */
   toolResult?: ToolResult;
   /** Callback fired when the view sends a tool call or message */
   onInteraction?: (event: string, sourceToolName: string, payload: unknown) => void;
+  /** Called when a ui:// resource cannot be read */
+  onError?: (error: Error) => void;
   /** Preferred display mode */
   displayMode?: 'inline' | 'fullscreen' | 'pip';
   /** Whether to add a visible border (hint from McpUiResourceMeta.prefersBorder) */
   prefersBorder?: boolean;
   className?: string;
   style?: React.CSSProperties;
-  /** iframe sandbox attribute value (default: "allow-scripts allow-same-origin") */
+  /**
+   * iframe sandbox attribute value (default: "allow-scripts"). Adding
+   * allow-same-origin to allow-scripts lets a view served from your own
+   * origin remove its sandbox; grant it only to views you trust.
+   */
   sandbox?: string;
   /** iframe title for accessibility */
   title?: string;
 }
 
+const isResourceUri = (uri: string) => uri.startsWith('ui://');
+
+/** Origin to post to: the view URL's own origin; '*' for srcdoc frames, whose sandboxed origin is opaque. */
+function messageOrigin(uri: string): string {
+  if (isResourceUri(uri)) return '*';
+  try {
+    return new URL(uri).origin;
+  } catch {
+    return '*';
+  }
+}
+
 /**
  * AppView — renders a MCP Apps view in a sandboxed iframe.
  *
- * Security: iframes are sandboxed with allow-scripts allow-same-origin by
- * default (matching the MCP Apps spec mandatory sandbox requirement).
- * Use the sandbox prop to tighten or widen permissions as needed.
+ * Security: the iframe is sandboxed with allow-scripts only by default; use
+ * the sandbox prop to change it. Messages go only to the frame's own
+ * window, addressed to the view URL's origin when it has one.
  */
 export function AppView({
   componentUri,
+  html,
+  readResource,
   toolResult,
   onInteraction,
+  onError,
   displayMode = 'inline',
   prefersBorder = false,
   className,
   style,
-  sandbox = 'allow-scripts allow-same-origin',
+  sandbox = 'allow-scripts',
   title = 'MCP App View',
 }: AppViewProps): JSX.Element {
   const iframeRef = useRef<HTMLIFrameElement>(null);
-  const [bridgeReady, setBridgeReady] = useState(false);
+  const [loaded, setLoaded] = useState<{ uri: string; html?: string; error?: Error } | null>(null);
+
+  // Latest props, read by the long-lived bridge without re-mounting it.
+  const toolResultRef = useRef(toolResult);
+  const onInteractionRef = useRef(onInteraction);
+  const onErrorRef = useRef(onError);
+  const readyRef = useRef(false);
+  const deliverRef = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    onInteractionRef.current = onInteraction;
+    onErrorRef.current = onError;
+  });
+
+  const resource = isResourceUri(componentUri);
+  const resourceHtml = resource ? (html ?? (loaded?.uri === componentUri ? loaded.html : undefined)) : undefined;
+  const loadError = resource && html === undefined && loaded?.uri === componentUri ? loaded.error : undefined;
+  const targetOrigin = messageOrigin(componentUri);
+  // The frame's content; the bridge is rebuilt only when it changes.
+  const frameSource = resource ? resourceHtml : componentUri;
+
+  // Read a ui:// resource that was not given as html.
+  useEffect(() => {
+    if (!resource || html !== undefined || !readResource) return;
+    let stale = false;
+    readResource(componentUri).then(
+      (text) => { if (!stale) setLoaded({ uri: componentUri, html: text }); },
+      (err: unknown) => {
+        if (stale) return;
+        const error = err instanceof Error ? err : new Error(String(err));
+        setLoaded({ uri: componentUri, error });
+        onErrorRef.current?.(error);
+      },
+    );
+    return () => { stale = true; };
+  }, [componentUri, html, readResource, resource]);
 
   useEffect(() => {
-    if (!iframeRef.current || !componentUri) return;
-
     const iframe = iframeRef.current;
-    let torn = false;
+    if (!iframe || frameSource === undefined) return;
 
-    // Minimal PostMessage bridge for SSR-safe environments.
-    // In production this would use @modelcontextprotocol/ext-apps/app-bridge AppBridge.
+    readyRef.current = false;
+    const post = (message: unknown) => iframe.contentWindow?.postMessage(message, targetOrigin);
+    const deliver = () => {
+      const result = toolResultRef.current;
+      if (result) post({ type: 'ui/notifications/tool-result', toolName: '', result: result.content });
+    };
+
     const handleMessage = (evt: MessageEvent) => {
       if (evt.source !== iframe.contentWindow) return;
       const data = evt.data as Record<string, unknown>;
 
       if (data?.type === 'mcp-ui/ready') {
-        setBridgeReady(true);
-        // Deliver initial tool result if provided
-        if (toolResult) {
-          iframe.contentWindow?.postMessage(
-            { type: 'ui/notifications/tool-result', toolName: '', result: toolResult.content },
-            '*',
-          );
-        }
+        readyRef.current = true;
+        deliver();
       }
 
-      if (data?.type === 'tools/call' && onInteraction) {
-        onInteraction(
-          'tool-call',
-          (data.toolName as string) ?? '',
-          data.arguments,
-        );
+      if (data?.type === 'tools/call') {
+        onInteractionRef.current?.('tool-call', (data.toolName as string) ?? '', data.arguments);
       }
 
-      if (data?.type === 'ui/message' && onInteraction) {
-        onInteraction('message', '', data.content);
+      if (data?.type === 'ui/message') {
+        onInteractionRef.current?.('message', '', data.content);
       }
     };
 
     window.addEventListener('message', handleMessage);
+    deliverRef.current = deliver;
 
     return () => {
-      torn = true;
+      // Tell the view first, while it can still receive the message.
+      if (readyRef.current) post({ type: 'ui/resource-teardown' });
+      readyRef.current = false;
+      deliverRef.current = null;
       window.removeEventListener('message', handleMessage);
-      setBridgeReady(false);
-      // Send teardown notification to the view before unmounting
-      if (!torn && iframe.contentWindow) {
-        iframe.contentWindow.postMessage({ type: 'ui/resource-teardown' }, '*');
-      }
     };
-  }, [componentUri, toolResult, onInteraction]);
+  }, [frameSource, targetOrigin]);
 
-  // Deliver updated toolResult when it changes after mount
+  // Deliver each new tool result to a ready view.
   useEffect(() => {
-    if (!bridgeReady || !toolResult || !iframeRef.current?.contentWindow) return;
-    iframeRef.current.contentWindow.postMessage(
-      { type: 'ui/notifications/tool-result', toolName: '', result: toolResult.content },
-      '*',
-    );
-  }, [toolResult, bridgeReady]);
+    toolResultRef.current = toolResult;
+    if (readyRef.current) deliverRef.current?.();
+  }, [toolResult]);
+
+  if (resource && resourceHtml === undefined && (loadError || !readResource)) {
+    const message = loadError
+      ? `AppView: could not read ${componentUri}: ${loadError.message}`
+      : `AppView: ${componentUri} is an MCP resource; pass its html, or readResource to read it.`;
+    return (<div role="alert" className={className} style={style}>{message}</div>) as unknown as JSX.Element;
+  }
 
   const borderStyle = prefersBorder
     ? { border: '1px solid var(--color-border-primary, #e0e0e0)', borderRadius: 4 }
@@ -522,7 +632,7 @@ export function AppView({
   return (
     <iframe
       ref={iframeRef}
-      src={componentUri}
+      {...(resource ? { srcDoc: resourceHtml ?? '' } : { src: componentUri })}
       sandbox={sandbox}
       title={title}
       className={className}
