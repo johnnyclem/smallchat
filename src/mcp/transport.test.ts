@@ -1,5 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { createServer, type Server as HttpServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { randomUUID } from 'node:crypto';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { MCPTransport, registerLocalHandler, unregisterLocalHandler, clearTransports } from './transport.js';
+import { createFixtureServer, fixtureEvents } from './__fixtures__/upstream-server.mjs';
 
 describe('MCPTransport', () => {
   afterEach(() => {
@@ -106,5 +111,64 @@ describe('MCPTransport', () => {
       expect(chunks).toHaveLength(1);
       expect((chunks[0] as { isError: boolean }).isError).toBe(true);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// MCP over Streamable HTTP against an SDK server (SC-SURF-13)
+// ---------------------------------------------------------------------------
+
+describe('MCPTransport against an SDK Streamable HTTP server (SC-SURF-13)', () => {
+  const servers: HttpServer[] = [];
+  const transports: MCPTransport[] = [];
+  afterEach(async () => {
+    for (const t of transports.splice(0)) await t.close();
+    for (const s of servers.splice(0)) {
+      s.closeAllConnections();
+      await new Promise<void>(r => s.close(() => r()));
+    }
+  });
+
+  async function sdkServer(): Promise<string> {
+    const sessions = new Map<string, StreamableHTTPServerTransport>();
+    const server = createServer(async (req, res) => {
+      const sid = req.headers['mcp-session-id'] as string | undefined;
+      let transport = sid ? sessions.get(sid) : undefined;
+      if (!transport) {
+        transport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: () => randomUUID(),
+          onsessioninitialized: id => { sessions.set(id, transport!); },
+        });
+        await createFixtureServer('mcp-transport-fixture').connect(transport);
+      }
+      await transport.handleRequest(req, res);
+    });
+    servers.push(server);
+    await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
+    return `http://127.0.0.1:${(server.address() as AddressInfo).port}/mcp`;
+  }
+
+  it('initializes a session and runs the tool', async () => {
+    const transport = new MCPTransport({ transportType: 'mcp', endpoint: await sdkServer() });
+    transports.push(transport);
+    const result = await transport.execute('echo', { text: 'over http' });
+    expect(result.metadata?.error).toBeUndefined();
+    expect(result.isError).toBe(false);
+    expect(result.content).toEqual([{ type: 'text', text: 'over http' }]);
+    // A second call reuses the session.
+    const sum = await transport.execute('add', { a: 2, b: 3 });
+    expect(sum.isError).toBe(false);
+  });
+
+  it('times out a hung call and cancels it upstream', async () => {
+    const transport = new MCPTransport({ transportType: 'mcp', endpoint: await sdkServer(), timeoutMs: 300 });
+    transports.push(transport);
+    const before = fixtureEvents.length;
+    const started = Date.now();
+    const result = await transport.execute('sleep', { ms: 10_000 });
+    expect(result.isError).toBe(true);
+    expect(String(result.metadata?.error)).toMatch(/timed out/i);
+    expect(Date.now() - started).toBeLessThan(5_000);
+    await expect.poll(() => fixtureEvents.slice(before)).toContain('sleep:cancelled');
   });
 });

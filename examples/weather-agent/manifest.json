@@ -1,13 +1,13 @@
 {
   "id": "weather-agent",
   "name": "Weather Agent",
-  "transportType": "rest",
+  "transportType": "local",
   "tools": [
     {
       "name": "get_current_weather",
       "description": "Get the current weather conditions for a specific location",
       "providerId": "weather-agent",
-      "transportType": "rest",
+      "transportType": "local",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -21,7 +21,7 @@
       "name": "get_forecast",
       "description": "Get a multi-day weather forecast for a location",
       "providerId": "weather-agent",
-      "transportType": "rest",
+      "transportType": "local",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -36,7 +36,7 @@
       "name": "get_alerts",
       "description": "Get active weather alerts and warnings for a region",
       "providerId": "weather-agent",
-      "transportType": "rest",
+      "transportType": "local",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -50,7 +50,7 @@
       "name": "search_location",
       "description": "Search for a geographic location by name and return coordinates",
       "providerId": "weather-agent",
-      "transportType": "rest",
+      "transportType": "local",
       "inputSchema": {
         "type": "object",
         "properties": {

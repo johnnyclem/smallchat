@@ -14,8 +14,22 @@
 const META_KEY_PATTERN = /^[a-zA-Z0-9_]+$/;
 
 /**
+ * Meta keys a sender may not set. `source` is the <channel> tag's
+ * provenance attribute (the channel name, from server config); a meta
+ * `source` would serialize as a second, forged `source="..."`. `sender` is
+ * the event's sender, stamped by the server (for bridge events, the
+ * identity of the credential that posted it; see ChannelServer.injectEvent
+ * and serializeChannelTag), and `user` is reserved so a body cannot present
+ * another identity next to it.
+ */
+export const RESERVED_META_KEYS: ReadonlySet<string> = new Set(['source', 'sender', 'user']);
+
+const BLOCKED_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+/**
  * Filter meta keys to only those containing letters, digits, and underscores.
- * Invalid keys are silently dropped (matching Claude Code behavior).
+ * Invalid keys are silently dropped (matching Claude Code behavior), and so
+ * are reserved tag attributes (RESERVED_META_KEYS).
  * Also prevents prototype pollution by rejecting __proto__, constructor, prototype.
  */
 export function filterMetaKeys(
@@ -23,13 +37,11 @@ export function filterMetaKeys(
 ): Record<string, string> | undefined {
   if (!meta || typeof meta !== 'object') return undefined;
 
-  const BLOCKED_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
   const filtered: Record<string, string> = Object.create(null);
   let hasKeys = false;
 
   for (const key of Object.keys(meta)) {
-    if (BLOCKED_KEYS.has(key)) continue;
-    if (!META_KEY_PATTERN.test(key)) continue;
+    if (!isValidMetaKey(key)) continue;
 
     const value = meta[key];
     if (typeof value === 'string') {
@@ -49,7 +61,7 @@ export function filterMetaKeys(
  */
 export function isValidMetaKey(key: string): boolean {
   if (!key || typeof key !== 'string') return false;
-  if (key === '__proto__' || key === 'constructor' || key === 'prototype') return false;
+  if (BLOCKED_KEYS.has(key) || RESERVED_META_KEYS.has(key)) return false;
   return META_KEY_PATTERN.test(key);
 }
 
@@ -121,13 +133,17 @@ export function validatePayloadSize(
 /**
  * Serialize a channel event into a <channel> XML tag for LLM prompt injection.
  * This is the format Claude Code uses to present channel events in context.
+ * `sender` is the event's (server-determined) sender and becomes the
+ * `sender` attribute; meta never sets reserved attributes (RESERVED_META_KEYS).
  */
 export function serializeChannelTag(
   channel: string,
   content: string,
   meta?: Record<string, string>,
+  sender?: string,
 ): string {
   const attrs = [`source="${escapeXmlAttr(channel)}"`];
+  if (sender) attrs.push(`sender="${escapeXmlAttr(sender)}"`);
 
   if (meta) {
     for (const [key, value] of Object.entries(meta)) {

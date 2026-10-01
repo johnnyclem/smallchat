@@ -1,35 +1,43 @@
 /**
- * SemanticRateLimiter — prevents "Vector Flooding" DoS attacks.
+ * SemanticRateLimiter — protects the embedder from "Vector Flooding" DoS.
  *
- * Monitors the stream of intents flowing through the Resolution Cache.
- * When it detects a burst of high-entropy, low-similarity intents — the
- * signature of an attacker probing random garbage to exhaust the embedder
- * — it throttles further embedding requests.
+ * Opt-in: a ToolRuntime has one only when RuntimeOptions.rateLimiter is
+ * set. State is kept per principal (the caller identity passed to
+ * resolve/dispatch, e.g. an MCP session or API key; callers that pass none
+ * share the "default" principal), so one client cannot exhaust another's
+ * budget. A throttled intent resolves to outcome 'throttled' with a
+ * retry-after; nothing is thrown through dispatch.
  *
- * Detection heuristics:
+ * Only novel intents count: an intent served from the resolution cache, a
+ * pinned phrase or a learned exact preference is never embedded and never
+ * consulted here.
+ *
+ * Detection heuristics, per principal:
  *   1. Sliding window of recent intent vectors (default 60s)
  *   2. Cross-similarity: average pairwise cosine similarity in the window
  *      — legitimate traffic clusters around known tools (high similarity)
  *      — flooding traffic is random noise (low similarity)
  *   3. Volume: raw count of novel (cache-miss) intents in the window
- *   4. Entropy estimate: canonical form length variance as a proxy for
- *      gibberish detection (attackers produce long random strings)
+ *   4. Entropy estimate: canonical form length as a proxy for gibberish
+ *      detection (attackers produce long random strings)
  *
- * When throttled, the limiter rejects new embedding requests until the
- * window drains below the threshold. Callers receive a `null` signal
- * and can return an error without touching the embedder.
+ * When throttled, the limiter rejects new embedding requests from that
+ * principal until its window drains below the thresholds.
  */
 
 import { cosineSimilarity } from './vector-math.js';
 
+/** The principal used when a caller does not identify itself. */
+export const DEFAULT_PRINCIPAL = 'default';
+
 export interface SemanticRateLimiterOptions {
   /** Sliding window duration in milliseconds (default: 60_000) */
   windowMs?: number;
-  /** Max novel (cache-miss) intents per window before checking similarity (default: 100) */
+  /** Max novel (cache-miss) intents per principal per window (default: 100) */
   maxNovelIntents?: number;
-  /** Similarity floor — if average pairwise similarity drops below this, throttle (default: 0.3) */
+  /** Similarity floor — if a principal's average pairwise similarity drops below this, throttle (default: 0.3) */
   similarityFloor?: number;
-  /** Min samples before similarity check kicks in (default: 10) */
+  /** Min samples before the similarity and entropy checks kick in (default: 10) */
   minSamplesForSimilarity?: number;
   /** Max canonical length — intents longer than this are suspicious (default: 200) */
   maxCanonicalLength?: number;
@@ -50,10 +58,28 @@ export interface FloodingMetrics {
   windowResetsIn: number;
 }
 
+/** Why an intent may or may not be embedded. */
+export type RateLimitVerdict =
+  | { allowed: true }
+  | {
+      allowed: false;
+      /** Which heuristic tripped */
+      reason: 'volume' | 'entropy' | 'similarity';
+      /** Milliseconds until the oldest window entry expires */
+      retryAfterMs: number;
+    };
+
 interface WindowEntry {
   timestamp: number;
   vector: Float32Array;
   canonicalLength: number;
+}
+
+interface PrincipalWindow {
+  entries: WindowEntry[];
+  /** Cached pairwise similarity sum to avoid O(n²) recomputation */
+  pairwiseSimilaritySum: number;
+  pairwiseCount: number;
 }
 
 export class SemanticRateLimiter {
@@ -64,10 +90,7 @@ export class SemanticRateLimiter {
   private readonly maxCanonicalLength: number;
   private readonly entropyFraction: number;
 
-  private window: WindowEntry[] = [];
-  /** Cached pairwise similarity sum to avoid O(n²) recomputation */
-  private pairwiseSimilaritySum = 0;
-  private pairwiseCount = 0;
+  private windows: Map<string, PrincipalWindow> = new Map();
 
   constructor(options?: SemanticRateLimiterOptions) {
     this.windowMs = options?.windowMs ?? 60_000;
@@ -79,149 +102,137 @@ export class SemanticRateLimiter {
   }
 
   /**
-   * Check whether a new intent should be allowed through to the embedder.
+   * Whether a new intent from `principal` may be embedded, and if not, why
+   * and for how long. Call this BEFORE embedding.
    *
-   * Call this BEFORE embedding. If it returns false, the intent is being
-   * throttled — return an error to the caller without invoking the embedder.
-   *
-   * @param canonical - The canonicalized intent string
-   * @returns true if allowed, false if throttled
+   * @param canonical - The intent's text (or canonical form)
+   * @param principal - Who is asking (default: DEFAULT_PRINCIPAL)
    */
-  check(canonical: string): boolean {
-    this.evictStale();
+  evaluate(canonical: string, principal: string = DEFAULT_PRINCIPAL): RateLimitVerdict {
+    const window = this.window(principal, false);
+    if (!window) return { allowed: true };
+    const entries = window.entries;
 
-    // Hard volume cap — too many novel intents regardless of similarity
-    if (this.window.length >= this.maxNovelIntents) {
-      return false;
+    const deny = (reason: 'volume' | 'entropy' | 'similarity'): RateLimitVerdict => ({
+      allowed: false,
+      reason,
+      retryAfterMs: Math.max(0, entries[0].timestamp + this.windowMs - Date.now()),
+    });
+
+    // Volume cap — too many novel intents from this principal
+    if (entries.length >= this.maxNovelIntents) return deny('volume');
+
+    if (entries.length >= this.minSamplesForSimilarity) {
+      // Entropy — too many recent intents look like gibberish
+      const highEntropyCount = entries.filter(e => e.canonicalLength > this.maxCanonicalLength).length;
+      if (highEntropyCount / entries.length >= this.entropyFraction) return deny('entropy');
+      // Similarity — recent intents are incoherent noise
+      if (!this.similarityHealthy(window)) return deny('similarity');
     }
 
-    // Entropy check — if too many recent intents look like gibberish, throttle
-    if (this.window.length >= this.minSamplesForSimilarity) {
-      const highEntropyCount = this.window.filter(
-        e => e.canonicalLength > this.maxCanonicalLength,
-      ).length;
-      const fraction = highEntropyCount / this.window.length;
-      if (fraction >= this.entropyFraction) {
-        return false;
-      }
-    }
-
-    return true;
+    return { allowed: true };
   }
 
   /**
-   * Record an intent that was just embedded (post-embedding).
-   *
-   * Call this AFTER embedding succeeds. The vector is stored in the
-   * sliding window for cross-similarity analysis. The next `check()`
-   * call uses this data to detect flooding patterns.
+   * Check whether a new intent should be allowed through to the embedder.
+   * Same as `evaluate(...).allowed`.
    */
-  record(canonical: string, vector: Float32Array): void {
-    this.evictStale();
+  check(canonical: string, principal: string = DEFAULT_PRINCIPAL): boolean {
+    return this.evaluate(canonical, principal).allowed;
+  }
 
-    const entry: WindowEntry = {
-      timestamp: Date.now(),
-      vector,
-      canonicalLength: canonical.length,
-    };
+  /**
+   * Record an intent that was just embedded (post-embedding). The vector
+   * joins the principal's sliding window for cross-similarity analysis.
+   */
+  record(canonical: string, vector: Float32Array, principal: string = DEFAULT_PRINCIPAL): void {
+    const window = this.window(principal, true)!;
 
     // Update incremental pairwise similarity with all existing entries
-    for (const existing of this.window) {
-      const sim = cosineSimilarity(vector, existing.vector);
-      this.pairwiseSimilaritySum += sim;
-      this.pairwiseCount++;
+    for (const existing of window.entries) {
+      window.pairwiseSimilaritySum += cosineSimilarity(vector, existing.vector);
+      window.pairwiseCount++;
     }
 
-    this.window.push(entry);
+    window.entries.push({ timestamp: Date.now(), vector, canonicalLength: canonical.length });
   }
 
   /**
-   * Check similarity-based throttle. Separate from `check()` because
-   * we need the vector (post-embedding) to compute similarity.
-   *
-   * Call this AFTER embedding but BEFORE expensive downstream work
-   * (vector index search, cache store). Returns false if the recent
-   * traffic pattern looks like flooding.
+   * Whether the principal's recent traffic is coherent enough (average
+   * pairwise similarity at or above the floor). True until there are
+   * minSamplesForSimilarity samples.
    */
-  checkSimilarity(): boolean {
-    if (this.window.length < this.minSamplesForSimilarity) {
-      return true; // Not enough data to judge
-    }
+  checkSimilarity(principal: string = DEFAULT_PRINCIPAL): boolean {
+    const window = this.window(principal, false);
+    if (!window || window.entries.length < this.minSamplesForSimilarity) return true;
+    return this.similarityHealthy(window);
+  }
 
-    const avgSimilarity = this.pairwiseCount > 0
-      ? this.pairwiseSimilaritySum / this.pairwiseCount
+  /** Current flooding metrics for one principal, for monitoring/debugging. */
+  getMetrics(principal: string = DEFAULT_PRINCIPAL): FloodingMetrics {
+    const window = this.window(principal, false);
+    const entries = window?.entries ?? [];
+    const avgSimilarity = window && window.pairwiseCount > 0
+      ? window.pairwiseSimilaritySum / window.pairwiseCount
       : 1.0;
+    const highEntropyCount = entries.filter(e => e.canonicalLength > this.maxCanonicalLength).length;
+    const oldestTimestamp = entries.length > 0 ? entries[0].timestamp : Date.now();
 
+    return {
+      novelCount: entries.length,
+      averageSimilarity: avgSimilarity,
+      highEntropyFraction: entries.length > 0 ? highEntropyCount / entries.length : 0,
+      throttled: !this.check('', principal),
+      windowResetsIn: Math.max(0, (oldestTimestamp + this.windowMs) - Date.now()),
+    };
+  }
+
+  /** Principals with entries in the current window. */
+  principals(): string[] {
+    for (const principal of [...this.windows.keys()]) this.window(principal, false);
+    return [...this.windows.keys()];
+  }
+
+  /** Clear one principal's state, or everyone's. */
+  reset(principal?: string): void {
+    if (principal === undefined) this.windows.clear();
+    else this.windows.delete(principal);
+  }
+
+  private similarityHealthy(window: PrincipalWindow): boolean {
+    const avgSimilarity = window.pairwiseCount > 0
+      ? window.pairwiseSimilaritySum / window.pairwiseCount
+      : 1.0;
     return avgSimilarity >= this.similarityFloor;
   }
 
-  /**
-   * Get current flooding metrics for monitoring/debugging.
-   */
-  getMetrics(): FloodingMetrics {
-    this.evictStale();
-
-    const avgSimilarity = this.pairwiseCount > 0
-      ? this.pairwiseSimilaritySum / this.pairwiseCount
-      : 1.0;
-
-    const highEntropyCount = this.window.filter(
-      e => e.canonicalLength > this.maxCanonicalLength,
-    ).length;
-
-    const oldestTimestamp = this.window.length > 0
-      ? this.window[0].timestamp
-      : Date.now();
-    const windowResetsIn = Math.max(
-      0,
-      (oldestTimestamp + this.windowMs) - Date.now(),
-    );
-
-    const throttled = !this.check('') || !this.checkSimilarity();
-
-    return {
-      novelCount: this.window.length,
-      averageSimilarity: avgSimilarity,
-      highEntropyFraction: this.window.length > 0
-        ? highEntropyCount / this.window.length
-        : 0,
-      throttled,
-      windowResetsIn,
-    };
-  }
-
-  /**
-   * Reset the limiter — clear all state.
-   */
-  reset(): void {
-    this.window = [];
-    this.pairwiseSimilaritySum = 0;
-    this.pairwiseCount = 0;
+  /** A principal's window with stale entries evicted (created on demand). */
+  private window(principal: string, create: boolean): PrincipalWindow | undefined {
+    let window = this.windows.get(principal);
+    if (window) {
+      this.evictStale(window);
+      if (window.entries.length === 0 && !create) {
+        this.windows.delete(principal);
+        return undefined;
+      }
+    } else if (create) {
+      window = { entries: [], pairwiseSimilaritySum: 0, pairwiseCount: 0 };
+      this.windows.set(principal, window);
+    }
+    return window;
   }
 
   /** Evict entries older than the sliding window */
-  private evictStale(): void {
+  private evictStale(window: PrincipalWindow): void {
     const cutoff = Date.now() - this.windowMs;
-    let evicted = 0;
-
-    while (this.window.length > 0 && this.window[0].timestamp < cutoff) {
-      const removed = this.window.shift()!;
-      evicted++;
-
-      // Recompute pairwise similarities excluding the evicted entry.
-      // For correctness we subtract out all pairs involving the removed entry.
-      // This is O(n) per eviction but evictions are amortized.
-      for (const remaining of this.window) {
-        const sim = cosineSimilarity(removed.vector, remaining.vector);
-        this.pairwiseSimilaritySum -= sim;
-        this.pairwiseCount--;
+    while (window.entries.length > 0 && window.entries[0].timestamp < cutoff) {
+      const removed = window.entries.shift()!;
+      // Subtract out all pairs involving the removed entry. O(n) per
+      // eviction, amortized.
+      for (const remaining of window.entries) {
+        window.pairwiseSimilaritySum -= cosineSimilarity(removed.vector, remaining.vector);
+        window.pairwiseCount--;
       }
     }
   }
 }
-
-/**
- * Cosine similarity between two Float32Arrays.
- * Returns value in [-1, 1] — but for normalized embeddings, [0, 1].
- */
-// cosineSimilarity now lives in ./vector-math.js (single source of truth).

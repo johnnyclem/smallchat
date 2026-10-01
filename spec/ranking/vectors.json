@@ -1,0 +1,63 @@
+{
+  "version": "smallchat.rank.v1",
+  "quantize": [
+    { "input": 0.90004, "expected": 0.9 },
+    { "input": 0.90001, "expected": 0.9 },
+    { "input": 0.90006, "expected": 0.9001 },
+    { "input": 0.123449, "expected": 0.1234 },
+    { "input": 0.999962, "expected": 1 },
+    { "input": 1.0000001, "expected": 1 },
+    { "input": -0.2, "expected": 0 },
+    { "input": 0, "expected": 0 }
+  ],
+  "rank": [
+    {
+      "name": "below-quantum difference is a tie, broken by tool id",
+      "candidates": [
+        { "toolId": "zeta/run", "score": 0.90004 },
+        { "toolId": "alpha/run", "score": 0.90001 }
+      ],
+      "expected": ["alpha/run", "zeta/run"]
+    },
+    {
+      "name": "a full quantum apart is ordered by score",
+      "candidates": [
+        { "toolId": "alpha/run", "score": 0.9 },
+        { "toolId": "zeta/run", "score": 0.9001 }
+      ],
+      "expected": ["zeta/run", "alpha/run"]
+    },
+    {
+      "name": "tool ids compare by UTF-16 code units",
+      "candidates": [
+        { "toolId": "b/x", "score": 0.7 },
+        { "toolId": "B/x", "score": 0.7 },
+        { "toolId": "a/x", "score": 0.7 },
+        { "toolId": "a/X", "score": 0.7 },
+        { "toolId": "a-b/x", "score": 0.7 }
+      ],
+      "expected": ["B/x", "a-b/x", "a/X", "a/x", "b/x"]
+    },
+    {
+      "name": "mixed",
+      "candidates": [
+        { "toolId": "fs/read_file", "score": 0.81234 },
+        { "toolId": "web/fetch", "score": 0.95 },
+        { "toolId": "fs/write_file", "score": 0.81231 },
+        { "toolId": "db/query", "score": 0.6 }
+      ],
+      "expected": ["web/fetch", "fs/read_file", "fs/write_file", "db/query"]
+    }
+  ],
+  "tier": [
+    { "score": 0.95, "expected": "exact" },
+    { "score": 0.94996, "expected": "exact" },
+    { "score": 0.94994, "expected": "high" },
+    { "score": 0.85, "expected": "high" },
+    { "score": 0.8499, "expected": "medium" },
+    { "score": 0.75, "expected": "medium" },
+    { "score": 0.6, "expected": "low" },
+    { "score": 0.59994, "expected": "none" },
+    { "score": 0, "expected": "none" }
+  ]
+}

@@ -16,10 +16,16 @@ import type {
   EntityRelation,
   StateDelta,
 } from './types.js';
+import { MAX_EXTRACTION_CHARS, MAX_SENTENCE_CHARS, splitSentences } from '../utils.js';
 
 // ---------------------------------------------------------------------------
 // Entity extraction patterns (domain-agnostic heuristics)
 // ---------------------------------------------------------------------------
+
+// Term captures are bounded to 60 characters (the longest entity name
+// addEntity accepts) and patterns run per sentence window, so matching is
+// linear in message length.
+const TERM = '(\\w[\\w\\s]{0,59}?)';
 
 /**
  * Patterns that indicate entity relationships or state changes.
@@ -31,14 +37,24 @@ const RELATION_PATTERNS: Array<{
   label: string;
   direction: 'forward' | 'reverse';
 }> = [
-  { pattern: /(\w[\w\s]*?)\s+(?:uses?|using)\s+(\w[\w\s]*?)(?:\.|,|$)/gi, label: 'uses', direction: 'forward' },
-  { pattern: /(\w[\w\s]*?)\s+(?:replaces?|replacing|replaced by)\s+(\w[\w\s]*?)(?:\.|,|$)/gi, label: 'replaces', direction: 'forward' },
-  { pattern: /(\w[\w\s]*?)\s+(?:depends?\s+on|requires?)\s+(\w[\w\s]*?)(?:\.|,|$)/gi, label: 'depends_on', direction: 'forward' },
-  { pattern: /(\w[\w\s]*?)\s+(?:is|are)\s+(?:not|n't)\s+(\w[\w\s]*?)(?:\.|,|$)/gi, label: 'contradicts', direction: 'forward' },
-  { pattern: /(?:swap|change|switch)\s+(\w[\w\s]*?)\s+(?:for|to|with)\s+(\w[\w\s]*?)(?:\.|,|$)/gi, label: 'replaces', direction: 'reverse' },
-  { pattern: /(?:remove|delete|drop)\s+(\w[\w\s]*?)(?:\.|,|$)/gi, label: 'removes', direction: 'forward' },
-  { pattern: /(?:add|create|introduce|include)\s+(\w[\w\s]*?)(?:\.|,|$)/gi, label: 'adds', direction: 'forward' },
+  { pattern: new RegExp(`${TERM}\\s+(?:uses?|using)\\s+${TERM}(?:\\.|,|$)`, 'gi'), label: 'uses', direction: 'forward' },
+  { pattern: new RegExp(`${TERM}\\s+(?:replaces?|replacing|replaced by)\\s+${TERM}(?:\\.|,|$)`, 'gi'), label: 'replaces', direction: 'forward' },
+  { pattern: new RegExp(`${TERM}\\s+(?:depends?\\s+on|requires?)\\s+${TERM}(?:\\.|,|$)`, 'gi'), label: 'depends_on', direction: 'forward' },
+  { pattern: new RegExp(`${TERM}\\s+(?:is|are)\\s+(?:not|n't)\\s+${TERM}(?:\\.|,|$)`, 'gi'), label: 'contradicts', direction: 'forward' },
+  { pattern: new RegExp(`(?:swap|change|switch)\\s+${TERM}\\s+(?:for|to|with)\\s+${TERM}(?:\\.|,|$)`, 'gi'), label: 'replaces', direction: 'reverse' },
+  { pattern: new RegExp(`(?:remove|delete|drop)\\s+${TERM}(?:\\.|,|$)`, 'gi'), label: 'removes', direction: 'forward' },
+  { pattern: new RegExp(`(?:add|create|introduce|include)\\s+${TERM}(?:\\.|,|$)`, 'gi'), label: 'adds', direction: 'forward' },
 ];
+
+/**
+ * The text the extractors read: at most MAX_EXTRACTION_CHARS, as sentence
+ * windows of at most MAX_SENTENCE_CHARS (one linear pass).
+ */
+function sentenceWindows(text: string): string[] {
+  return splitSentences(text.slice(0, MAX_EXTRACTION_CHARS), MAX_SENTENCE_CHARS)
+    .map((w) => w.trim())
+    .filter(Boolean);
+}
 
 /**
  * Contradiction / override indicators — when present, the message
@@ -61,9 +77,15 @@ const OVERRIDE_INDICATORS = [
 // Entity-relationship graph
 // ---------------------------------------------------------------------------
 
+function edgeKey(from: string, to: string, label: string): string {
+  return `${from}\u0000${to}\u0000${label}`;
+}
+
 export class EntityGraph {
   private nodes: Map<string, EntityNode> = new Map();
   private edges: EntityRelation[] = [];
+  /** (from, to, label) of every edge, so addEdge's duplicate check is O(1). */
+  private edgeKeys: Set<string> = new Set();
 
   /** Get a snapshot of all nodes. */
   getNodes(): ReadonlyMap<string, EntityNode> {
@@ -102,6 +124,7 @@ export class EntityGraph {
     if (!this.nodes.has(key)) return false;
     this.nodes.delete(key);
     this.edges = this.edges.filter(e => e.from !== key && e.to !== key);
+    this.edgeKeys = new Set(this.edges.map(e => edgeKey(e.from, e.to, e.label)));
     return true;
   }
 
@@ -119,10 +142,9 @@ export class EntityGraph {
   addEdge(relation: EntityRelation): boolean {
     const from = relation.from.toLowerCase();
     const to = relation.to.toLowerCase();
-    const exists = this.edges.some(
-      e => e.from === from && e.to === to && e.label === relation.label,
-    );
-    if (exists) return false;
+    const key = edgeKey(from, to, relation.label);
+    if (this.edgeKeys.has(key)) return false;
+    this.edgeKeys.add(key);
     this.edges.push({ ...relation, from, to });
     return true;
   }
@@ -135,6 +157,7 @@ export class EntityGraph {
     this.edges = this.edges.filter(e => {
       if (e.from !== fromKey || e.to !== toKey) return true;
       if (label && e.label !== label) return true;
+      this.edgeKeys.delete(edgeKey(e.from, e.to, e.label));
       return false;
     });
     return before - this.edges.length;
@@ -150,6 +173,7 @@ export class EntityGraph {
   clear(): void {
     this.nodes.clear();
     this.edges = [];
+    this.edgeKeys.clear();
   }
 }
 
@@ -183,29 +207,35 @@ export function extractEntities(text: string, messageId: string): EntityNode[] {
     }
   };
 
-  // Backtick-wrapped identifiers (code entities)
-  for (const match of text.matchAll(/`([^`]{2,50})`/g)) {
-    addEntity(match[1], 'identifier');
-  }
+  const windows = sentenceWindows(text);
 
-  // Quoted terms (named things)
-  for (const match of text.matchAll(/"([^"]{2,50})"/g)) {
-    addEntity(match[1], 'named');
-  }
+  for (const window of windows) {
+    // Backtick-wrapped identifiers (code entities)
+    for (const match of window.matchAll(/`([^`]{2,50})`/g)) {
+      addEntity(match[1], 'identifier');
+    }
 
-  // Capitalized multi-word phrases (proper nouns / concepts), but not sentence starts
-  for (const match of text.matchAll(/(?:^|[.!?]\s+)(?:\w+\s+)*?([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)/g)) {
-    addEntity(match[1], 'concept');
+    // Quoted terms (named things)
+    for (const match of window.matchAll(/"([^"]{2,50})"/g)) {
+      addEntity(match[1], 'named');
+    }
+
+    // Capitalized multi-word phrases (proper nouns / concepts), but not sentence starts
+    for (const match of window.matchAll(/(?:^|[.!?]\s+)(?:\w+\s+)*?([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)/g)) {
+      addEntity(match[1], 'concept');
+    }
   }
 
   // Terms near relation keywords (contextual extraction)
-  for (const { pattern } of RELATION_PATTERNS) {
-    // Reset lastIndex for global patterns
-    pattern.lastIndex = 0;
-    let match;
-    while ((match = pattern.exec(text)) !== null) {
-      if (match[1]) addEntity(match[1].trim(), 'contextual');
-      if (match[2]) addEntity(match[2].trim(), 'contextual');
+  for (const window of windows) {
+    for (const { pattern } of RELATION_PATTERNS) {
+      // Reset lastIndex for global patterns
+      pattern.lastIndex = 0;
+      let match;
+      while ((match = pattern.exec(window)) !== null) {
+        if (match[1]) addEntity(match[1].trim(), 'contextual');
+        if (match[2]) addEntity(match[2].trim(), 'contextual');
+      }
     }
   }
 
@@ -218,26 +248,28 @@ export function extractEntities(text: string, messageId: string): EntityNode[] {
 export function extractRelations(text: string, messageId: string): EntityRelation[] {
   const relations: EntityRelation[] = [];
 
-  for (const { pattern, label, direction } of RELATION_PATTERNS) {
-    pattern.lastIndex = 0;
-    let match;
-    while ((match = pattern.exec(text)) !== null) {
-      if (!match[1] || (label !== 'removes' && label !== 'adds' && !match[2])) continue;
-      const first = match[1].trim().toLowerCase();
-      const second = match[2]?.trim().toLowerCase();
+  for (const window of sentenceWindows(text)) {
+    for (const { pattern, label, direction } of RELATION_PATTERNS) {
+      pattern.lastIndex = 0;
+      let match;
+      while ((match = pattern.exec(window)) !== null) {
+        if (!match[1] || (label !== 'removes' && label !== 'adds' && !match[2])) continue;
+        const first = match[1].trim().toLowerCase();
+        const second = match[2]?.trim().toLowerCase();
 
-      if (first.length < 2 || (second && second.length < 2)) continue;
-      if (STOPWORDS.has(first) || (second && STOPWORDS.has(second))) continue;
+        if (first.length < 2 || (second && second.length < 2)) continue;
+        if (STOPWORDS.has(first) || (second && STOPWORDS.has(second))) continue;
 
-      if (label === 'removes' || label === 'adds') {
-        // Unary — no edge, but important for node tracking
-        continue;
+        if (label === 'removes' || label === 'adds') {
+          // Unary — no edge, but important for node tracking
+          continue;
+        }
+
+        const from = direction === 'forward' ? first : second!;
+        const to = direction === 'forward' ? second! : first;
+
+        relations.push({ from, to, label, establishedBy: messageId });
       }
-
-      const from = direction === 'forward' ? first : second!;
-      const to = direction === 'forward' ? second! : first;
-
-      relations.push({ from, to, label, establishedBy: messageId });
     }
   }
 

@@ -60,7 +60,8 @@ The `description` field on each `ToolDefinition` is the primary signal used by t
 "description": "Search for source code in a repository"
 // Tool B:
 "description": "Search for code files in a repo"
-// → These may deduplicate to the same selector
+// → At ≥ 0.95 cosine similarity these are a compile error (DuplicateToolError);
+//   below that they may still tie, so an intent for one can resolve to neither
 ```
 
 Guidelines:

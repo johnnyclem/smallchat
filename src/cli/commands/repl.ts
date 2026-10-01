@@ -1,28 +1,30 @@
 import { Command } from 'commander';
-import { readFileSync, existsSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createInterface } from 'node:readline';
-import type { Embedder, VectorIndex } from '../../core/types.js';
-import { LocalEmbedder } from '../../embedding/local-embedder.js';
-import { MemoryVectorIndex } from '../../embedding/memory-vector-index.js';
-import { SelectorTable } from '../../core/selector-table.js';
+import type { ArtifactV1 } from '../../artifact/types.js';
+import { describeFingerprint, parseEmbedderKind } from '../../artifact/embedder.js';
+import { readArtifact } from '../../artifact/io.js';
+import { loadRuntime, type LoadedRuntime } from '../../mcp/artifact.js';
+import { buildToolTable } from '../../mcp/tool-names.js';
+import { projectRuntimeOptions } from './project-policy.js';
 
 /**
  * Interactive REPL for querying the smallchat runtime.
  *
- * Loads a compiled artifact and lets you test dispatch resolution
- * interactively. Supports special commands prefixed with ':'.
+ * Loads a compiled artifact and resolves each intent with runtime.resolve(),
+ * the resolution `smallchat resolve`, serve and dispatch use: the outcome,
+ * tier, chosen tool and candidates. Nothing is executed. Supports special
+ * commands prefixed with ':'.
  */
 export const replCommand = new Command('repl')
-  .description('Start an interactive shell for querying tool resolution')
+  .description('Start an interactive shell that resolves intents (never executes)')
   .argument('<file>', 'Path to the compiled toolkit file')
-  .option('-e, --embedder <type>', 'Embedder to use: onnx or local', 'local')
-  .option('--top-k <number>', 'Number of results to show', '5')
-  .option('--threshold <number>', 'Minimum similarity threshold', '0.5')
+  .option('-e, --embedder <type>', 'Expected embedder (onnx or hash); refuses if the artifact was compiled with another')
+  .option('--top-k <number>', 'Number of candidates to show', '5')
   .action(async (file, options) => {
     const filePath = resolve(file);
     const topK = parseInt(options.topK, 10);
-    const threshold = parseFloat(options.threshold);
 
     if (!existsSync(filePath)) {
       console.error(`File not found: ${filePath}`);
@@ -31,50 +33,32 @@ export const replCommand = new Command('repl')
       process.exit(1);
     }
 
-    let data: ToolkitArtifact;
+    // The artifact's embedder fingerprint decides which embedder resolves
+    // intents; --embedder can only confirm it.
+    let loaded: LoadedRuntime;
     try {
-      const content = readFileSync(filePath, 'utf-8');
-      data = JSON.parse(content) as ToolkitArtifact;
+      if (options.embedder !== undefined) {
+        const artifact = await readArtifact(filePath);
+        if (parseEmbedderKind(options.embedder) !== artifact.embedder.kind) {
+          throw new Error(
+            `--embedder ${options.embedder} does not match ${filePath}, which was compiled with the ` +
+            `${artifact.embedder.kind} embedder (${artifact.embedder.model})`,
+          );
+        }
+      }
+      // Same dispatch policy as `resolve` and `serve`: the nearest smallchat.json "policy" block.
+      loaded = await loadRuntime(filePath, { runtimeOptions: projectRuntimeOptions().options });
     } catch (e) {
-      console.error(`Failed to read ${filePath}: ${(e as Error).message}`);
+      console.error(`Failed to load ${filePath}: ${(e as Error).message}`);
       process.exit(1);
     }
+    const { runtime, artifact: data, upstreams } = loaded;
+    const names = buildToolTable(data).byToolId;
 
-    // Set up embedder and vector index
-    let embedder: Embedder;
-    let vectorIndex: VectorIndex;
-
-    if (options.embedder === 'onnx') {
-      try {
-        const { ONNXEmbedder } = await import('../../embedding/onnx-embedder.js');
-        const { SqliteVectorIndex } = await import('../../embedding/sqlite-vector-index.js');
-        embedder = new ONNXEmbedder();
-        vectorIndex = new SqliteVectorIndex(':memory:');
-      } catch {
-        console.warn('ONNX embedder unavailable, falling back to local embedder.');
-        embedder = new LocalEmbedder();
-        vectorIndex = new MemoryVectorIndex();
-      }
-    } else {
-      embedder = new LocalEmbedder();
-      vectorIndex = new MemoryVectorIndex();
-    }
-
-    const selectorTable = new SelectorTable(vectorIndex, embedder);
-
-    // Load selectors from the artifact
-    for (const [, sel] of Object.entries(data.selectors)) {
-      const s = sel as { canonical: string; vector: number[] };
-      const vector = new Float32Array(s.vector);
-      await selectorTable.intern(vector, s.canonical);
-    }
-
-    const selectorCount = Object.keys(data.selectors).length;
-    const providerCount = Object.keys(data.dispatchTables).length;
-
-    console.log(`smallchat repl v0.5.0`);
-    console.log(`Loaded ${selectorCount} selectors from ${providerCount} providers`);
-    console.log(`Type an intent to resolve, or :help for commands.\n`);
+    console.log(`smallchat repl`);
+    console.log(`Loaded ${data.stats.toolCount} tools (${data.stats.selectorCount} selectors) from ${data.stats.providerCount} providers`);
+    console.log(`Embedder: ${describeFingerprint(data.embedder)}`);
+    console.log(`Type an intent to resolve (nothing is executed), or :help for commands.\n`);
 
     const rl = createInterface({
       input: process.stdin,
@@ -82,56 +66,62 @@ export const replCommand = new Command('repl')
       prompt: 'smallchat> ',
     });
 
-    rl.prompt();
-
-    rl.on('line', async (line) => {
-      const input = line.trim();
-
-      if (!input) {
-        rl.prompt();
-        return;
-      }
-
-      // Handle special commands
+    const resolveLine = async (input: string): Promise<void> => {
       if (input.startsWith(':')) {
         handleCommand(input, data);
-        rl.prompt();
         return;
       }
-
-      // Resolve intent
       try {
-        const selector = await selectorTable.resolve(input);
-        const matches = await vectorIndex.search(selector.vector, topK, threshold);
-
-        console.log(`\n  Intent:    "${input}"`);
-        console.log(`  Selector:  ${selector.canonical}`);
-
-        if (matches.length === 0) {
-          console.log('  Matches:   none\n');
+        const resolution = await runtime.resolve(input);
+        console.log(`\n  Intent:  "${input}"`);
+        console.log(`  Outcome: ${resolution.outcome} (tier ${resolution.tier.toUpperCase()}, decision ${resolution.proof.decision})`);
+        if (resolution.chosen) {
+          const name = names.get(resolution.chosen)?.name;
+          console.log(`  Chosen:  ${resolution.chosen}${name ? `  (serve name: ${name})` : ''}`);
+        }
+        if (resolution.reason) console.log(`  Reason:  ${resolution.reason}`);
+        const candidates = resolution.proof.candidates.slice(0, topK);
+        if (candidates.length === 0) {
+          console.log('  Candidates: none\n');
         } else {
-          console.log('  Matches:');
-          for (const match of matches) {
-            const confidence = ((1 - match.distance) * 100).toFixed(1);
-            const provider = findProvider(match.id, data);
-            console.log(`    ${confidence.padStart(5)}%  ${match.id}  (${provider})`);
+          console.log('  Candidates:');
+          for (const c of candidates) {
+            const excluded = c.excluded ? `  excluded: ${c.excluded}` : '';
+            console.log(`    ${c.toolId}  score ${c.score.toFixed(3)}  ${c.tier.toUpperCase()}${excluded}`);
           }
           console.log('');
         }
       } catch (e) {
         console.error(`  Error: ${(e as Error).message}\n`);
       }
+    };
 
-      rl.prompt();
+    // Lines are resolved one at a time, in order; input that ends (a pipe)
+    // closes the REPL only after the last line has been answered. Once the
+    // interface has closed there is no prompt to show (Node 24 throws
+    // ERR_USE_AFTER_CLOSE from prompt()).
+    let pending = Promise.resolve();
+    let closed = false;
+    rl.prompt();
+    rl.on('line', (line) => {
+      const input = line.trim();
+      pending = pending.then(async () => {
+        if (input) await resolveLine(input);
+        if (!closed) rl.prompt();
+      });
     });
 
     rl.on('close', () => {
-      console.log('\nGoodbye.');
-      process.exit(0);
+      closed = true;
+      void pending.then(async () => {
+        await upstreams.close();
+        console.log('\nGoodbye.');
+        process.exit(0);
+      });
     });
   });
 
-function handleCommand(input: string, data: ToolkitArtifact): void {
+function handleCommand(input: string, data: ArtifactV1): void {
   const [cmd, ...args] = input.slice(1).split(/\s+/);
 
   switch (cmd) {
@@ -151,8 +141,8 @@ function handleCommand(input: string, data: ToolkitArtifact): void {
     case 'providers':
     case 'p':
       console.log('\nProviders:');
-      for (const [providerId, table] of Object.entries(data.dispatchTables)) {
-        const count = Object.keys(table as Record<string, unknown>).length;
+      for (const providerId of Object.keys(data.providers)) {
+        const count = Object.values(data.tools).filter(t => t.providerId === providerId).length;
         console.log(`  ${providerId}: ${count} tools`);
       }
       console.log('');
@@ -161,9 +151,8 @@ function handleCommand(input: string, data: ToolkitArtifact): void {
     case 'selectors':
     case 's':
       console.log('\nSelectors:');
-      for (const [, sel] of Object.entries(data.selectors)) {
-        const s = sel as { canonical: string; arity: number };
-        console.log(`  ${s.canonical} (arity: ${s.arity})`);
+      for (const sel of Object.values(data.selectors)) {
+        console.log(`  ${sel.canonical} → ${sel.toolId}${sel.kind === 'alias' ? ' (alias)' : ''}`);
       }
       console.log('');
       break;
@@ -172,12 +161,9 @@ function handleCommand(input: string, data: ToolkitArtifact): void {
     case 't': {
       const filterProvider = args[0];
       console.log('\nTools:');
-      for (const [providerId, table] of Object.entries(data.dispatchTables)) {
-        if (filterProvider && providerId !== filterProvider) continue;
-        const methods = table as Record<string, { toolName: string }>;
-        for (const [, tool] of Object.entries(methods)) {
-          console.log(`  ${providerId}/${tool.toolName}`);
-        }
+      for (const tool of Object.values(data.tools)) {
+        if (filterProvider && tool.providerId !== filterProvider) continue;
+        console.log(`  ${tool.id}`);
       }
       console.log('');
       break;
@@ -185,10 +171,11 @@ function handleCommand(input: string, data: ToolkitArtifact): void {
 
     case 'stats':
       console.log('\nArtifact stats:');
-      console.log(`  Version:    ${data.version}`);
-      console.log(`  Compiled:   ${data.timestamp}`);
+      console.log(`  Format:     ${data.formatVersion}`);
+      console.log(`  Hash:       ${data.contentHash}`);
+      console.log(`  Embedder:   ${describeFingerprint(data.embedder)}`);
       console.log(`  Tools:      ${data.stats.toolCount}`);
-      console.log(`  Selectors:  ${data.stats.uniqueSelectorCount}`);
+      console.log(`  Selectors:  ${data.stats.selectorCount}`);
       console.log(`  Providers:  ${data.stats.providerCount}`);
       console.log(`  Collisions: ${data.stats.collisionCount}`);
       console.log('');
@@ -203,28 +190,4 @@ function handleCommand(input: string, data: ToolkitArtifact): void {
     default:
       console.log(`Unknown command: :${cmd}. Type :help for available commands.\n`);
   }
-}
-
-function findProvider(selectorId: string, data: ToolkitArtifact): string {
-  for (const [providerId, table] of Object.entries(data.dispatchTables)) {
-    const methods = table as Record<string, unknown>;
-    if (selectorId in methods) {
-      return providerId;
-    }
-  }
-  return 'unknown';
-}
-
-interface ToolkitArtifact {
-  version: string;
-  timestamp: string;
-  stats: {
-    toolCount: number;
-    uniqueSelectorCount: number;
-    mergedCount: number;
-    providerCount: number;
-    collisionCount: number;
-  };
-  selectors: Record<string, unknown>;
-  dispatchTables: Record<string, unknown>;
 }

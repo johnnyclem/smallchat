@@ -1,9 +1,6 @@
 #!/usr/bin/env node
 
 import { Command } from 'commander';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
 import { compileCommand } from './commands/compile.js';
 import { initCommand } from './commands/init.js';
 import { inspectCommand } from './commands/inspect.js';
@@ -18,25 +15,16 @@ import { memexCommand } from './commands/memex.js';
 import { setupCommand } from './commands/setup.js';
 import { appCommand } from './commands/app.js';
 import { rtkCommand } from './commands/rtk.js';
-
-function readPackageVersion(): string {
-  try {
-    // dist/cli/index.js → dist/ → repo root containing package.json
-    const here = dirname(fileURLToPath(import.meta.url));
-    const pkgPath = join(here, '..', '..', 'package.json');
-    const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8')) as { version?: string };
-    return pkg.version ?? '0.0.0';
-  } catch {
-    return '0.0.0';
-  }
-}
+import { replayCommand } from './commands/replay.js';
+import { explainCommand } from './commands/explain.js';
+import { packageVersion } from './package-info.js';
 
 const program = new Command();
 
 program
   .name('smallchat')
   .description('A message-passing tool compiler inspired by the Smalltalk/Objective-C runtime')
-  .version(readPackageVersion());
+  .version(packageVersion());
 
 // Enable "Did you mean ...?" suggestions for mistyped commands
 program.showSuggestionAfterError(true);
@@ -46,6 +34,8 @@ program.addCommand(compileCommand);
 program.addCommand(appCommand);
 program.addCommand(inspectCommand);
 program.addCommand(resolveCommand);
+program.addCommand(explainCommand);
+program.addCommand(replayCommand);
 program.addCommand(serveCommand);
 program.addCommand(doctorCommand);
 program.addCommand(docsCommand);
@@ -69,8 +59,10 @@ Getting Started
   3. Inspect your compiled toolkit:
      $ smallchat inspect tools.toolkit.json
 
-  4. Test dispatch resolution:
+  4. Test dispatch resolution, and see why:
      $ smallchat resolve tools.toolkit.json "search for files"
+     $ smallchat explain tools.toolkit.json "search for files"
+     $ smallchat replay tools.toolkit.json traces/
 
   5. Start a server:
      $ smallchat serve --source tools.toolkit.json

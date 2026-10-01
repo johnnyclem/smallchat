@@ -5,29 +5,58 @@
  * stdio MCP server (for Claude Code to spawn as a subprocess), with an optional
  * HTTP bridge for receiving webhook events and serving SSE for outbound visibility.
  *
- * Justification: Claude Code spawns channel servers over stdio. The existing
- * "smallchat serve" is HTTP-based with sessions, OAuth, etc. — too heavy for
- * a channel subprocess. A dedicated stdio server is simpler, correct, and
- * keeps the existing serve command backward-compatible.
+ * Justification: Claude Code spawns channel servers over stdio, and a channel
+ * speaks the claude/channel extension (notifications, permission relay)
+ * rather than serving a compiled toolkit as "smallchat serve" does, so it
+ * gets its own small stdio server.
  *
  * Protocol:
  *   stdin/stdout  — JSON-RPC 2.0 (newline-delimited) with MCP host (Claude Code)
  *   HTTP bridge   — optional local HTTP server for inbound webhooks + SSE outbound
+ *
+ * HTTP bridge security: every request except GET /health must present a
+ * credential (`X-Channel-Secret: <secret>` or `Authorization: Bearer
+ * <secret>`), and the bridge will not start without one. The credential
+ * decides who the sender is: the shared secret authenticates as
+ * httpBridgeSecretIdentity ("bridge"), each per-sender token as its
+ * identity. Body `sender` and `channel` fields are ignored — events carry
+ * the authenticated identity and the configured channel name. Permission
+ * verdicts are accepted only from identities in permissionApprovers, and
+ * each verdict is reported with its approver. The Host header must name an
+ * allowed host (DNS rebinding), a request with an Origin must match
+ * httpBridgeCorsOrigin, and POST bodies must be JSON objects within the
+ * size limit; anything else gets a 4xx and never reaches Claude Code.
  */
 
 import { createInterface, type Interface } from 'node:readline';
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
-import { timingSafeEqual } from 'node:crypto';
+import type { AddressInfo } from 'node:net';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import type {
   ChannelEvent,
   ChannelServerConfig,
   PermissionRequest,
   PermissionVerdict,
+  RecordedPermissionVerdict,
 } from './types.js';
 import { ClaudeCodeChannelAdapter } from './adapter.js';
 import { SenderGate } from './sender-gate.js';
 import { filterMetaKeys, validatePayloadSize, parsePermissionReply } from './utils.js';
+import { PACKAGE_VERSION } from '../core/version.js';
+import {
+  ClientAbortedError,
+  HttpRejection,
+  defaultAllowedHostnames,
+  hostAllowed,
+  isJsonContentType,
+  readBody,
+} from '../mcp/http-guard.js';
+
+/** Identity of requests that present the shared bridge secret, unless configured. */
+export const DEFAULT_BRIDGE_SECRET_IDENTITY = 'bridge';
+
+const DEFAULT_MAX_BODY_BYTES = 256 * 1024;
 
 // ---------------------------------------------------------------------------
 // JSON-RPC types (stdio protocol)
@@ -52,10 +81,15 @@ export class ChannelServer extends EventEmitter {
   private senderGate: SenderGate;
   private rl: Interface | null = null;
   private httpServer: Server | null = null;
-  private sseClients: Set<ServerResponse> = new Set();
+  /** Open /sse streams and the identity each one authenticated as */
+  private sseClients: Map<ServerResponse, string> = new Map();
   private initialized = false;
   private nextId = 1;
   private pendingPermissions: Map<string, PermissionRequest> = new Map();
+  /** SHA-256 of each bridge credential, with the identity it authenticates */
+  private credentials: Array<{ identity: string; digest: Buffer }> = [];
+  private approvers: Set<string>;
+  private allowedHosts: string[] = [];
 
   constructor(config: ChannelServerConfig) {
     super();
@@ -67,12 +101,16 @@ export class ChannelServer extends EventEmitter {
       allowlist: config.senderAllowlist,
       allowlistFile: config.senderAllowlistFile,
     });
+    this.approvers = new Set((config.permissionApprovers ?? []).map(normalizeIdentity).filter(Boolean));
   }
 
   /**
    * Start the stdio MCP server (and optional HTTP bridge).
    */
   async start(): Promise<void> {
+    // Refuse an unauthenticated bridge before touching stdio.
+    if (this.config.httpBridge) this.prepareHttpBridge();
+
     // Set up stdio JSON-RPC reader
     this.rl = createInterface({ input: process.stdin, terminal: false });
     this.rl.on('line', (line) => this.handleStdioLine(line));
@@ -101,11 +139,12 @@ export class ChannelServer extends EventEmitter {
 
     if (this.httpServer) {
       // Close SSE clients
-      for (const client of this.sseClients) {
+      for (const client of this.sseClients.keys()) {
         try { client.end(); } catch { /* ignore */ }
       }
       this.sseClients.clear();
       this.httpServer.close();
+      this.httpServer.closeAllConnections();
       this.httpServer = null;
     }
 
@@ -134,7 +173,7 @@ export class ChannelServer extends EventEmitter {
       return false;
     }
 
-    // Filter meta keys
+    // Filter meta keys (reserved ones included: a body cannot set sender)
     const filteredMeta = filterMetaKeys(event.meta);
 
     const cleanEvent: ChannelEvent = {
@@ -148,11 +187,13 @@ export class ChannelServer extends EventEmitter {
     // Ingest into adapter
     this.adapter.ingest(cleanEvent);
 
-    // Emit MCP notification over stdio
+    // Emit MCP notification over stdio. meta.sender is stamped here with the
+    // event's sender — for bridge events the identity of the credential that
+    // posted it — so Claude Code sees who posted, not who the body claims.
     this.sendNotification('notifications/claude/channel', {
       channel: cleanEvent.channel,
       content: cleanEvent.content,
-      meta: cleanEvent.meta,
+      meta: cleanEvent.sender ? { ...cleanEvent.meta, sender: cleanEvent.sender } : cleanEvent.meta,
     });
 
     // Broadcast to SSE clients
@@ -163,12 +204,28 @@ export class ChannelServer extends EventEmitter {
   }
 
   /**
-   * Send a permission verdict back to the host.
+   * Send a permission verdict back to the host. `approver` is who decided;
+   * it is part of the `permission-verdict` event, never of the notification.
    */
-  sendPermissionVerdict(verdict: PermissionVerdict): void {
-    this.sendNotification('notifications/claude/channel/permission', verdict);
+  sendPermissionVerdict(verdict: PermissionVerdict, approver?: string): void {
+    this.sendNotification('notifications/claude/channel/permission', {
+      request_id: verdict.request_id,
+      behavior: verdict.behavior,
+    });
     this.pendingPermissions.delete(verdict.request_id);
-    this.emit('permission-verdict', verdict);
+    const recorded: RecordedPermissionVerdict = {
+      request_id: verdict.request_id,
+      behavior: verdict.behavior,
+      ...(approver !== undefined ? { approver } : {}),
+    };
+    this.emit('permission-verdict', recorded);
+  }
+
+  /** The bridge's bound address once it listens (useful with httpBridgePort: 0). */
+  get httpBridgeAddress(): { host: string; port: number } | null {
+    const address = this.httpServer?.address();
+    if (!address || typeof address === 'string') return null;
+    return { host: (address as AddressInfo).address, port: (address as AddressInfo).port };
   }
 
   /**
@@ -280,7 +337,7 @@ export class ChannelServer extends EventEmitter {
       capabilities,
       serverInfo: {
         name: `smallchat-channel-${this.config.channelName}`,
-        version: '0.5.0',
+        version: PACKAGE_VERSION,
       },
       ...(this.config.instructions
         ? { instructions: this.config.instructions }
@@ -352,8 +409,8 @@ export class ChannelServer extends EventEmitter {
 
     this.pendingPermissions.set(request.request_id, request);
 
-    // Broadcast to SSE clients for remote approval
-    this.broadcastSSE('permission-request', request);
+    // Stream to approvers only: the request carries the pending tool call.
+    this.broadcastSSE('permission-request', request, identity => this.isApprover(identity));
     this.emit('permission-request', request);
   }
 
@@ -385,19 +442,64 @@ export class ChannelServer extends EventEmitter {
   // HTTP bridge
   // ---------------------------------------------------------------------------
 
+  /**
+   * Check and index the bridge configuration: at least one credential, no
+   * token shared by two identities, and a Host allowlist. Throws otherwise.
+   */
+  private prepareHttpBridge(): void {
+    const entries: Array<[string, string]> = [];
+    if (this.config.httpBridgeSecret) {
+      entries.push([this.config.httpBridgeSecretIdentity ?? DEFAULT_BRIDGE_SECRET_IDENTITY, this.config.httpBridgeSecret]);
+    }
+    for (const [identity, token] of Object.entries(this.config.httpBridgeTokens ?? {})) {
+      if (!identity.trim() || typeof token !== 'string' || token === '') {
+        throw new Error(`httpBridgeTokens: identity "${identity}" needs a non-empty token`);
+      }
+      entries.push([identity, token]);
+    }
+    if (entries.length === 0) {
+      throw new Error(
+        'The channel HTTP bridge needs a secret: set SMALLCHAT_CHANNEL_SECRET or --http-bridge-secret-file ' +
+        '(httpBridgeSecret), or per-sender tokens (httpBridgeTokens). It will not run unauthenticated.',
+      );
+    }
+    const seen = new Map<string, string>();
+    this.credentials = entries.map(([identity, token]) => {
+      const digest = createHash('sha256').update(token).digest();
+      const other = seen.get(digest.toString('hex'));
+      if (other !== undefined) {
+        throw new Error(`HTTP bridge identities "${other}" and "${identity}" share a token; each credential must identify one sender`);
+      }
+      seen.set(digest.toString('hex'), identity);
+      return { identity, digest };
+    });
+
+    const host = this.config.httpBridgeHost ?? '127.0.0.1';
+    const allowedHosts = this.config.httpBridgeAllowedHosts ?? defaultAllowedHostnames(host);
+    if (!allowedHosts) {
+      throw new Error(`The HTTP bridge binds ${host}; set httpBridgeAllowedHosts (--http-bridge-allowed-host) to the hostnames clients use`);
+    }
+    this.allowedHosts = allowedHosts.map(h => h.toLowerCase());
+  }
+
   private async startHttpBridge(): Promise<void> {
     const port = this.config.httpBridgePort ?? 3002;
     const host = this.config.httpBridgeHost ?? '127.0.0.1';
 
-    this.httpServer = createServer((req, res) => this.handleHttpRequest(req, res));
+    this.httpServer = createServer((req, res) => {
+      this.handleHttpRequest(req, res).catch(err => this.failRequest(res, err));
+    });
 
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
+      this.httpServer!.once('error', reject);
       this.httpServer!.listen(port, host, () => {
+        this.httpServer!.off('error', reject);
+        const bound = this.httpBridgeAddress?.port ?? port;
         // Write to stderr so it doesn't interfere with stdio JSON-RPC
         process.stderr.write(
-          `Channel HTTP bridge listening on http://${host}:${port}\n` +
+          `Channel HTTP bridge listening on http://${host}:${bound} (credential required)\n` +
           `  POST /event       Inject channel event\n` +
-          `  POST /permission  Submit permission verdict\n` +
+          `  POST /permission  Submit permission verdict (approvers only)\n` +
           `  GET  /sse         SSE event stream\n` +
           `  GET  /health      Health check\n`,
         );
@@ -416,6 +518,17 @@ export class ChannelServer extends EventEmitter {
       if (corsOrigin !== '*') res.setHeader('Vary', 'Origin');
     }
 
+    // DNS rebinding: a page whose own hostname resolves to 127.0.0.1 still
+    // sends its hostname in Host.
+    if (!hostAllowed(req.headers.host, this.allowedHosts)) {
+      return sendJson(res, 403, { error: 'Host not allowed' });
+    }
+    // Browsers always send Origin on cross-site requests.
+    const origin = req.headers.origin;
+    if (origin !== undefined && corsOrigin !== '*' && origin !== corsOrigin) {
+      return sendJson(res, 403, { error: 'Origin not allowed' });
+    }
+
     if (req.method === 'OPTIONS') {
       res.writeHead(204);
       res.end();
@@ -424,27 +537,8 @@ export class ChannelServer extends EventEmitter {
 
     const url = req.url ?? '/';
 
-    // Shared secret check
-    if (this.config.httpBridgeSecret) {
-      const provided = req.headers['x-channel-secret'] as string
-        ?? req.headers['authorization']?.replace(/^Bearer\s+/i, '');
-
-      if (!timingSafeEqualStrings(provided, this.config.httpBridgeSecret)) {
-        // Only /health stays open for liveness checks. /sse must be
-        // authenticated too — it streams channel events and pending
-        // tool-approval requests, so leaving it exempt would hand any
-        // local client a live feed of that traffic.
-        if (url !== '/health') {
-          res.writeHead(401, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'Unauthorized' }));
-          return;
-        }
-      }
-    }
-
     if (req.method === 'GET' && url === '/health') {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({
+      return sendJson(res, 200, {
         status: 'ok',
         channel: this.config.channelName,
         twoWay: !!this.config.twoWay,
@@ -452,88 +546,121 @@ export class ChannelServer extends EventEmitter {
         senderGating: this.senderGate.enabled,
         sseClients: this.sseClients.size,
         pendingPermissions: this.pendingPermissions.size,
-      }));
-      return;
+      });
+    }
+
+    // Everything else needs a credential. /sse included: it streams channel
+    // events and pending tool-approval requests.
+    const identity = this.authenticate(req);
+    if (identity === null) {
+      req.resume();
+      return sendJson(res, 401, { error: 'Unauthorized' });
     }
 
     if (req.method === 'GET' && url === '/sse') {
-      return this.handleSSEConnection(req, res);
+      return this.handleSSEConnection(req, res, identity);
     }
 
     if (req.method === 'POST' && url === '/event') {
-      return this.handleEventPost(req, res);
+      return this.handleEventPost(req, res, identity);
     }
 
     if (req.method === 'POST' && url === '/permission') {
-      return this.handlePermissionPost(req, res);
+      return this.handlePermissionPost(req, res, identity);
     }
 
-    res.writeHead(404, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'Not found' }));
+    req.resume();
+    sendJson(res, 404, { error: 'Not found' });
   }
 
-  private async handleEventPost(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const body = await readBody(req);
-    let payload: Record<string, unknown>;
+  /**
+   * The identity of the credential a request presents, or null. Every
+   * configured credential is compared (SHA-256 digests, constant time), so
+   * timing reveals neither the secret nor which identity matched.
+   */
+  private authenticate(req: IncomingMessage): string | null {
+    const header = req.headers['x-channel-secret'];
+    const provided = typeof header === 'string' && header !== ''
+      ? header
+      : /^Bearer\s+(\S+)\s*$/i.exec(req.headers.authorization ?? '')?.[1];
+    if (!provided) return null;
+    const digest = createHash('sha256').update(provided).digest();
+    let identity: string | null = null;
+    for (const credential of this.credentials) {
+      if (timingSafeEqual(digest, credential.digest) && identity === null) identity = credential.identity;
+    }
+    return identity;
+  }
 
+  /** Read a POST body as a JSON object; throws HttpRejection (4xx) otherwise. */
+  private async readJsonObject(req: IncomingMessage): Promise<Record<string, unknown>> {
+    if (!isJsonContentType(req.headers['content-type'])) {
+      req.resume();
+      throw new HttpRejection(415, 'Content-Type must be application/json');
+    }
+    const body = await readBody(req, this.config.httpBridgeMaxBodyBytes ?? DEFAULT_MAX_BODY_BYTES);
+    let payload: unknown;
     try {
-      payload = JSON.parse(body);
+      payload = JSON.parse(body.toString('utf-8'));
     } catch {
-      res.writeHead(400, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Invalid JSON' }));
-      return;
+      throw new HttpRejection(400, 'Invalid JSON');
+    }
+    if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
+      throw new HttpRejection(400, 'Body must be a JSON object');
+    }
+    return payload as Record<string, unknown>;
+  }
+
+  private async handleEventPost(req: IncomingMessage, res: ServerResponse, identity: string): Promise<void> {
+    const payload = await this.readJsonObject(req);
+
+    if (typeof payload.content !== 'string' || !payload.content) {
+      return sendJson(res, 400, { error: 'Missing or invalid "content" field' });
+    }
+    const meta = payload.meta;
+    if (meta !== undefined && meta !== null && (typeof meta !== 'object' || Array.isArray(meta))) {
+      return sendJson(res, 400, { error: '"meta" must be an object of string values' });
     }
 
+    // Provenance comes from the server: the configured channel name and the
+    // authenticated identity. Body "channel" and "sender" are ignored.
     const event: ChannelEvent = {
-      channel: (payload.channel as string) || this.config.channelName,
-      content: payload.content as string,
-      meta: payload.meta as Record<string, string> | undefined,
-      sender: payload.sender as string | undefined,
-      timestamp: (payload.timestamp as string) || new Date().toISOString(),
+      channel: this.config.channelName,
+      content: payload.content,
+      meta: meta as Record<string, string> | undefined,
+      sender: identity,
+      timestamp: typeof payload.timestamp === 'string' ? payload.timestamp : new Date().toISOString(),
     };
 
-    if (!event.content || typeof event.content !== 'string') {
-      res.writeHead(400, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Missing or invalid "content" field' }));
-      return;
+    if (!validatePayloadSize(event.content, this.config.maxPayloadSize).valid) {
+      this.emit('payload-too-large', validatePayloadSize(event.content, this.config.maxPayloadSize));
+      return sendJson(res, 413, { error: 'Event content exceeds maxPayloadSize' });
+    }
+    if (!this.injectEvent(event)) {
+      return sendJson(res, 403, { error: `Sender "${identity}" is not allowed to post to this channel` });
     }
 
-    const ok = this.injectEvent(event);
-
-    if (!ok) {
-      res.writeHead(403, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Event rejected (sender gating or payload size)' }));
-      return;
-    }
-
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ ok: true, channel: event.channel }));
+    sendJson(res, 200, { ok: true, channel: event.channel, sender: identity });
   }
 
-  private async handlePermissionPost(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  private async handlePermissionPost(req: IncomingMessage, res: ServerResponse, identity: string): Promise<void> {
     if (!this.config.permissionRelay) {
-      res.writeHead(400, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Permission relay not enabled' }));
-      return;
+      req.resume();
+      return sendJson(res, 400, { error: 'Permission relay not enabled' });
     }
 
-    // Require sender gating for permission relay
-    if (!this.senderGate.enabled) {
-      res.writeHead(403, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Permission relay requires sender gating to be enabled' }));
-      return;
+    // Only allowlisted approvers decide tool executions.
+    if (this.approvers.size === 0) {
+      req.resume();
+      return sendJson(res, 403, { error: 'No permission approvers are configured (permissionApprovers / --permission-approvers)' });
+    }
+    if (!this.isApprover(identity)) {
+      req.resume();
+      this.emit('approver-rejected', identity);
+      return sendJson(res, 403, { error: `"${identity}" is not a permission approver` });
     }
 
-    const body = await readBody(req);
-    let payload: Record<string, unknown>;
-
-    try {
-      payload = JSON.parse(body);
-    } catch {
-      res.writeHead(400, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Invalid JSON' }));
-      return;
-    }
+    const payload = await this.readJsonObject(req);
 
     // Support two formats:
     // 1. { "message": "yes abcde" } — natural reply format
@@ -554,28 +681,51 @@ export class ChannelServer extends EventEmitter {
     }
 
     if (!verdict) {
-      res.writeHead(400, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({
+      return sendJson(res, 400, {
         error: 'Invalid permission verdict',
         hint: 'Use {"message":"yes abcde"} or {"request_id":"abcde","behavior":"allow"}',
-      }));
-      return;
+      });
     }
 
     // Verify the request_id exists
     if (!this.pendingPermissions.has(verdict.request_id)) {
-      res.writeHead(404, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: `No pending permission request: ${verdict.request_id}` }));
-      return;
+      return sendJson(res, 404, { error: `No pending permission request: ${verdict.request_id}` });
     }
 
-    this.sendPermissionVerdict(verdict);
+    this.sendPermissionVerdict(verdict, identity);
 
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ ok: true, ...verdict }));
+    sendJson(res, 200, { ok: true, ...verdict, approver: identity });
   }
 
-  private handleSSEConnection(_req: IncomingMessage, res: ServerResponse): void {
+  /** Answer a request whose handler threw; never let it reach the process. */
+  private failRequest(res: ServerResponse, err: unknown): void {
+    if (err instanceof ClientAbortedError) {
+      res.destroy();
+      return;
+    }
+    if (res.headersSent) {
+      res.destroy();
+      return;
+    }
+    if (err instanceof HttpRejection) {
+      sendJson(res, err.status, { error: err.message });
+      return;
+    }
+    this.emit('bridge-error', err);
+    sendJson(res, 500, { error: 'Internal error' });
+  }
+
+  /** Whether an authenticated identity is in permissionApprovers. */
+  private isApprover(identity: string): boolean {
+    return this.approvers.has(normalizeIdentity(identity));
+  }
+
+  /**
+   * GET /sse — every authenticated identity receives channel events and
+   * replies (the channel's traffic, whoever posted it); permission requests
+   * go only to approvers.
+   */
+  private handleSSEConnection(_req: IncomingMessage, res: ServerResponse, identity: string): void {
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
@@ -585,7 +735,7 @@ export class ChannelServer extends EventEmitter {
     // Send connected event
     res.write(`event: connected\ndata: ${JSON.stringify({ channel: this.config.channelName, timestamp: Date.now() })}\n\n`);
 
-    this.sseClients.add(res);
+    this.sseClients.set(res, identity);
 
     // Keep-alive
     const keepAlive = setInterval(() => {
@@ -598,9 +748,11 @@ export class ChannelServer extends EventEmitter {
     });
   }
 
-  private broadcastSSE(event: string, data: unknown): void {
+  /** Write an SSE event to every open stream, or to those whose identity `to` accepts. */
+  private broadcastSSE(event: string, data: unknown, to?: (identity: string) => boolean): void {
     const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
-    for (const client of this.sseClients) {
+    for (const [client, identity] of this.sseClients) {
+      if (to && !to(identity)) continue;
       try { client.write(payload); } catch { /* ignore */ }
     }
   }
@@ -610,35 +762,12 @@ export class ChannelServer extends EventEmitter {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/**
- * Constant-time comparison of the caller-supplied secret against the
- * configured one, so a mismatch can't be timed to recover the secret
- * byte-by-byte. `provided` may be undefined (no header sent at all).
- */
-function timingSafeEqualStrings(provided: string | undefined, expected: string): boolean {
-  if (provided === undefined) return false;
-  const bufA = Buffer.from(provided);
-  const bufB = Buffer.from(expected);
-  if (bufA.length !== bufB.length) return false;
-  return timingSafeEqual(bufA, bufB);
+function sendJson(res: ServerResponse, status: number, body: unknown): void {
+  if (res.headersSent) return;
+  res.writeHead(status, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(body));
 }
 
-function readBody(req: IncomingMessage): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let size = 0;
-    const maxSize = 256 * 1024; // 256KB hard limit for HTTP body
-
-    req.on('data', (chunk: Buffer) => {
-      size += chunk.length;
-      if (size > maxSize) {
-        req.destroy();
-        reject(new Error('Request body too large'));
-        return;
-      }
-      chunks.push(chunk);
-    });
-    req.on('end', () => resolve(Buffer.concat(chunks).toString()));
-    req.on('error', reject);
-  });
+function normalizeIdentity(identity: string): string {
+  return identity.toLowerCase().trim();
 }

@@ -1,0 +1,57 @@
+[
+  {
+    "line": 1,
+    "reason": "a line edited after it was written",
+    "error": "hash mismatch"
+  },
+  {
+    "line": 2,
+    "reason": "an anonymous author",
+    "error": "anonymous"
+  },
+  {
+    "line": 3,
+    "reason": "an anonymous signer (identities compare case-folded)",
+    "error": "anonymous"
+  },
+  {
+    "line": 4,
+    "reason": "a reserved author",
+    "error": "reserved"
+  },
+  {
+    "line": 5,
+    "reason": "'migration' authoring a signed TB",
+    "error": "reserved"
+  },
+  {
+    "line": 6,
+    "reason": "a contesting UV without its contests link",
+    "error": "contests link"
+  },
+  {
+    "line": 7,
+    "reason": "a TB carrying a link only an addendum writes",
+    "error": "cannot carry the link"
+  },
+  {
+    "line": 8,
+    "reason": "a ruling listing a link it did not write",
+    "error": "only the links it writes"
+  },
+  {
+    "line": 9,
+    "reason": "a proposal with an anonymous author",
+    "error": "anonymous"
+  },
+  {
+    "line": 10,
+    "reason": "'migration' authoring a TRANSITION",
+    "error": "reserved"
+  },
+  {
+    "line": 11,
+    "reason": "a detector authoring a TRANSITION",
+    "error": "reserved"
+  }
+]

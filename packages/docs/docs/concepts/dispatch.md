@@ -3,287 +3,149 @@ title: Dispatch
 sidebar_label: Dispatch
 ---
 
-import Tabs from '@theme/Tabs';
-import TabItem from '@theme/TabItem';
-
 # Dispatch
 
-The dispatch layer is the hot path. It takes a natural-language intent, resolves it to a concrete implementation, and invokes it — either as a single call or as a streaming generator.
+The dispatch layer turns a natural-language intent into at most one tool
+call. In 1.0 it has two halves that can be used separately:
 
-## `toolkit_dispatch` — the hot path
+- **Resolution** (`runtime.resolve(intent)`) chooses a tool, or refuses to,
+  and explains why. It never executes anything.
+- **Execution** (`runtime.dispatchById(toolId, args)`) runs exactly one
+  named tool after validating its arguments.
 
-<Tabs groupId="language">
-<TabItem value="typescript" label="TypeScript">
+`runtime.dispatch(intent, args)` does both, and runs a tool only when the
+dispatch policy allows it. This page describes `@smallchat/core` 1.0
+(TypeScript); smallchat-swift 1.0 follows the same outcomes and runs the
+same conformance vectors (`spec/resolve/`).
+
+## Resolution
 
 ```typescript
-import { toolkit_dispatch } from '@smallchat/core';
-
-const result = await toolkit_dispatch(context, 'search for code', {
-  query: 'typescript generics',
-});
+const r = await runtime.resolve('search for code', { args });
+switch (r.outcome) {
+  case 'resolved':             // r.chosen is the tool id; r.tier its confidence tier
+    await runtime.dispatchById(r.chosen!, args, { resolutionDigest: r.proof.proofDigest });
+    break;
+  case 'needs-disambiguation': // candidates exist but none may run on its own
+  case 'unresolved':           // nothing plausible matched
+    console.log(r.reason, r.candidates.map(c => c.toolId), r.refinement?.options);
+    break;
+  case 'throttled':            // opt-in rate limiter; retry after r.retryAfterMs
+    break;
+}
 ```
 
-</TabItem>
-<TabItem value="swift" label="Swift">
-
-```swift
-import SmallChat
-
-let result = try await toolkitDispatch(context, "search for code", args: [
-  "query": "typescript generics",
-])
-```
-
-</TabItem>
-</Tabs>
-
-The full resolution flow:
+The resolution flow, in order:
 
 ```
-toolkit_dispatch(context, intent, args)
+resolve(intent)
   │
-  ├─ 1. Canonicalize intent string
-  ├─ 2. Check ResolutionCache → cache hit? return IMP directly
-  ├─ 3. Embed intent via context.embedder
-  ├─ 4. SelectorTable.resolve() → cosine nearest-neighbor search
-  ├─ 5. Walk ToolClass hierarchy (dispatch table + superclass chain)
-  ├─ 6. OverloadTable.resolve(args) → best parameter signature
-  ├─ 7. Invoke IMP(args)
-  └─ 8. Store result in ResolutionCache
+  ├─ 1. Pinned phrase?        the intent is, verbatim, an exact pin's phrase → that tool
+  ├─ 2. Learned exact intent? the user chose a tool for this intent text before → that tool
+  ├─ 3. Cache                 an earlier HIGH/EXACT resolution of this intent text (no-arg calls)
+  ├─ 4. Rate limit (opt-in)   per principal, before a novel intent is embedded
+  ├─ 5. Embed the intent      its own vector; intents are never interned
+  ├─ 6. Vector search         tool selectors ≥ LOW (MEDIUM in strict mode), quantized,
+  │                           ties broken by tool id; overloads chosen by argument types
+  ├─ 7. Learned similar       a bounded boost toward a tool chosen for a similar intent
+  ├─ 8. Protocols             only when nothing matched by vector
+  ├─ 9. Pin gate              a pinned tool is excluded for intents its pin refuses
+  ├─ 10. Nothing left?        unresolved (refinement options; decomposition when dispatching)
+  ├─ 11. Verification         below HIGH (below EXACT in strict mode), every candidate gets
+  │                           the same checks; an LLM verifier's approval is required by default
+  └─ 12. Dispatch policy      the same rules on every path (see below)
 ```
 
-If step 4 finds no match above `minConfidence`, the fallback chain runs (see below). If the chain exhausts, `UnrecognizedIntent` is thrown.
+Every step is recorded in `r.proof` (candidates with scores and tiers,
+exclusions, guards, thresholds, the embedder fingerprint, the artifact hash)
+with a stable `proofDigest`. `runtime.explain(intent)` and
+`smallchat explain` print it.
 
-## `smallchat_dispatchStream` — streaming
+## The dispatch policy
 
-<Tabs groupId="language">
-<TabItem value="typescript" label="TypeScript">
+One rule set (`evaluateDispatchPolicy`) decides whether a chosen tool may run
+without the caller naming it:
+
+1. Dispatch by exact tool id is always allowed.
+2. Intent pins: an `exact` pin admits only its phrases; an `elevated` pin
+   admits only a similarity, measured from the intent's own embedding, at or
+   above its threshold. A pin covers every tool its selector reaches
+   (overload variants and every class declaring it).
+3. Destructive tools (MCP `destructiveHint: true`, or `readOnlyHint: false`
+   without a `destructiveHint`) run only by exact id, a pinned phrase or
+   EXACT similarity — never from the cache or a learned preference.
+4. Below HIGH, a tool runs only with an LLM verifier's approval
+   (`requireLLMForSubHighDispatch`, on by default).
+5. Below LOW, nothing runs.
+
+A path the policy refuses does not fall back to another way of running the
+tool: the outcome is `needs-disambiguation`, and the caller chooses a tool by
+id. There is no fallback chain and no "broadened" search that executes a
+weaker match.
+
+## Execution
+
+`dispatchById(toolId, args)` looks the tool up by its canonical id (O(1), no
+embedding), validates the arguments against its `inputSchema` (JSON Schema
+2020-12 by default), computes the canonical call digest, appends to the
+decision log if one is configured, and only then runs it.
 
 ```typescript
-import { smallchat_dispatchStream } from '@smallchat/core';
+const result = await runtime.dispatchById('github/search_code', { query: 'generics' });
+// result.metadata.proof.ran === 'github/search_code'; result.metadata.proof.callDigest
+```
 
-for await (const event of smallchat_dispatchStream(context, 'summarize this file', { path: './README.md' })) {
+## Results that ran nothing
+
+`dispatch()` and `dispatchById()` never throw for a call that did not run.
+They return `isError: true` with `metadata.outcome`:
+
+| `metadata.outcome` | ran a tool? |
+|---|---|
+| `resolved` | yes (the tool's own failure is `isError: true` with this outcome) |
+| `needs-disambiguation` | no — `content.candidates` / `refinement.options` carry tool ids |
+| `unresolved` | no — nothing matched (or an unknown tool id) |
+| `throttled` | no — see `metadata.retryAfterMs` |
+| `invalid-arguments` | no — `metadata.validationErrors` |
+| `aborted` | no — the signal fired before the tool started |
+
+The fluent `execContent()` throws `DispatchError` (with `outcome`,
+`candidates` and `result`) for any of these instead of returning the error
+payload as content.
+
+## Streaming
+
+```typescript
+for await (const event of runtime.dispatchStream('summarize this file', { path: './README.md' })) {
   switch (event.type) {
-    case 'resolving':
-      console.log('Resolving:', event.intent);
-      break;
-    case 'tool-start':
-      console.log('Tool:', event.tool);
-      break;
-    case 'chunk':
-      process.stdout.write(event.content);
-      break;
-    case 'inference-delta':
-      process.stdout.write(event.token);
-      break;
-    case 'done':
-      console.log('\nDone.');
-      break;
-    case 'error':
-      console.error('Error:', event.message);
-      break;
+    case 'resolving':       console.log('Resolving:', event.intent); break;
+    case 'tool-start':      console.log('Tool:', event.toolId, event.confidence); break;
+    case 'chunk':           console.log(event.content); break;
+    case 'inference-delta': process.stdout.write(event.delta.text); break;
+    case 'done':            console.log(event.result.isError ? event.result.metadata?.outcome : 'Done.'); break;
+    case 'error':           console.error(event.error); break;
   }
 }
 ```
 
-</TabItem>
-<TabItem value="swift" label="Swift">
+Streaming uses the same resolution and policy. An intent that runs nothing
+goes from `resolving` straight to `done` with an `isError` result.
+`dispatchStreamById(toolId, args)` streams a call by exact id.
 
-```swift
-import SmallChat
+## Refinement
 
-for try await event in smallchatDispatchStream(context, "summarize this file", args: ["path": "./README.md"]) {
-  switch event {
-    case .resolving(let intent):
-      print("Resolving: \(intent)")
-    case .toolStart(let tool):
-      print("Tool: \(tool)")
-    case .chunk(let content, _):
-      print(content, terminator: "")
-    case .inferenceDelta(let token, _):
-      print(token, terminator: "")
-    case .done:
-      print("\nDone.")
-    case .error(let message, _):
-      print("Error: \(message)")
-  }
-}
-```
-
-</TabItem>
-</Tabs>
-
-`smallchat_dispatchStream` uses the same resolution path as `toolkit_dispatch`, then opens the native provider stream. Tokens arrive in real time as the provider generates them — no buffering, no waiting for the full result.
+When resolution does not choose a tool, `r.refinement.options` lists the
+candidates (each with a `toolId`). After the user picks one,
+`runtime.resolveRefinement(intent, option, args)` runs it by id and teaches
+the semantic map, so the same intent text resolves to that tool next time
+(a learned preference never authorizes a pinned or destructive tool).
 
 ## `DispatchContext`
 
-Both dispatch functions take a `DispatchContext` as their first argument. The context holds all runtime state for a dispatch:
-
-<Tabs groupId="language">
-<TabItem value="typescript" label="TypeScript">
-
-```typescript
-interface DispatchContext {
-  selectorTable: SelectorTable;
-  resolutionCache: ResolutionCache;
-  overloadTables: Map<string, OverloadTable>;
-  forwardingChain: ForwardingHandler[];
-  embedder: Embedder;
-  selectorThreshold: number;
-  minConfidence: number;
-  modelVersion?: string;
-}
-```
-
-</TabItem>
-<TabItem value="swift" label="Swift">
-
-```swift
-struct DispatchContext {
-  var selectorTable: SelectorTable
-  var resolutionCache: ResolutionCache
-  var overloadTables: [String: OverloadTable]
-  var forwardingChain: [ForwardingHandler]
-  var embedder: Embedder
-  var selectorThreshold: Double
-  var minConfidence: Double
-  var modelVersion: String?
-}
-```
-
-</TabItem>
-</Tabs>
-
-You rarely construct `DispatchContext` directly — `ToolRuntime` creates one per call and passes it through. The context is exposed for advanced use cases: testing, custom forwarding handlers, or embedding dispatch into a larger orchestration system.
-
-## Resolution flow diagram
-
-```
-intent: "search for code"
-          │
-          ▼
-   canonicalize → "search for code"
-          │
-          ▼
-   ResolutionCache.get("search for code")
-          │
-     hit ─┴─ miss
-      │         │
-      ▼         ▼
-  return     embed intent
-  cached     │
-  IMP        ▼
-          SelectorTable.resolve()
-          cosine similarity search
-          │
-     found ─┴─ not found
-      │               │
-      ▼               ▼
-  walk ToolClass   fallback chain
-  hierarchy        │
-      │            ├─ superclass traversal
-      ▼            ├─ broadened threshold (0.75→0.5)
-  OverloadTable    └─ UnrecognizedIntent
-  .resolve(args)
-      │
-      ▼
-  invoke IMP
-      │
-      ▼
-  cache result
-      │
-      ▼
-  return / yield
-```
-
-## Fallback chain
-
-When no selector matches above `minConfidence`, the `DispatchContext.forwardingChain` is consulted in order:
-
-1. **Superclass traversal** — if the closest ToolClass has a superclass, repeat dispatch on it
-2. **Broadened search** — lower the cosine threshold progressively (0.75 → 0.5) and retry
-3. **LLM disambiguation** — (planned) send the intent + candidates to the LLM for disambiguation
-
-If the chain exhausts without a match:
-
-<Tabs groupId="language">
-<TabItem value="typescript" label="TypeScript">
-
-```typescript
-import { UnrecognizedIntent } from '@smallchat/core';
-
-try {
-  await runtime.dispatch('do something completely unrelated');
-} catch (e) {
-  if (e instanceof UnrecognizedIntent) {
-    // e.intent — the original intent string
-    // e.candidates — closest matches (below threshold)
-    console.error(`No tool matched "${e.intent}"`);
-  }
-}
-```
-
-</TabItem>
-<TabItem value="swift" label="Swift">
-
-```swift
-import SmallChat
-
-do {
-  try await runtime.dispatch("do something completely unrelated")
-} catch let error as UnrecognizedIntent {
-  // error.intent — the original intent string
-  // error.candidates — closest matches (below threshold)
-  print("No tool matched \"\(error.intent)\"")
-}
-```
-
-</TabItem>
-</Tabs>
-
-## `FallbackStep` and `FallbackChainResult`
-
-You can inspect the fallback chain result for diagnostics:
-
-<Tabs groupId="language">
-<TabItem value="typescript" label="TypeScript">
-
-```typescript
-import type { FallbackChainResult, FallbackStep } from '@smallchat/core';
-
-// Each step records what was tried and why it failed
-interface FallbackStep {
-  strategy: 'superclass' | 'broadened' | 'llm';
-  threshold?: number;
-  candidates: SelectorMatch[];
-  succeeded: boolean;
-}
-
-interface FallbackChainResult {
-  steps: FallbackStep[];
-  resolved: ResolvedTool | null;
-}
-```
-
-</TabItem>
-<TabItem value="swift" label="Swift">
-
-```swift
-import SmallChat
-
-// Each step records what was tried and why it failed
-struct FallbackStep {
-  var strategy: FallbackStrategy // .superclass, .broadened, .llm
-  var threshold: Double?
-  var candidates: [SelectorMatch]
-  var succeeded: Bool
-}
-
-struct FallbackChainResult {
-  var steps: [FallbackStep]
-  var resolved: ResolvedTool?
-}
-```
-
-</TabItem>
-</Tabs>
+`ToolRuntime` owns one `DispatchContext` (`runtime.context`): the selector
+table, resolution cache, registered tool classes and their index by tool id,
+intent pins, the observer and semantic map, the LLM client and the policy
+options. The lower-level functions `resolveIntent(context, intent)`,
+`dispatchById(context, toolId, args)`, `toolkit_dispatch(context, intent,
+args)` and `smallchat_dispatchStream(context, intent, args)` take it as their
+first argument; the `ToolRuntime` methods are thin wrappers over them.

@@ -1,0 +1,30 @@
+[
+  {
+    "line": 1,
+    "outcome": "proposal",
+    "reason": "unsigned",
+    "note": "a backfilled TB: author 'migration', no signer"
+  },
+  {
+    "line": 2,
+    "outcome": "proposal",
+    "reason": "unverifiable",
+    "note": "a signer signers.json does not list"
+  },
+  {
+    "line": 3,
+    "outcome": "held",
+    "note": "an override by someone signers.json does not list"
+  },
+  {
+    "line": 4,
+    "outcome": "inserted",
+    "status": "refuted",
+    "note": "a terminal status on the entry line is kept"
+  },
+  {
+    "line": 5,
+    "outcome": "held",
+    "note": "a refutation of a UV this ledger does not hold"
+  }
+]

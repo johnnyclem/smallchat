@@ -1,4 +1,4 @@
-import type { Embedder } from '../core/types.js';
+import type { Embedder, EmbedderFingerprint } from '../core/types.js';
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,11 +13,13 @@ type OrtTensor = import('onnxruntime-node').Tensor;
  * ONNXEmbedder — generates 384-dimensional semantic embeddings
  * using the all-MiniLM-L6-v2 model via ONNX Runtime.
  *
- * Replaces the hash-based LocalEmbedder with real semantic vectors.
- * Includes a built-in WordPiece tokenizer (parsed from tokenizer.json).
+ * The compile default. Includes a built-in WordPiece tokenizer (parsed
+ * from tokenizer.json). The model file is verified against a pinned
+ * SHA-256 before the first embedding is produced.
  */
 export class ONNXEmbedder implements Embedder {
   readonly dimensions: number = 384;
+  readonly fingerprint: EmbedderFingerprint;
 
   private session: InferenceSession | null = null;
   private ort: OrtModule | null = null;
@@ -37,9 +39,22 @@ export class ONNXEmbedder implements Embedder {
     this.tokenizerPath = options?.tokenizerPath ?? resolve(modelsDir, 'tokenizer.json');
     this.maxLength = options?.maxLength ?? 128;
     this.cacheMaxSize = options?.cacheSize ?? 2048;
+    this.fingerprint = onnxFingerprint(this.maxLength);
 
-    // Eagerly start loading (but don't block constructor)
+    // Eagerly start loading (but don't block constructor). The no-op catch
+    // keeps a load failure from surfacing as an unhandled rejection; it is
+    // still reported by whenReady() and by every embed call.
     this.ready = this.initialize();
+    this.ready.catch(() => {});
+  }
+
+  /**
+   * Resolves once the model and tokenizer are loaded and verified; rejects
+   * with the load error (missing model, integrity mismatch, runtime error).
+   * Await it to fail fast instead of on the first embed.
+   */
+  whenReady(): Promise<void> {
+    return this.ready;
   }
 
   private async initialize(): Promise<void> {
@@ -140,14 +155,34 @@ export class ONNXEmbedder implements Embedder {
     return results[0];
   }
 
+  /**
+   * Embed each text on its own, as a [1, tokenCount] tensor with no
+   * padding. The quantized model quantizes activations dynamically over the
+   * whole input tensor, so padding, or sharing a batch with other texts,
+   * shifts a text's vector (cosine ≈ 0.99 to its unpadded vector). Running
+   * every text alone at its own length makes its vector a function of the
+   * text only — embed() and embedBatch() agree exactly — and keeps short
+   * intents cheap (a 4-token intent no longer pays for 128 positions).
+   */
   private async embedBatchInternal(texts: string[]): Promise<Float32Array[]> {
+    const results: Float32Array[] = [];
+    for (const text of texts) results.push(await this.embedOne(text));
+    return results;
+  }
+
+  private async embedOne(text: string): Promise<Float32Array> {
+    const [embedding] = await this.runBatch([text]);
+    return embedding;
+  }
+
+  private async runBatch(texts: string[]): Promise<Float32Array[]> {
     const session = this.session!;
     const ort = this.ort!;
     const tokenizer = this.tokenizer!;
 
     const batchSize = texts.length;
     const encoded = texts.map(t => tokenizer.encode(t));
-    const seqLen = this.maxLength;
+    const seqLen = Math.max(1, ...encoded.map(e => e.inputIds.length));
 
     // Create padded tensors
     const inputIds = new BigInt64Array(batchSize * seqLen);
@@ -423,7 +458,27 @@ class WordPieceTokenizer {
 }
 
 // Known SHA256 hash of the official quantized all-MiniLM-L6-v2 model
-const EXPECTED_MODEL_SHA256 = 'afdb6f1a0e45b715d0bb9b11772f032c399babd23bfc31fed1c170afc848bdb1';
+export const EXPECTED_MODEL_SHA256 = 'afdb6f1a0e45b715d0bb9b11772f032c399babd23bfc31fed1c170afc848bdb1';
+
+/** Model id recorded in artifact fingerprints for ONNXEmbedder vectors. */
+export const ONNX_EMBEDDER_MODEL = 'all-MiniLM-L6-v2';
+
+/**
+ * The fingerprint of an ONNXEmbedder with the given max sequence length.
+ * modelSha256 is the hash the model file is verified against before the
+ * first embedding — an embedder whose file differs never produces vectors.
+ */
+export function onnxFingerprint(maxLength = 128): EmbedderFingerprint {
+  return {
+    kind: 'onnx',
+    model: ONNX_EMBEDDER_MODEL,
+    modelSha256: EXPECTED_MODEL_SHA256,
+    dims: 384,
+    maxLength,
+    pooling: 'mean',
+    normalize: true,
+  };
+}
 
 /** Validate model file integrity via SHA256 */
 function validateModelIntegrity(modelPath: string): void {

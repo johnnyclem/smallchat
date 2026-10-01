@@ -17,7 +17,7 @@
  *   },
  *   "compiler": {
  *     "embedder": "onnx",
- *     "deduplicationThreshold": 0.95,
+ *     "duplicateThreshold": 0.95,
  *     "collisionThreshold": 0.89,
  *     "generateSemanticOverloads": true
  *   },
@@ -126,7 +126,7 @@ export interface SmallChatManifest {
    * Keyed by fully-qualified tool name: "providerId.toolName"
    * These merge with (and override) any hints declared on the tool itself.
    *
-   * e.g. { "github.search_code": { "priority": 1.5, "aliases": ["find code"] } }
+   * e.g. { "github.search_code": { "aliases": ["find code"] } }
    */
   toolHints?: Record<string, CompilerHint>;
 
@@ -140,13 +140,55 @@ export interface SmallChatManifest {
    * Requires the rtk binary to be installed: https://github.com/johnnyclem-rdc/rtk
    */
   rtk?: RtkProjectConfig;
+
+  /**
+   * Dispatch policy for runtimes loaded by `smallchat serve` (see
+   * runtime/policy.ts). Intent-based dispatch applies all of it; MCP
+   * tools/call names a tool exactly, so only argumentCoercion affects it.
+   */
+  policy?: ManifestPolicyConfig;
+}
+
+/**
+ * ManifestPolicyConfig — smallchat.json "policy" block.
+ *
+ * ```json
+ * {
+ *   "policy": {
+ *     "requireLLMForSubHighDispatch": true,
+ *     "treatUnannotatedAsDestructive": true,
+ *     "pins": [{ "canonical": "bank.transfer_funds", "policy": "exact", "aliases": ["transfer funds"] }]
+ *   }
+ * }
+ * ```
+ */
+export interface ManifestPolicyConfig {
+  /** Below HIGH, run a resolved tool only with LLM approval (default true) */
+  requireLLMForSubHighDispatch?: boolean;
+  /** Verify every dispatch below EXACT and raise the search floor to MEDIUM */
+  strict?: boolean;
+  /** Treat tools without MCP annotations as destructive (default false) */
+  treatUnannotatedAsDestructive?: boolean;
+  /** Confidence tier thresholds (each 0–1) */
+  thresholds?: { exact?: number; high?: number; medium?: number; low?: number };
+  /** Intent pins guarding sensitive selectors */
+  pins?: Array<{ canonical: string; policy: 'exact' | 'elevated'; threshold?: number; aliases?: string[] }>;
+  /** Coerce scalar argument types to the input schema before validation (default 'none') */
+  argumentCoercion?: 'none' | 'primitives';
 }
 
 export interface ManifestCompilerConfig {
-  /** Embedder type: "onnx" or "local" */
+  /** Embedder: "onnx" (default) or "hash" ("local" is the 0.x name of "hash") */
   embedder?: string;
-  /** Deduplication threshold (0–1, default 0.95) */
+  /**
+   * Cosine similarity at or above which two distinct tools are a duplicate
+   * (0–1, default 0.95) — a compile error unless allowDuplicates is set.
+   */
+  duplicateThreshold?: number;
+  /** @deprecated Renamed to duplicateThreshold (tools are no longer merged) */
   deduplicationThreshold?: number;
+  /** Keep near-duplicate tools as a warning instead of a compile error */
+  allowDuplicates?: boolean;
   /** Collision warning threshold (0–1, default 0.89) */
   collisionThreshold?: number;
   /** Enable semantic overload generation */

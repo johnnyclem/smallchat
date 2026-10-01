@@ -1,6 +1,8 @@
 import { Command } from 'commander';
+import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { packageVersion } from '../package-info.js';
 
 // ---------------------------------------------------------------------------
 // Command
@@ -10,7 +12,7 @@ export const initCommand = new Command('init')
   .description('Scaffold a new smallchat project with sample tools and configuration')
   .argument('[directory]', 'Directory to initialize (defaults to current directory)')
   .option('-t, --template <type>', 'Project template: basic, mcp-server, agent', 'basic')
-  .option('--no-git', 'Skip git initialization')
+  .option('--no-git', 'Skip git initialization (git init, unless already inside a repository)')
   .option('--no-install', 'Skip npm install')
   .action(async (directory, options) => {
     const projectDir = resolve(directory ?? '.');
@@ -22,7 +24,6 @@ export const initCommand = new Command('init')
     // Create directory structure
     const dirs = [
       '',
-      'tools',
       'manifests',
       'src',
     ];
@@ -49,8 +50,8 @@ export const initCommand = new Command('init')
     // Write smallchat.json project manifest (the package.json analog)
     writeIfNotExists(join(projectDir, 'smallchat.json'), JSON.stringify(generateSmallChatJson(projectName, template), null, 2));
 
-    // Write smallchat config (legacy — now prefer smallchat.json)
-    writeIfNotExists(join(projectDir, 'smallchat.config.json'), JSON.stringify(generateConfig(template), null, 2));
+    // The sample tools' implementations; manifests/ declares them ('local' transport)
+    writeIfNotExists(join(projectDir, 'src', 'tools.ts'), SAMPLE_TOOLS);
 
     // Generate template-specific files
     switch (template) {
@@ -73,79 +74,131 @@ export const initCommand = new Command('init')
     );
 
     console.log('\nProject scaffolded successfully!\n');
-    console.log('Next steps:');
-    console.log(`  cd ${directory ?? '.'}`);
+
+    if (options.git !== false) {
+      await initGitRepository(projectDir);
+    }
+    let installed = false;
     if (options.install !== false) {
+      installed = await installDependencies(projectDir);
+    }
+
+    console.log('\nNext steps:');
+    console.log(`  cd ${directory ?? '.'}`);
+    if (!installed) {
       console.log('  npm install');
     }
-    console.log('  npx smallchat compile');
-    console.log('  npx smallchat resolve tools.toolkit.json "hello world"');
+    // `npm run` uses the locally installed smallchat bin; never the unscoped
+    // `smallchat` name through npx, which would fetch an unrelated
+    // (unregistered) package.
+    console.log('  npm run compile        # smallchat compile --source ./manifests');
+    if (template === 'mcp-server') {
+      console.log('  npm run build          # then point your MCP host at: node dist/server.js');
+    } else {
+      console.log('  npm run build && npm start');
+    }
     console.log('');
     console.log(`Template: ${template}`);
-    console.log('Run "smallchat doctor" to verify your setup.\n');
+    console.log('Run "npm run doctor" to verify your setup.\n');
   });
+
+// ---------------------------------------------------------------------------
+// git / npm
+// ---------------------------------------------------------------------------
+
+/** Run a command; resolves with its exit code (or null if it could not start). */
+function run(command: string, args: string[], cwd: string, quiet = false): Promise<number | null> {
+  return new Promise((resolvePromise) => {
+    const child = spawn(command, args, {
+      cwd,
+      stdio: quiet ? 'ignore' : 'inherit',
+      // npm is a .cmd shim on Windows; the arguments here are fixed literals.
+      shell: process.platform === 'win32',
+    });
+    child.on('error', () => resolvePromise(null));
+    child.on('close', (code) => resolvePromise(code));
+  });
+}
+
+/** `git init`, unless the directory is already inside a git work tree. */
+async function initGitRepository(projectDir: string): Promise<void> {
+  const inside = await run('git', ['rev-parse', '--is-inside-work-tree'], projectDir, true);
+  if (inside === null) {
+    console.log('  git not found; skipped git init');
+    return;
+  }
+  if (inside === 0) {
+    console.log('  Already inside a git repository; skipped git init');
+    return;
+  }
+  const code = await run('git', ['init', '--quiet'], projectDir, true);
+  console.log(code === 0 ? '  Initialized a git repository' : '  ⚠ git init failed; run it yourself');
+}
+
+/** `npm install` in the project; false (with a warning) if it failed. */
+async function installDependencies(projectDir: string): Promise<boolean> {
+  console.log('  Installing dependencies (npm install)...');
+  const code = await run('npm', ['install'], projectDir);
+  if (code === 0) return true;
+  console.log('  ⚠ npm install failed; run it yourself once the problem above is fixed');
+  return false;
+}
 
 // ---------------------------------------------------------------------------
 // Template generators
 // ---------------------------------------------------------------------------
 
 function generateBasicTemplate(projectDir: string): void {
-  // Sample tool definition
-  const toolFile = `import type { ToolResult } from '@smallchat/core';
+  // Entry point: compile ./manifests, resolve an intent, run the chosen tool
+  const entryPoint = `import { loadRuntime, registerLocalHandler } from '@smallchat/core';
+import { echo, greet } from './tools.js';
 
-/**
- * A sample greeting tool that demonstrates the basic tool structure.
- */
-export async function greet(args: { name: string; greeting?: string }): Promise<ToolResult> {
-  const greeting = args.greeting ?? 'Hello';
-  return {
-    content: \`\${greeting}, \${args.name}! Welcome to smallchat.\`,
-  };
-}
-
-/**
- * A sample echo tool that returns whatever you send it.
- */
-export async function echo(args: { message: string }): Promise<ToolResult> {
-  return {
-    content: args.message,
-  };
-}
-`;
-  writeIfNotExists(join(projectDir, 'tools', 'sample-tools.ts'), toolFile);
-
-  // Entry point
-  const entryPoint = `import { ToolRuntime, MemoryVectorIndex, LocalEmbedder } from '@smallchat/core';
+// Implementations for the tools declared in manifests/ (transportType 'local').
+registerLocalHandler('greet', greet);
+registerLocalHandler('echo', echo);
 
 async function main() {
-  // Create the runtime with in-memory vector index
-  const vectorIndex = new MemoryVectorIndex();
-  const embedder = new LocalEmbedder();
-  const runtime = new ToolRuntime(vectorIndex, embedder);
+  // Compiles ./manifests in-process; point it at tools.toolkit.json
+  // (npm run compile) to load a compiled artifact instead.
+  const { runtime, upstreams } = await loadRuntime('./manifests');
+  try {
+    // Resolution proposes one tool and runs nothing...
+    const resolution = await runtime.resolve('greet a user by name with a custom greeting');
+    console.log(\`Resolved: \${resolution.outcome} -> \${resolution.chosen ?? '(none)'} (\${resolution.tier})\`);
 
-  // Compile your tools
-  console.log('Compiling tools...');
-  // Use: npx smallchat compile --source ./manifests
-
-  // Dispatch an intent
-  const result = await runtime.dispatch('greet someone', { name: 'World' });
-  console.log('Result:', result.content);
+    // ...then exactly that tool runs, with arguments checked against its schema.
+    if (resolution.chosen) {
+      const result = await runtime.dispatchById(resolution.chosen, { name: 'World' });
+      console.log('Result:', result.content);
+    } else {
+      console.log('Candidates:', resolution.candidates.map((c) => c.toolId).join(', '));
+    }
+  } finally {
+    await upstreams.close();
+  }
 }
 
-main().catch(console.error);
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
 `;
   writeIfNotExists(join(projectDir, 'src', 'index.ts'), entryPoint);
 }
 
 function generateMcpServerTemplate(projectDir: string): void {
-  const serverFile = `import { MCPServer } from '@smallchat/core';
+  const serverFile = `import { MCPServer, registerLocalHandler } from '@smallchat/core';
+import { echo, greet } from './tools.js';
 
-const server = new MCPServer({
-  port: 3001,
-  host: '127.0.0.1',
-  sourcePath: './manifests',
-  dbPath: 'smallchat.db',
-});
+// The tools in manifests/ use the 'local' transport: they run in this
+// process, so their implementations are registered before serving them.
+registerLocalHandler('greet', greet);
+registerLocalHandler('echo', echo);
+
+// Serves ./manifests over stdio — point your MCP host at \`node dist/server.js\`.
+// Logs go to stderr: stdout is the protocol channel. (\`smallchat serve\`
+// forwards calls to upstream MCP servers; it cannot run these local tools.)
+const server = new MCPServer({ sourcePath: './manifests' });
 
 // Graceful shutdown
 process.on('SIGINT', async () => {
@@ -153,109 +206,97 @@ process.on('SIGINT', async () => {
   process.exit(0);
 });
 
-server.start().then(() => {
-  console.log('MCP server running on http://127.0.0.1:3001');
-  console.log('Discovery: http://127.0.0.1:3001/.well-known/mcp.json');
-});
+server.startStdio()
+  .then(() => server.closed())
+  .then(() => server.stop());
 `;
   writeIfNotExists(join(projectDir, 'src', 'server.ts'), serverFile);
-
-  // Sample tool
-  const toolFile = `import type { ToolResult } from '@smallchat/core';
-
-export async function fetchUrl(args: { url: string }): Promise<ToolResult> {
-  const response = await fetch(args.url);
-  const text = await response.text();
-  return {
-    content: text.slice(0, 5000),
-    metadata: {
-      status: response.status,
-      contentType: response.headers.get('content-type'),
-    },
-  };
-}
-
-export async function currentTime(_args: Record<string, unknown>): Promise<ToolResult> {
-  return {
-    content: new Date().toISOString(),
-  };
-}
-`;
-  writeIfNotExists(join(projectDir, 'tools', 'mcp-tools.ts'), toolFile);
 }
 
 function generateAgentTemplate(projectDir: string): void {
-  const agentFile = `import { ToolRuntime, MemoryVectorIndex, LocalEmbedder } from '@smallchat/core';
+  const agentFile = `import { existsSync } from 'node:fs';
+import { loadRuntime, registerLocalHandler } from '@smallchat/core';
+import { echo, greet } from './tools.js';
+
+// Implementations for the tools declared in manifests/ (transportType 'local').
+registerLocalHandler('greet', greet);
+registerLocalHandler('echo', echo);
 
 /**
- * A simple agent loop that takes user input, dispatches to tools,
- * and streams the results.
+ * A simple agent loop: each request is resolved to one tool, which runs and
+ * streams its result. Only a HIGH-confidence match runs; anything less comes
+ * back as needs-disambiguation (or unresolved) for the agent to refine.
  */
 async function agent() {
-  const vectorIndex = new MemoryVectorIndex();
-  const embedder = new LocalEmbedder();
-  const runtime = new ToolRuntime(vectorIndex, embedder);
+  // tools.toolkit.json (npm run compile) carries smallchat.json's hints;
+  // without it, ./manifests is compiled in-process.
+  const source = existsSync('tools.toolkit.json') ? 'tools.toolkit.json' : './manifests';
+  const { runtime, upstreams } = await loadRuntime(source);
 
-  console.log('Agent ready. Processing intents...\\n');
-
-  // Example: process a list of intents
-  const intents = [
-    'look up the weather',
-    'search for documents',
-    'send a notification',
+  const requests: { intent: string; args: Record<string, unknown> }[] = [
+    { intent: 'greet a user by name with a custom greeting', args: { name: 'Ada', greeting: 'Hi' } },
+    { intent: 'echo back the provided message', args: { message: 'ping' } },
+    { intent: 'book a flight to Lisbon', args: {} },
   ];
 
-  for (const intent of intents) {
-    console.log(\`Intent: "\${intent}"\`);
-
-    for await (const event of runtime.dispatchStream(intent)) {
-      switch (event.type) {
-        case 'resolving':
-          console.log('  Resolving...');
-          break;
-        case 'tool-start':
-          console.log(\`  Tool: \${event.toolName} (confidence: \${(event.confidence * 100).toFixed(1)}%)\`);
-          break;
-        case 'chunk':
-          console.log(\`  Result: \${JSON.stringify(event.content)}\`);
-          break;
-        case 'error':
-          console.log(\`  Error: \${event.error}\`);
-          break;
-        case 'done':
-          console.log('  Done.\\n');
-          break;
+  try {
+    for (const { intent, args } of requests) {
+      console.log(\`Intent: "\${intent}"\`);
+      for await (const event of runtime.dispatchStream(intent, args)) {
+        switch (event.type) {
+          case 'tool-start':
+            console.log(\`  Tool: \${event.toolId} (confidence: \${(event.confidence * 100).toFixed(1)}%)\`);
+            break;
+          case 'chunk':
+            console.log(\`  Result: \${JSON.stringify(event.content)}\`);
+            break;
+          case 'done':
+            // Nothing ran: the outcome says why (unresolved, needs-disambiguation, ...).
+            if (event.result.isError) {
+              console.log(\`  Not run (\${String(event.result.metadata?.outcome ?? 'error')})\`);
+            }
+            break;
+          case 'error':
+            console.log(\`  Error: \${event.error}\`);
+            break;
+        }
       }
+      console.log('');
     }
+  } finally {
+    await upstreams.close();
   }
 }
 
-agent().catch(console.error);
+agent().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
 `;
   writeIfNotExists(join(projectDir, 'src', 'agent.ts'), agentFile);
+}
 
-  // Tools for the agent
-  const toolFile = `import type { ToolResult } from '@smallchat/core';
+const SAMPLE_TOOLS = `import type { ToolResult } from '@smallchat/core';
 
-export async function searchDocuments(args: { query: string; limit?: number }): Promise<ToolResult> {
-  const limit = args.limit ?? 10;
+/**
+ * A sample greeting tool that demonstrates the basic tool structure.
+ */
+export async function greet(args: Record<string, unknown>): Promise<ToolResult> {
+  const greeting = typeof args.greeting === 'string' ? args.greeting : 'Hello';
   return {
-    content: {
-      query: args.query,
-      results: [],
-      message: \`Searched for "\${args.query}" (limit: \${limit}). No documents indexed yet.\`,
-    },
+    content: \`\${greeting}, \${String(args.name)}! Welcome to smallchat.\`,
   };
 }
 
-export async function sendNotification(args: { channel: string; message: string }): Promise<ToolResult> {
+/**
+ * A sample echo tool that returns whatever you send it.
+ */
+export async function echo(args: Record<string, unknown>): Promise<ToolResult> {
   return {
-    content: \`Notification sent to \${args.channel}: \${args.message}\`,
+    content: String(args.message),
   };
 }
 `;
-  writeIfNotExists(join(projectDir, 'tools', 'agent-tools.ts'), toolFile);
-}
 
 // ---------------------------------------------------------------------------
 // Config generators
@@ -269,10 +310,11 @@ function generatePackageJson(name: string, template: string): object {
     scripts: {
       build: 'tsc',
       compile: 'smallchat compile --source ./manifests',
+      doctor: 'smallchat doctor',
       dev: 'tsc --watch',
     },
     dependencies: {
-      '@smallchat/core': '^0.5.0',
+      '@smallchat/core': `^${packageVersion()}`,
     },
     devDependencies: {
       typescript: '^5.7.0',
@@ -285,11 +327,14 @@ function generatePackageJson(name: string, template: string): object {
 
   if (template === 'mcp-server') {
     (base.scripts as Record<string, string>).start = 'node dist/server.js';
-    (base.scripts as Record<string, string>).serve = 'smallchat serve --source ./manifests';
   }
 
   if (template === 'agent') {
     (base.scripts as Record<string, string>).start = 'node dist/agent.js';
+  }
+
+  if (template === 'basic') {
+    (base.scripts as Record<string, string>).start = 'node dist/index.js';
   }
 
   return base;
@@ -309,17 +354,6 @@ function generateTsconfig(): object {
       skipLibCheck: true,
     },
     include: ['src'],
-  };
-}
-
-function generateConfig(template: string): object {
-  return {
-    $schema: 'https://smallchat.dev/schema/config.json',
-    version: '0.1.0',
-    embedder: 'local',
-    manifests: ['./manifests'],
-    output: 'tools.toolkit.json',
-    template,
   };
 }
 
@@ -378,7 +412,7 @@ function generateSmallChatJson(name: string, template: string): object {
     manifests: ['./manifests'],
     compiler: {
       embedder: 'onnx',
-      deduplicationThreshold: 0.95,
+      duplicateThreshold: 0.95,
       collisionThreshold: 0.89,
     },
     output: {
@@ -397,7 +431,6 @@ function generateSmallChatJson(name: string, template: string): object {
     base.toolHints = {
       [`${name}.greet`]: {
         aliases: ['say hello', 'welcome user'],
-        priority: 1.2,
       },
     };
   }

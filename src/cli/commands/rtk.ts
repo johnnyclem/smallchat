@@ -9,9 +9,12 @@
 
 import { Command } from 'commander';
 import { spawn, execFile } from 'node:child_process';
-import { writeFile, readFile } from 'node:fs/promises';
+import { writeFile, readFile, mkdir, rename, chmod } from 'node:fs/promises';
 import { join } from 'node:path';
 import { which } from '../../transport/rtk-which.js';
+
+/** File name of the PreToolUse hook script `rtk setup` installs under .claude/hooks/. */
+export const RTK_HOOK_SCRIPT = 'smallchat-rtk-rewrite.mjs';
 
 // ---------------------------------------------------------------------------
 // Root command
@@ -74,8 +77,17 @@ rtkCommand
 
     if (options.hook !== false) {
       console.log('\nConfiguring Claude Code project hook...');
-      await writeClaudeHook();
-      console.log('  ✓ Wrote .claude/settings.json with RTK PreToolUse hook');
+      try {
+        const { installed } = await writeClaudeHook(process.cwd());
+        console.log(`  ✓ Wrote .claude/hooks/${RTK_HOOK_SCRIPT}`);
+        console.log(installed
+          ? '  ✓ Registered it as a PreToolUse hook in .claude/settings.json'
+          : '  ✓ Already registered in .claude/settings.json');
+      } catch (err) {
+        console.error(`  ✗ ${(err as Error).message}`);
+        process.exitCode = 1;
+        return;
+      }
     }
 
     console.log('\nsmallchat × RTK integration ready!');
@@ -199,58 +211,133 @@ function captureCommand(command: string, cwd: string): Promise<string> {
   });
 }
 
-async function writeClaudeHook(): Promise<void> {
-  const settingsPath = join(process.cwd(), '.claude', 'settings.json');
+/**
+ * Install the RTK PreToolUse hook into `<projectDir>/.claude/`: the hook
+ * script under .claude/hooks/ and its registration in settings.json.
+ *
+ * settings.json is edited, never replaced: every existing key (permissions,
+ * env, other hooks) is kept, and a file that is not valid JSON is left
+ * untouched — the call throws instead. The write is atomic (temp file +
+ * rename). The hook is registered once; hooks earlier smallchat versions
+ * installed inline (which never ran) are replaced.
+ */
+export async function writeClaudeHook(projectDir: string): Promise<{ installed: boolean }> {
+  const claudeDir = join(projectDir, '.claude');
+  const settingsPath = join(claudeDir, 'settings.json');
 
   let existing: Record<string, unknown> = {};
+  let raw: string | null = null;
   try {
-    existing = JSON.parse(await readFile(settingsPath, 'utf8'));
-  } catch {
-    // file doesn't exist yet
+    raw = await readFile(settingsPath, 'utf8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+  }
+  if (raw !== null && raw.trim() !== '') {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (err) {
+      throw new Error(
+        `${settingsPath} is not valid JSON (${(err as Error).message}). Fix it and re-run; nothing was changed.`,
+      );
+    }
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      throw new Error(`${settingsPath} is not a JSON object; nothing was changed.`);
+    }
+    existing = parsed as Record<string, unknown>;
   }
 
-  const rtkHook = {
-    matcher: 'Bash',
-    hooks: [
-      {
-        type: 'command',
-        command: buildRtkHookScript(),
-      },
-    ],
-  };
-
-  const hooks = (existing['hooks'] as Record<string, unknown> | undefined) ?? {};
-  const preToolUse = (hooks['PreToolUse'] as unknown[]) ?? [];
-
-  const alreadyInstalled = preToolUse.some(
-    (h) => JSON.stringify(h).includes('rtk'),
-  );
-
-  if (!alreadyInstalled) {
-    preToolUse.push(rtkHook);
+  const hooks = existing['hooks'] ?? {};
+  if (typeof hooks !== 'object' || hooks === null || Array.isArray(hooks)) {
+    throw new Error(`${settingsPath}: "hooks" is not an object; nothing was changed.`);
+  }
+  const preToolUse = (hooks as Record<string, unknown>)['PreToolUse'] ?? [];
+  if (!Array.isArray(preToolUse)) {
+    throw new Error(`${settingsPath}: "hooks.PreToolUse" is not an array; nothing was changed.`);
   }
 
-  existing['hooks'] = { ...hooks, PreToolUse: preToolUse };
+  await mkdir(join(claudeDir, 'hooks'), { recursive: true });
+  const scriptPath = join(claudeDir, 'hooks', RTK_HOOK_SCRIPT);
+  await writeFile(scriptPath, buildRtkHookScript(), 'utf8');
+  await chmod(scriptPath, 0o755);
 
-  await writeFile(settingsPath, JSON.stringify(existing, null, 2), 'utf8');
+  // Drop the inline `node -e` hook older versions wrote (a quoting bug made
+  // it a SyntaxError on every Bash call), keeping everything else.
+  const kept = preToolUse
+    .map((entry) => withoutLegacyRtkHook(entry))
+    .filter((entry) => entry !== null);
+  const installed = !kept.some((entry) => JSON.stringify(entry).includes(RTK_HOOK_SCRIPT));
+  if (installed) {
+    kept.push({
+      matcher: 'Bash',
+      hooks: [{ type: 'command', command: `node "\${CLAUDE_PROJECT_DIR}/.claude/hooks/${RTK_HOOK_SCRIPT}"` }],
+    });
+  }
+
+  existing['hooks'] = { ...(hooks as Record<string, unknown>), PreToolUse: kept };
+
+  const tmp = `${settingsPath}.${process.pid}.tmp`;
+  await writeFile(tmp, JSON.stringify(existing, null, 2) + '\n', 'utf8');
+  await rename(tmp, settingsPath);
+  return { installed };
 }
 
-function buildRtkHookScript(): string {
-  const prefixes = [
-    'git ', 'cargo ', 'npm ', 'npx ', 'pnpm ', 'yarn ',
-    'pytest', 'go test', 'go build',
-    'grep ', 'find ', 'ls ', 'eslint', 'tsc',
-    'docker ', 'kubectl ',
-  ];
-  const checkExpr = prefixes
-    .map((p) => `c.startsWith(${JSON.stringify(p)})`)
-    .join('||');
+/** The legacy inline hook's signature (smallchat <= 0.5). */
+const LEGACY_HOOK_MARKER = "readFileSync('/dev/stdin','utf8'));const c=(i.tool_input";
 
-  return (
-    `node -e "const i=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));` +
-    `const c=(i.tool_input&&i.tool_input.command)||'';` +
-    `const needs=(${checkExpr});` +
-    `if(needs&&!c.includes('rtk ')){i.tool_input.command='rtk '+c;}` +
-    `process.stdout.write(JSON.stringify(i));"`
-  );
+function withoutLegacyRtkHook(entry: unknown): unknown | null {
+  if (typeof entry !== 'object' || entry === null) return entry;
+  const list = (entry as { hooks?: unknown }).hooks;
+  if (!Array.isArray(list)) return entry;
+  const remaining = list.filter((hook) => !(typeof (hook as { command?: unknown })?.command === 'string'
+    && ((hook as { command: string }).command).includes(LEGACY_HOOK_MARKER)));
+  if (remaining.length === list.length) return entry;
+  return remaining.length === 0 ? null : { ...entry, hooks: remaining };
+}
+
+const HOOK_PREFIXES = [
+  'git ', 'cargo ', 'npm ', 'npx ', 'pnpm ', 'yarn ',
+  'pytest', 'go test', 'go build',
+  'grep ', 'find ', 'ls ', 'eslint', 'tsc',
+  'docker ', 'kubectl ',
+];
+
+/**
+ * The hook script: reads Claude Code's PreToolUse input from stdin and, for
+ * an eligible Bash command, prints `hookSpecificOutput.updatedInput` with
+ * the command prefixed by `rtk `. It sets no permissionDecision, so Claude
+ * Code's permission rules still apply (to the rewritten command). Anything
+ * unexpected prints nothing and exits 0: the command runs unchanged.
+ */
+export function buildRtkHookScript(): string {
+  return `#!/usr/bin/env node
+// Installed by \`smallchat rtk setup\`: a Claude Code PreToolUse hook for Bash
+// that runs eligible commands through RTK ("git status" -> "rtk git status")
+// by returning hookSpecificOutput.updatedInput. It makes no permission
+// decision: Claude Code's permission rules apply to the rewritten command.
+// On any unexpected input it prints nothing, and the command runs unchanged.
+const PREFIXES = ${JSON.stringify(HOOK_PREFIXES)};
+
+let raw = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (chunk) => { raw += chunk; });
+process.stdin.on('end', () => {
+  try {
+    const input = JSON.parse(raw);
+    if (!input || input.tool_name !== 'Bash') return;
+    const toolInput = input.tool_input && typeof input.tool_input === 'object' ? input.tool_input : {};
+    const command = typeof toolInput.command === 'string' ? toolInput.command.trimStart() : '';
+    if (!command || command.startsWith('rtk ')) return;
+    if (!PREFIXES.some((p) => command.startsWith(p) || command === p.trim())) return;
+    process.stdout.write(JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        updatedInput: { ...toolInput, command: 'rtk ' + command },
+      },
+    }));
+  } catch {
+    // Not a hook payload we understand: leave the tool call alone.
+  }
+});
+`;
 }

@@ -1,0 +1,154 @@
+{
+  "about": "Artifacts every loader must refuse (spec/artifact/README.md rules 1-4), and embedder fingerprints that must not be accepted for fixtures/minimal.v1.json (rule 5). \"error\" is the substring smallchat (TS) reports; other implementations need only refuse.",
+  "artifacts": [
+    {
+      "file": "pre-1.0.json",
+      "rule": 1,
+      "error": "pre-1.0 smallchat artifact",
+      "description": "a 0.x artifact (version, no formatVersion): refuse and ask for a recompile"
+    },
+    {
+      "file": "future-format-version.json",
+      "rule": 1,
+      "error": "formatVersion \"2.0\"",
+      "description": "an unknown formatVersion"
+    },
+    {
+      "file": "no-embedder.json",
+      "rule": 2,
+      "error": "must have required property 'embedder'",
+      "description": "no embedder fingerprint (schema)"
+    },
+    {
+      "file": "tool-id-not-provider-slash-name.json",
+      "rule": 3,
+      "error": "is not \"<providerId>/<name>\"",
+      "description": "a tool id that is not <providerId>/<name>"
+    },
+    {
+      "file": "alias-claims-tool.json",
+      "rule": 3,
+      "error": "claims to be the primary selector of notes/create_note",
+      "description": "an alias selector that claims kind \"tool\""
+    },
+    {
+      "file": "tool-selector-is-alias.json",
+      "rule": 3,
+      "error": "which is not its primary selector",
+      "description": "a tool whose selector is one of its aliases, not a kind \"tool\" selector"
+    },
+    {
+      "file": "selector-points-at-other-tool.json",
+      "rule": 3,
+      "error": "which is not its primary selector",
+      "description": "a primary selector that points at another tool"
+    },
+    {
+      "file": "wrong-vector-dims.json",
+      "rule": 3,
+      "error": "15 dimensions; the embedder has 16",
+      "description": "a selector vector with fewer entries than embedder.dims"
+    },
+    {
+      "file": "wrong-stats.json",
+      "rule": 3,
+      "error": "stats.toolCount is 3 but the artifact holds 2",
+      "description": "stats that do not match the contents"
+    },
+    {
+      "file": "tampered.json",
+      "rule": 4,
+      "error": "content-hash check",
+      "description": "a description edited after compilation (contentHash not recomputed)"
+    }
+  ],
+  "embedderMismatches": {
+    "artifact": "minimal.v1.json",
+    "cases": [
+      {
+        "field": "kind",
+        "fingerprint": {
+          "kind": "custom",
+          "model": "smallchat-hash-v1",
+          "modelSha256": null,
+          "dims": 16,
+          "maxLength": null,
+          "pooling": "none",
+          "normalize": true
+        }
+      },
+      {
+        "field": "model",
+        "fingerprint": {
+          "kind": "hash",
+          "model": "smallchat-hash-v2",
+          "modelSha256": null,
+          "dims": 16,
+          "maxLength": null,
+          "pooling": "none",
+          "normalize": true
+        }
+      },
+      {
+        "field": "modelSha256",
+        "fingerprint": {
+          "kind": "hash",
+          "model": "smallchat-hash-v1",
+          "modelSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "dims": 16,
+          "maxLength": null,
+          "pooling": "none",
+          "normalize": true
+        }
+      },
+      {
+        "field": "dims",
+        "fingerprint": {
+          "kind": "hash",
+          "model": "smallchat-hash-v1",
+          "modelSha256": null,
+          "dims": 32,
+          "maxLength": null,
+          "pooling": "none",
+          "normalize": true
+        }
+      },
+      {
+        "field": "maxLength",
+        "fingerprint": {
+          "kind": "hash",
+          "model": "smallchat-hash-v1",
+          "modelSha256": null,
+          "dims": 16,
+          "maxLength": 256,
+          "pooling": "none",
+          "normalize": true
+        }
+      },
+      {
+        "field": "pooling",
+        "fingerprint": {
+          "kind": "hash",
+          "model": "smallchat-hash-v1",
+          "modelSha256": null,
+          "dims": 16,
+          "maxLength": null,
+          "pooling": "mean",
+          "normalize": true
+        }
+      },
+      {
+        "field": "normalize",
+        "fingerprint": {
+          "kind": "hash",
+          "model": "smallchat-hash-v1",
+          "modelSha256": null,
+          "dims": 16,
+          "maxLength": null,
+          "pooling": "none",
+          "normalize": false
+        }
+      }
+    ]
+  }
+}

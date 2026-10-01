@@ -3,14 +3,17 @@
 An agent that uses smallchat to dispatch weather-related intents like
 "get current weather", "forecast for this week", and "weather alerts".
 
-## Setup
+## Run
+
+From the repository root (Node 22+):
 
 ```bash
-cd examples/weather-agent
-npm install
-export WEATHER_API_KEY=your_key_here
-npm start
+npm install && npm run build
+node --experimental-strip-types examples/weather-agent/index.ts   # Node 24: plain `node`
 ```
+
+The tools are compiled from `manifest.json` in-process with the default
+(ONNX) embedder, as `smallchat serve --source examples/weather-agent` would.
 
 ## Tools
 
@@ -21,5 +24,12 @@ npm start
 
 ## How It Works
 
-This example demonstrates streaming dispatch: weather data is returned
-progressively using `dispatchStream()`, showing real-time resolution feedback.
+The tools are `local` stand-ins registered in `index.ts`; replace them with
+calls to a weather API.
+
+This example demonstrates streaming dispatch with `dispatchStream()`:
+`resolving`, then `tool-start` naming the tool id and confidence, then the
+tool's output as `chunk`s and `done`. An intent that does not resolve to one
+tool (here a MEDIUM match with no LLM verifier, and an intent nothing
+matches) goes straight to `done` with an `isError` result carrying the
+outcome; nothing runs.

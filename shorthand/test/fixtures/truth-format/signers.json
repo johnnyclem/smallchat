@@ -1,0 +1,28 @@
+{
+  "signers": [
+    {
+      "id": "johnnyclem",
+      "role": "human"
+    },
+    {
+      "id": "sam",
+      "role": "human"
+    },
+    {
+      "id": "alex",
+      "role": "human"
+    },
+    {
+      "id": "kim",
+      "role": "human"
+    },
+    {
+      "id": "lee",
+      "role": "human"
+    },
+    {
+      "id": "agent:*",
+      "role": "agent"
+    }
+  ]
+}

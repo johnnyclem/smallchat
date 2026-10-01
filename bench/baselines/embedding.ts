@@ -1,21 +1,27 @@
 /**
  * Embedding-only baseline — nearest neighbor via cosine similarity.
  *
- * Uses the same LocalEmbedder as smallchat but ONLY does vector
- * similarity search with no selector matching, overload resolution,
- * arg-shape scoring, or provider bias.
+ * Nearest tool description by cosine similarity, and nothing else: no
+ * tiers, policy, verification or refusal. Pass the embedder the smallchat
+ * runner uses (the harness passes ONNX) to compare like with like; the
+ * default is the hash placeholder embedder.
  */
 
-import { LocalEmbedder } from '../../src/embedding/local-embedder.js';
+import type { Embedder } from '../../src/core/types.js';
+import { HashEmbedder } from '../../src/embedding/hash-embedder.js';
 import { MemoryVectorIndex } from '../../src/embedding/memory-vector-index.js';
 import type { BenchTool, Runner, RunnerResult, ResolvedResult } from '../runners/types.js';
 
 export class EmbeddingBaseline implements Runner {
   name = 'embedding-only';
   private tools: BenchTool[] = [];
-  private embedder = new LocalEmbedder(384);
+  private embedder: Embedder;
   private index = new MemoryVectorIndex();
   private toolById = new Map<string, BenchTool>();
+
+  constructor(embedder: Embedder = new HashEmbedder(384)) {
+    this.embedder = embedder;
+  }
 
   async init(tools: BenchTool[]): Promise<void> {
     this.tools = tools;

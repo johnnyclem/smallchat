@@ -50,7 +50,7 @@ LoomMCP advertises its tools over the standard MCP `tools/list` endpoint, so sma
 Then compile:
 
 ```bash
-npx @smallchat/core compile --source ./loom.mcp.json --output loom.toolkit.json
+npx -y @smallchat/core compile --source ./loom.mcp.json --output loom.toolkit.json
 ```
 
 Output:
@@ -64,13 +64,13 @@ Compiling tools... ✓ 17 tools from 1 provider embedded.
 Before wiring it into an agent, sanity-check that natural-language intents land on the right LoomMCP tool:
 
 ```bash
-npx @smallchat/core resolve loom.toolkit.json "show me the file layout of src"
+npx -y @smallchat/core resolve loom.toolkit.json "show me the file layout of src"
 # Matched: loom.loom_get_topology (confidence: 0.94)
 
-npx @smallchat/core resolve loom.toolkit.json "page in the loginUser function"
+npx -y @smallchat/core resolve loom.toolkit.json "page in the loginUser function"
 # Matched: loom.loom_focus (confidence: 0.92)
 
-npx @smallchat/core resolve loom.toolkit.json "where is loginUser called from?"
+npx -y @smallchat/core resolve loom.toolkit.json "where is loginUser called from?"
 # Matched: loom.loom_search_refs (confidence: 0.96)
 ```
 
@@ -79,18 +79,10 @@ If a confidence score lands in the MEDIUM tier (smallchat 0.4.0+ confidence-tier
 ## Use it in code
 
 ```typescript
-import {
-  ToolRuntime,
-  LocalEmbedder,
-  MemoryVectorIndex,
-} from '@smallchat/core';
+import { loadRuntime } from '@smallchat/core';
 
-const runtime = new ToolRuntime({
-  embedder: new LocalEmbedder(),
-  vectorIndex: new MemoryVectorIndex(),
-});
-
-await runtime.load('./loom.toolkit.json');
+// The artifact records LoomMCP's launch spec; its tools run on that server.
+const { runtime, upstreams } = await loadRuntime('./loom.toolkit.json');
 
 // Three-step LoomMCP workflow expressed as natural-language intents
 const topology = await runtime.dispatch('scan the src directory', {
@@ -104,19 +96,27 @@ const symbol = await runtime.dispatch('focus on the loginUser function', {
 const refs = await runtime.dispatch('find every caller of loginUser', {
   symbol: 'loginUser',
 });
+
+// A result that ran nothing is isError with metadata.outcome
+// ('needs-disambiguation', 'unresolved', ...) and the candidates' tool ids.
+for (const r of [topology, symbol, refs]) {
+  if (r.isError) console.log(r.metadata?.outcome, r.content);
+}
+
+await upstreams.close();
 ```
 
-The agent never sees `loom_get_topology`, `loom_focus`, or `loom_search_refs` in its context — smallchat resolves each intent to the right LoomMCP tool and forwards the call.
+The agent never sees `loom_get_topology`, `loom_focus`, or `loom_search_refs` in its context — smallchat resolves each intent to a LoomMCP tool and forwards the call when the dispatch policy allows it; below HIGH confidence (without an LLM verifier) it returns the candidates instead, and the agent calls the one it means by id (`runtime.dispatchById('loom/loom_focus', args)`).
 
 ## Serve as a single MCP endpoint
 
-If you want a single MCP server that fronts LoomMCP through smallchat dispatch, run:
+To serve the compiled toolkit as one MCP server that forwards each call to LoomMCP, run:
 
 ```bash
-npx @smallchat/core serve --source ./loom.mcp.json --port 3001
+npx -y @smallchat/core serve --source loom.toolkit.json
 ```
 
-Point Claude Code, Cursor, or any other MCP client at `http://localhost:3001`. The client sees one tool — smallchat's dispatch tool — and gets LoomMCP's full surface area through it.
+Configure your MCP client to launch that command over stdio, or add `--http` and point it at `http://127.0.0.1:3001/mcp` with the bearer token from `~/.smallchat/serve-token`. The client sees LoomMCP's tools as `loom__loom_focus`, `loom__loom_search_refs` and so on, each with its upstream schema, plus `smallchat_resolve`, which proposes a tool for a plain-language intent without running it. To keep LoomMCP's own tool names, add `--provider loom`. The artifact records `LOOM_PROJECT_ROOT` by name only, so `serve` passes it on from its own environment: set it there.
 
 ## Further reading
 

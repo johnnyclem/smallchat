@@ -16,7 +16,7 @@ npm install @smallchat/core
 After installation, the `smallchat` binary is available via `npx`:
 
 ```bash
-npx @smallchat/core <command> [options]
+npx -y @smallchat/core <command> [options]
 ```
 
 Or install globally:
@@ -33,7 +33,9 @@ smallchat <command> [options]
 | [`compile`](./compile) | Compile tool manifests to a dispatch artifact |
 | [`inspect`](./inspect) | Inspect a compiled artifact |
 | [`resolve`](./resolve) | Test dispatch resolution against an artifact |
-| [`serve`](./serve) | Start a MCP 2025-11-25 compliant HTTP server |
+| [`explain`](./explain) | Explain a resolution: candidates, tiers, policy verdicts, proof digest |
+| [`replay`](./replay) | Check golden dispatch traces or a decision log against an artifact (exit 0/1/2) |
+| [`serve`](./serve) | Serve a toolkit as one MCP server (stdio, or Streamable HTTP with `--http`) that forwards calls to the upstream servers |
 
 ## Global options
 
@@ -46,14 +48,14 @@ smallchat <command> [options]
 
 ```bash
 # Compile all manifests in ./tools → tools.json
-npx @smallchat/core compile --source ./tools --output tools.json
+npx -y @smallchat/core compile --source ./tools --output tools.json
 
 # Inspect what's in tools.json
-npx @smallchat/core inspect tools.json --providers --selectors
+npx -y @smallchat/core inspect tools.json --providers --selectors
 
 # Test a dispatch
-npx @smallchat/core resolve tools.json "search for code"
+npx -y @smallchat/core resolve tools.json "search for code"
 
-# Start the MCP server on port 3001
-npx @smallchat/core serve --source ./tools --port 3001
+# Serve the toolkit over stdio (or --http for Streamable HTTP at :3001/mcp)
+npx -y @smallchat/core serve --source tools.json
 ```

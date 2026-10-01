@@ -1,22 +1,22 @@
 // smallchat — Semantic Tool Inference
-// v0.5.0 — message-passing dispatch from intent to tool.
+// v1.0 — message-passing dispatch from intent to tool.
 //
-// This package is organized in two tiers:
+// The root entry (`@smallchat/core`) is the tool inference core and the
+// surfaces built on it: resolving an intent to the right tool (selectors,
+// dispatch tables, confidence tiers, resolution proofs, one dispatch policy,
+// argument validation), embeddings and compiled artifacts, the compiler, the
+// MCP server and clients, transports and the channel bridge.
+// `@smallchat/core/inference` is the engine alone.
 //
-//   TIER 1 — TOOL INFERENCE CORE (the durable engine)
-//     Resolving an intent to the right tool: selectors, dispatch tables,
-//     confidence tiers, resolution proofs, the verify → decompose → refine →
-//     observe fallback chain, embeddings, and the MCP serving surface. Its
-//     value does not depend on the price of tokens. Import it alone via
-//     `@smallchat/core/inference`.
-//
-//   TIER 2 — OPTIMIZATION SATELLITES (today's token economics; optional)
-//     Compaction, knowledge pre-compilation (memex), CRDT memory, importance
-//     scoring, and dream recompilation. These reduce token spend — a real
-//     problem now, but one that fades as tokens get cheap. They orbit the
-//     core; they are not the thesis. Each Tier-2 section is tagged below.
+// The optimization satellites are not re-exported here (1.0 breaking change):
+//   - compaction, CRDT memory, importance scoring and truth-ledger interop
+//     live in `@shorthand/core` (a dependency). `@smallchat/core/compaction`,
+//     `/crdt`, `/importance` and `/truth` re-export it unchanged and are
+//     deprecated: import `@shorthand/core/<module>` directly.
+//   - knowledge pre-compilation and dream recompilation are experimental:
+//     `@smallchat/core/memex`, `@smallchat/core/dream`.
 
-// ===== TIER 1 — TOOL INFERENCE CORE (the durable engine) =====
+// ===== TOOL INFERENCE CORE =====
 
 // Core types
 export type {
@@ -31,8 +31,16 @@ export type {
   DispatchEventResolving,
   DispatchEventToolStart,
   InferenceDelta,
+  CompiledToolRef,
+  DuplicateToolPair,
   Embedder,
+  EmbedderFingerprint,
   JSONSchemaType,
+  LaunchSpec,
+  StdioLaunchSpec,
+  RemoteLaunchSpec,
+  ToolAnnotations,
+  ToolRefinementNeeded,
   OverloadEntryData,
   OverloadTableData,
   ProviderManifest,
@@ -52,6 +60,8 @@ export type {
   ToolTransport,
   ToolTransportConnectionOptions,
   ToolTransportFactory,
+  ExecuteOptions,
+  InferenceStream,
   TransportType,
   ValidationError,
   ValidationResult,
@@ -99,25 +109,117 @@ export { OverloadTable, OverloadAmbiguityError } from './core/overload-table.js'
 export type { OverloadEntry, OverloadResolutionResult } from './core/overload-table.js';
 
 // Core classes
-export { SelectorTable, canonicalize, VectorFloodError } from './core/selector-table.js';
+export { SelectorTable, canonicalize, intentKey, intentSelector, VectorFloodError } from './core/selector-table.js';
 export { SelectorNamespace, SelectorShadowingError } from './core/selector-namespace.js';
 export type { CoreSelectorEntry } from './core/selector-namespace.js';
 export { ResolutionCache, computeSchemaFingerprint } from './core/resolution-cache.js';
 export { cosineSimilarity } from './core/vector-math.js';
-export { SemanticRateLimiter } from './core/semantic-rate-limiter.js';
-export type { SemanticRateLimiterOptions, FloodingMetrics } from './core/semantic-rate-limiter.js';
+export { SemanticRateLimiter, DEFAULT_PRINCIPAL } from './core/semantic-rate-limiter.js';
+export type { SemanticRateLimiterOptions, FloodingMetrics, RateLimitVerdict } from './core/semantic-rate-limiter.js';
 export { ToolClass, ToolProxy } from './core/tool-class.js';
 
 // Runtime
-export { DispatchContext, UnrecognizedIntent, toolkit_dispatch, smallchat_dispatchStream } from './runtime/dispatch.js';
-export type { FallbackStep, FallbackChainResult, DispatchConfig } from './runtime/dispatch.js';
-export { ToolRuntime } from './runtime/runtime.js';
+export {
+  DispatchContext,
+  UnrecognizedIntent,
+  toolkit_dispatch,
+  smallchat_dispatchStream,
+  smallchat_dispatchStreamById,
+  dispatchById,
+  resolveIntent,
+  toolIdOf,
+  DEFAULT_MAX_DECOMPOSITION_DEPTH,
+  DEFAULT_MAX_SUB_DISPATCHES,
+} from './runtime/dispatch.js';
+export type {
+  DispatchConfig,
+  DispatchOptions,
+  DispatchOutcome,
+  DispatchByIdOptions,
+  RegisteredTool,
+  Resolution,
+  ResolutionCandidate,
+  ResolveOptions,
+} from './runtime/dispatch.js';
+export { ToolRuntime, runtimeOptionsFromPolicy } from './runtime/runtime.js';
 export type { RuntimeOptions } from './runtime/runtime.js';
-export { DispatchBuilder } from './runtime/dispatch-builder.js';
+export { DispatchBuilder, DispatchError } from './runtime/dispatch-builder.js';
 
 // 0.4.0: Confidence-Tiered Dispatch (Pillar 1)
-export { computeTier, requiresVerification, requiresDecomposition, requiresRefinement, createProof, addProofStep, DEFAULT_THRESHOLDS } from './core/confidence.js';
-export type { ConfidenceTier, TierThresholds, ResolutionProof, ProofStep } from './core/confidence.js';
+export { computeTier, requiresVerification, requiresDecomposition, requiresRefinement, DEFAULT_THRESHOLDS, quantizeScore, compareRanked, SCORE_QUANTUM } from './core/confidence.js';
+export type { ConfidenceTier, TierThresholds } from './core/confidence.js';
+export { createProof, addProofStep, finalizeProof, computeProofDigest, PROOF_DIGEST_DOMAIN } from './core/proof.js';
+export type {
+  ResolutionProof,
+  ResolutionOutcome,
+  ProofStep,
+  ProofStage,
+  ProofCandidate,
+  ProofGuards,
+  ProofContext,
+  CandidateSource,
+  DecisionCode,
+} from './core/proof.js';
+
+// Replay, decision log and explain — exact by construction, and checkable
+export {
+  DecisionLog,
+  DecisionLogError,
+  DECISION_LOG_SCHEMA,
+  INTENT_DIGEST_DOMAIN,
+  intentDigest,
+  decisionRecordHash,
+  verifyDecisionLog,
+  readDecisionLog,
+  replayDecisionLog,
+} from './runtime/decision-log.js';
+export type {
+  DecisionRecord,
+  DecisionInput,
+  DecisionKind,
+  DecisionExecution,
+  DecisionLogOptions,
+  DecisionLogVerification,
+  DecisionReplayEntry,
+  DecisionReplayReport,
+} from './runtime/decision-log.js';
+export {
+  TraceFormatError,
+  REPLAY_EXIT,
+  parseTraceFile,
+  findTraceFiles,
+  loadTraceFiles,
+  checkExpectation,
+  replayTraces,
+  replayPaths,
+  formatReplayReport,
+  formatDecisionLogReplay,
+} from './runtime/replay.js';
+export type {
+  TraceCase,
+  TraceExpectation,
+  LoadedTraceCase,
+  TraceActual,
+  TraceCaseResult,
+  ReplayReport,
+  ReplayRun,
+  DecisionLogReplay,
+} from './runtime/replay.js';
+export { explainResolution, formatExplanation } from './runtime/explain.js';
+export type { Explanation, ExplainedCandidate } from './runtime/explain.js';
+
+// Dispatch policy, guards, argument validation and the canonical call digest
+export { evaluateDispatchPolicy, isDestructive } from './runtime/policy.js';
+export type { DispatchPolicyOptions, PinState, PolicyCode, PolicyInput, PolicyVerdict } from './runtime/policy.js';
+export { IntentPinRegistry, normalizePinPhrase } from './core/intent-pin.js';
+export type { IntentPin, IntentPinPolicy, IntentPinMatch } from './core/intent-pin.js';
+export { SignatureValidationError } from './core/overload-table.js';
+export type { SignatureViolation } from './core/sc-types.js';
+export { compileArgumentValidator, createSchemaConstraints, InputSchemaError } from './core/argument-validator.js';
+export type { ArgumentCheck, ArgumentCoercion, ArgumentValidationOptions, ArgumentValidator, SchemaDialect } from './core/argument-validator.js';
+export { callDigest, CALL_DIGEST_DOMAIN } from './core/call-digest.js';
+export { PACKAGE_VERSION } from './core/version.js';
+export { canonicalJson } from './core/jcs.js';
 
 // 0.4.0: Pluggable LLM Interface
 export { NULL_LLM_CLIENT } from './core/llm-client.js';
@@ -142,22 +244,24 @@ export type {
   SemanticMapMatch,
   SemanticMapOptions,
   SerializedSemanticMap,
+  SerializedSemanticMapV1,
+  SerializedPreference,
 } from './runtime/semantic-map.js';
 
 // 0.4.0: Observation & Adaptation (Pillar 5)
 export { DispatchObserver } from './runtime/observer.js';
-export type { DispatchRecord, CorrectionSignal, SchemaRejection, AdaptiveThreshold, NegativeExample, ObserverOptions } from './runtime/observer.js';
+export type { DispatchRecord, CorrectionSignal, SchemaRejection, NegativeExample, DispatchFeedback, ObserverOptions } from './runtime/observer.js';
 
 // Compiler
-export { ToolCompiler } from './compiler/compiler.js';
+export { ToolCompiler, DuplicateToolError, SelectorConflictError, toolEmbeddingText } from './compiler/compiler.js';
 export type { CompilerOptions } from './compiler/compiler.js';
 export { parseMCPManifest, parseOpenAPISpec, parseRawSchema } from './compiler/parser.js';
 export type { ParsedTool } from './compiler/parser.js';
 
 // Embedding
-export { LocalEmbedder } from './embedding/local-embedder.js';
+export { HashEmbedder, LocalEmbedder, hashFingerprint } from './embedding/hash-embedder.js';
 export { MemoryVectorIndex } from './embedding/memory-vector-index.js';
-export { ONNXEmbedder } from './embedding/onnx-embedder.js';
+export { ONNXEmbedder, onnxFingerprint } from './embedding/onnx-embedder.js';
 export type { ONNXEmbedderOptions } from './embedding/onnx-embedder.js';
 export { SqliteVectorIndex } from './embedding/sqlite-vector-index.js';
 export { EmbeddingWorkerBridge, WorkerEmbedder, createWorkerEmbedder } from './embedding/worker-embedder.js';
@@ -169,23 +273,64 @@ export type { McpServerConfig, McpConfigFile, IntrospectionResult } from './mcp/
 
 // MCP Server & Transport Engine
 export { MCPServer } from './mcp/server.js';
-export type { MCPServerConfig, McpApp, McpToolExecutor } from './mcp/server.js';
+export type { MCPServerConfig, HttpServeOptions, McpApp, McpToolExecutor } from './mcp/server.js';
+export { UpstreamPool } from './mcp/upstream.js';
+export type { UpstreamPoolOptions } from './mcp/upstream.js';
 export { MCPTransport, getTransport, clearTransports, registerLocalHandler, unregisterLocalHandler } from './mcp/transport.js';
 export type { TransportOptions } from './mcp/transport.js';
-export { SessionStore } from './mcp/session-store.js';
-export type { MCPSession } from './mcp/session-store.js';
-export { OAuthManager, MCP_SCOPES } from './mcp/oauth.js';
-export type { OAuthToken, OAuthClient, TokenIntrospection, PermissionsConfig, OAuthManagerOptions, MCPScope } from './mcp/oauth.js';
 export { ResourceRegistry, ResourceNotFoundError } from './mcp/resources.js';
 export type { MCPResource, MCPResourceContent, MCPResourceTemplate, ResourceChangeEvent, ResourceHandler } from './mcp/resources.js';
 export { PromptRegistry, PromptNotFoundError } from './mcp/prompts.js';
 export type { MCPPrompt, MCPPromptArgument, MCPPromptMessage, MCPPromptContent, PromptHandler, StaticPrompt } from './mcp/prompts.js';
 export { RateLimiter } from './mcp/rate-limiter.js';
 export { AuditLog } from './mcp/audit-log.js';
-export type { AuditEntry } from './mcp/audit-log.js';
-export { loadRuntime, buildToolList, formatContent, findManifests, buildArtifact } from './mcp/artifact.js';
-export type { SerializedArtifact } from './mcp/artifact.js';
+export type { AuditEntry, AuditLogOptions } from './mcp/audit-log.js';
+export { diagnoseArtifact, findNearDuplicates, formatDiagnosis } from './artifact/doctor.js';
+export type { ArtifactDiagnosis, CheckStatus, DiagnoseOptions, DoctorCheck, NearDuplicate } from './artifact/doctor.js';
+export { loadRuntime, buildToolList, findManifests } from './mcp/artifact.js';
+export { toCallToolResult } from './mcp/results.js';
+export type { LoadRuntimeOptions, LoadedRuntime } from './mcp/artifact.js';
 export { SqliteArtifactStore } from './mcp/sqlite-artifact.js';
+export type { SqliteArtifactStoreOptions } from './mcp/sqlite-artifact.js';
+
+// Compiled artifacts (format 1.0) and embedder identity — also importable
+// alone via `@smallchat/core/artifact`.
+export {
+  ARTIFACT_FORMAT_VERSION,
+  ArtifactFormatError,
+  ArtifactVersionError,
+  EmbedderMismatchError,
+  EmbedderUnavailableError,
+  DEFAULT_EMBEDDER_KIND,
+  buildArtifact,
+  computeContentHash,
+  validateArtifact,
+  parseArtifact,
+  serializeArtifact,
+  readArtifact,
+  writeArtifact,
+  parseEmbedderKind,
+  createEmbedder,
+  fingerprintOf,
+  fingerprintsEqual,
+  describeFingerprint,
+  assertEmbedderMatches,
+  resolveArtifactEmbedder,
+  createArtifactIndex,
+  toolId,
+  parseToolId,
+} from './artifact/index.js';
+export type {
+  ArtifactV1,
+  ArtifactProvider,
+  ArtifactTool,
+  ArtifactSelector,
+  ArtifactCollision,
+  ArtifactDuplicate,
+  ArtifactStats,
+  BuildArtifactOptions,
+  BuiltinEmbedderKind,
+} from './artifact/index.js';
 
 // Channel — Claude Code channel protocol support
 export {
@@ -211,207 +356,6 @@ export type {
   ChannelMessage,
 } from './channel/index.js';
 
-// [satellite] Dream — memory-driven tool re-compilation
-export { compileLatest, dream } from './dream/dream-compiler.js';
-export type { CompileLatestOptions } from './dream/dream-compiler.js';
-export { readMemoryFiles, extractToolMentions } from './dream/memory-reader.js';
-export { discoverLogFiles, analyzeSessionLog, aggregateUsageStats } from './dream/log-analyzer.js';
-export { prioritizeTools, generateReport } from './dream/tool-prioritizer.js';
-export { loadDreamConfig, saveDreamConfig, DEFAULT_DREAM_CONFIG } from './dream/config.js';
-export {
-  loadManifest as loadArtifactManifest,
-  archiveCurrentArtifact,
-  promoteArtifact,
-  rollbackToFallback,
-  pruneOldVersions,
-  listVersions,
-} from './dream/artifact-versioning.js';
-export type {
-  ToolUsageRecord,
-  ToolUsageStats,
-  MemoryFileContent,
-  MemoryToolMention,
-  ToolPriorityHints,
-  DreamAnalysis,
-  DreamResult,
-  DreamConfig,
-  ArtifactVersion,
-  ArtifactManifest,
-} from './dream/types.js';
-
-// [satellite] Memex — knowledge base compiler
-export {
-  compile as memexCompile,
-  ingest as memexIngest,
-  cosineSimilarity as memexCosineSimilarity,
-  serializeKnowledgeBase,
-  deserializeKnowledgeBase,
-} from './memex/knowledge-compiler.js';
-export type { CompileOptions as MemexCompileOptions } from './memex/knowledge-compiler.js';
-export {
-  resolveQuery as memexResolveQuery,
-  computeTier as memexComputeTier,
-  DEFAULT_KNOWLEDGE_THRESHOLDS,
-} from './memex/resolver.js';
-export type { KnowledgeTierThresholds, ResolverOptions as MemexResolverOptions } from './memex/resolver.js';
-export {
-  lint as memexLint,
-  listLintRules as memexListLintRules,
-} from './memex/lint.js';
-export {
-  loadMemexConfig,
-  saveMemexConfig,
-  DEFAULT_MEMEX_CONFIG,
-  loadKnowledgeSchema,
-  saveKnowledgeSchema,
-  DEFAULT_KNOWLEDGE_SCHEMA,
-} from './memex/config.js';
-export {
-  discoverSources,
-  readSource as readKnowledgeSource,
-  readSources as readKnowledgeSources,
-  inferSourceType,
-  hashFileContents,
-  stripMarkdown,
-} from './memex/source-reader.js';
-export type { SourceContent } from './memex/source-reader.js';
-export {
-  extractKnowledge,
-  extractKnowledgeBatch,
-  mergeKnowledgeIRs,
-  slugify,
-} from './memex/claim-extractor.js';
-export {
-  emitWikiPages,
-  emitWikiIndex,
-  renderIndexMarkdown,
-  renderLogMarkdown,
-} from './memex/wiki-emitter.js';
-export type {
-  SourceType,
-  KnowledgeSource,
-  ExtractedClaim as MemexExtractedClaim,
-  ExtractedEntity as MemexExtractedEntity,
-  ExtractedRelationship,
-  KnowledgeIR,
-  ClaimSelector,
-  WikiPage,
-  WikiIndex,
-  IngestionLogEntry,
-  KnowledgeBase,
-  Contradiction,
-  KnowledgeConfidenceTier,
-  KnowledgeResult,
-  LintSeverity,
-  LintFinding,
-  LintReport,
-  IngestResult,
-  KnowledgeSchema,
-  LintRuleConfig,
-  MemexOutputConfig,
-  MemexCompilerConfig,
-  MemexConfig,
-  MemexCompileResult,
-} from './memex/types.js';
-
-// [satellite] Compaction — token compression, re-exported from @shorthand/core
-export {
-  DefaultCompactor,
-  estimateTokens,
-  estimateConversationTokens,
-  extractEntities,
-  extractDecisions,
-  detectTombstones,
-  DefaultQuizGenerator,
-  DefaultQuizEvaluator,
-  tokenOverlapScore,
-  runRecallTest,
-  correctionPropagation,
-  entityProvenance,
-  decisionCompleteness,
-  tombstoneConsistency,
-  temporalOrdering,
-  BUILTIN_INVARIANTS,
-  checkInvariants,
-  tokenize,
-  shannonEntropy,
-  totalInformationBits,
-  computeEntropyMetrics,
-  computeRateDistortion,
-  measureEntityRetention,
-  analyzeInformationTheoretic,
-  VerificationHarness,
-  DEFAULT_VERIFICATION_CONFIG,
-} from '@shorthand/core/compaction';
-export type {
-  CompactedState,
-  CompactionInvariant,
-  CompactionLevel,
-  CompactionVerificationConfig,
-  Compactor,
-  ConversationHistory,
-  ConversationMessage,
-  Decision,
-  EntityCorrection,
-  EntityRetention,
-  EntropyMetrics,
-  ExtractedEntity,
-  InformationTheoreticResult,
-  InvariantCheckResult,
-  InvariantViolation,
-  QuizEvaluator,
-  QuizGenerator,
-  RateDistortionMetrics,
-  RecallAnswer,
-  RecallQuestion,
-  RecallTestResult,
-  Tombstone,
-} from '@shorthand/core/compaction';
-// VerificationResult name collides with core/types — export under alias
-export type { VerificationResult as CompactionVerificationResult } from '@shorthand/core/compaction';
-
-// [satellite] Truth ledger interop — stenographer TB/UV v2 JSONL seam,
-// re-exported from @shorthand/core
-export {
-  CONSUMPTION_RULES,
-  isAnonymousIdentity,
-  assertAccountableAuthor,
-  ulid,
-  wikiLineToEntry,
-  entryToWikiLine,
-  parseWikiLines,
-  serializeWikiEntries,
-  readWikiFile,
-  writeWikiFile,
-  classifyEntry,
-  selectCurrentTruth,
-  renderTruthSection,
-  applyTruthToCompactedState,
-  TruthAwareCompactor,
-  truthToInvariantRecords,
-  proposeInvariants,
-  serializeProposals,
-  appendProposalsFile,
-} from '@shorthand/core/truth';
-export type {
-  TruthConfidence,
-  TbStatus,
-  UvStatus,
-  TruthEvidence,
-  TruthVerifyBy,
-  WikiEntryLine,
-  TruthTbEntry,
-  TruthUvEntry,
-  TruthLedgerEntry,
-  ConsumptionAction,
-  TruthSelection,
-  CompactedTruth,
-  InvariantProposalLine,
-  WikiParseResult,
-  TruthInvariantRecord,
-  ProposeInvariantsOptions,
-} from '@shorthand/core/truth';
-
 // Transport Layer — ITransport interface and implementations
 export type {
   ITransport,
@@ -428,6 +372,7 @@ export type {
   HttpTransportRoute,
   GeneratedHttpConfig,
   McpStdioTransportConfig,
+  McpHttpTransportConfig,
   McpSseTransportConfig,
   LocalTransportConfig,
   LocalHandler,
@@ -454,6 +399,7 @@ export {
   // Transport implementations
   HttpTransport,
   McpStdioTransport,
+  McpHttpTransport,
   McpSseTransport,
   LocalTransport,
   // Middleware
@@ -486,59 +432,13 @@ export {
   isDockerAvailable,
 } from './transport/index.js';
 
-// [satellite] CRDT — multi-agent shared memory, re-exported from @shorthand/core
-export {
-  LamportClock,
-  compareLamport,
-  createVectorClock,
-  tickVectorClock,
-  mergeVectorClocks,
-  compareVectorClocks,
-  LWWRegister,
-  ORSet,
-  GSet,
-  defaultMergeFn,
-  RGA,
-  AgentMemory,
-  MemoryMerge,
-  ConflictDetector,
-} from '@shorthand/core/crdt';
-export type {
-  AgentId,
-  LamportTimestamp,
-  VectorClock,
-  UniqueTag,
-  CausalMeta,
-  MergeResult,
-  CRDTInterface,
-  LWWEntry,
-  LWWRegisterState,
-  ORSetState,
-  GSetEntry,
-  GSetState,
-  GSetMergeFn,
-  RGANodeId,
-  RGANode,
-  RGAState,
-  MemoryLayer,
-  L4Invariants,
-  L3Entity,
-  L3Edge,
-  L3Graph,
-  L2Summary,
-  L1Context,
-  L0Message,
-  AgentMemoryState,
-  SemanticConflict,
-  ConflictSeverity,
-} from '@shorthand/core/crdt';
-
 // Manifest types
 export type {
   SmallChatManifest,
   SmallChatPackage,
   ManifestCompilerConfig,
   ManifestOutputConfig,
+  ManifestPolicyConfig,
   PreCompiledProvider,
 } from './core/manifest.js';
 

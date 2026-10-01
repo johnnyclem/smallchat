@@ -405,3 +405,61 @@ describe('ConflictDetector', () => {
     expect(authConflicts.length).toBe(0);
   });
 });
+
+// ===========================================================================
+// Agential memory rides AgentMemory (carried from short-hand)
+// ===========================================================================
+
+describe('AgentMemory active engrams', () => {
+  it('merges active engrams across agents (union by id)', () => {
+    const a = new AgentMemory('agent-a');
+    const b = new AgentMemory('agent-b');
+
+    const idA = a.activeEngrams.add('user prefers CLI tools');
+    const idB = b.activeEngrams.add('deploys happen on Fridays');
+
+    expect(a.mergeFrom(b.serialize())).toBe(true);
+
+    expect(a.activeEngrams.get(idA)).toBeDefined();
+    expect(a.activeEngrams.get(idB)).toBeDefined();
+    expect(a.activeEngrams.all()).toHaveLength(2);
+  });
+
+  it('round-trips active engrams through serialize/from', () => {
+    const a = new AgentMemory('agent-a');
+    const id = a.activeEngrams.add('payload', { importanceScore: 0.9 });
+
+    const b = AgentMemory.from(a.serialize());
+
+    expect(b.activeEngrams.get(id)?.payload).toBe('payload');
+    expect(b.activeEngrams.get(id)?.importanceScore).toBe(0.9);
+  });
+
+  it('loads a state serialized without active engrams', () => {
+    const a = new AgentMemory('agent-a');
+    a.setInvariant('database', 'PostgreSQL');
+    const { activeEngrams: _omitted, ...legacy } = a.serialize();
+
+    const b = AgentMemory.from(legacy);
+    expect(b.getInvariant('database')).toBe('PostgreSQL');
+    expect(b.activeEngrams.all()).toEqual([]);
+  });
+
+  it('hasEntity looks entities up by name', () => {
+    const memory = new AgentMemory('agent-a');
+    memory.addEntity({ id: 'e1', type: 'table', name: 'users-table' });
+    expect(memory.hasEntity('users-table')).toBe(true);
+    expect(memory.hasEntity('orders-table')).toBe(false);
+  });
+
+  it('uses a per-agent clock: a fresh replica does not inherit another agent’s counter', () => {
+    // short-hand's AgentMemory stamped invariants from one process-global
+    // Lamport counter (SH-09); every replica now owns its clock.
+    const a = new AgentMemory('agent-a');
+    a.setInvariant('k1', 'v1');
+    a.setInvariant('k2', 'v2');
+    const b = new AgentMemory('agent-b');
+    b.setInvariant('k3', 'v3');
+    expect(b.l4.getEntry('k3')!.timestamp).toEqual({ counter: 1, agentId: 'agent-b' });
+  });
+});

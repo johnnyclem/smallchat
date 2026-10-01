@@ -1,7 +1,8 @@
 import type {
-  ArgumentConstraints,
   CompilationResult,
+  CompiledToolRef,
   CompilerHint,
+  DuplicateToolPair,
   Embedder,
   OverloadEntryData,
   OverloadTableData,
@@ -12,7 +13,6 @@ import type {
   ToolProtocol,
   ToolSchema,
   ToolSelector,
-  ValidationResult,
   VectorIndex,
 } from '../core/types.js';
 import { SelectorTable } from '../core/selector-table.js';
@@ -21,9 +21,57 @@ import { OverloadTable } from '../core/overload-table.js';
 import { createSignature, param, SCType } from '../core/sc-types.js';
 import type { SCTypeDescriptor, SCParameterSlot } from '../core/sc-types.js';
 import { parseMCPManifest, applyManifestOverrides, type ParsedTool } from './parser.js';
-import type { SmallChatManifest } from '../core/manifest.js';
+import type { ManifestCompilerConfig, SmallChatManifest } from '../core/manifest.js';
 import { AppCompiler } from '../app/app-compiler.js';
 import { getTransport } from '../mcp/transport.js';
+import { toolId } from '../core/tool-id.js';
+import { normalizePinPhrase } from '../core/intent-pin.js';
+import { createSchemaConstraints } from '../core/argument-validator.js';
+
+/**
+ * The text a tool's primary selector embeds: `<name>: <description>`, plus
+ * the selectorHint compiler hint when there is one. `smallchat doctor`
+ * re-embeds it to check that an artifact's vectors reproduce.
+ */
+export function toolEmbeddingText(name: string, description: string, selectorHint?: string): string {
+  return selectorHint ? `${name}: ${description} ${selectorHint}` : `${name}: ${description}`;
+}
+
+/**
+ * Thrown by compile() when two distinct tools embed at or above the
+ * duplicate threshold. The compiler never merges tools; it refuses to build
+ * a toolkit whose intents could not tell them apart, unless the caller
+ * opts in with `allowDuplicates`.
+ */
+export class DuplicateToolError extends Error {
+  readonly pairs: DuplicateToolPair[];
+
+  constructor(pairs: DuplicateToolPair[], threshold: number) {
+    const lines = pairs.map(
+      p => `  ${p.toolA} <-> ${p.toolB} (cosine ${p.similarity.toFixed(3)}; selectors ${p.selectorA}, ${p.selectorB})`,
+    );
+    super(
+      `${pairs.length} pair(s) of distinct tools embed at cosine >= ${threshold} and cannot be told apart:\n` +
+      `${lines.join('\n')}\n` +
+      'Disambiguate them with compiler hints (selectorHint, aliases, exclude), or pass ' +
+      'allowDuplicates (--allow-duplicates) to keep every tool and accept ambiguous intent resolution.',
+    );
+    this.name = 'DuplicateToolError';
+    this.pairs = pairs;
+  }
+}
+
+/**
+ * Thrown by compile() when two tools claim the same selector canonical
+ * (a pinSelector or namespace clash) or the same tool id is declared twice.
+ * One selector dispatches to exactly one tool, so this cannot be waived.
+ */
+export class SelectorConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SelectorConflictError';
+  }
+}
 
 /**
  * ToolCompiler — the build-time tool that produces dispatch tables,
@@ -36,12 +84,15 @@ import { getTransport } from '../mcp/transport.js';
 export class ToolCompiler {
   private embedder: Embedder;
   private vectorIndex: VectorIndex;
-  private selectorTable: SelectorTable;
+  private duplicateThreshold: number;
+  private allowDuplicates: boolean;
   private collisionThreshold: number;
   private generateSemanticOverloads: boolean;
   private semanticOverloadThreshold: number;
   private compileApps: boolean;
   private appVectorIndex: VectorIndex | undefined;
+  /** Options passed to the constructor; they win over smallchat.json */
+  private readonly options: CompilerOptions;
 
   constructor(
     embedder: Embedder,
@@ -50,32 +101,54 @@ export class ToolCompiler {
   ) {
     this.embedder = embedder;
     this.vectorIndex = vectorIndex;
-    this.collisionThreshold = options?.collisionThreshold ?? 0.89;
-    this.generateSemanticOverloads = options?.generateSemanticOverloads ?? false;
-    this.semanticOverloadThreshold = options?.semanticOverloadThreshold ?? 0.82;
+    this.options = options ?? {};
     this.compileApps = options?.compileApps ?? true;
     this.appVectorIndex = options?.appVectorIndex;
-    this.selectorTable = new SelectorTable(
-      vectorIndex,
-      embedder,
-      options?.deduplicationThreshold ?? 0.95,
-    );
+    this.collisionThreshold = 0.89;
+    this.generateSemanticOverloads = false;
+    this.semanticOverloadThreshold = 0.82;
+    this.duplicateThreshold = 0.95;
+    this.allowDuplicates = false;
+    this.applySettings();
+  }
+
+  /**
+   * Resolve the thresholds for one compile: an option passed to the
+   * constructor, else the project's smallchat.json "compiler" block, else
+   * the default.
+   */
+  private applySettings(project: ManifestCompilerConfig = {}): void {
+    const o = this.options;
+    this.collisionThreshold = o.collisionThreshold ?? project.collisionThreshold ?? 0.89;
+    this.generateSemanticOverloads = o.generateSemanticOverloads ?? project.generateSemanticOverloads ?? false;
+    this.semanticOverloadThreshold = o.semanticOverloadThreshold ?? project.semanticOverloadThreshold ?? 0.82;
+    this.duplicateThreshold = o.duplicateThreshold ?? o.deduplicationThreshold
+      ?? project.duplicateThreshold ?? project.deduplicationThreshold ?? 0.95;
+    this.allowDuplicates = o.allowDuplicates ?? project.allowDuplicates ?? false;
   }
 
   /**
    * Compile tool definitions from provider manifests into a compiled artifact.
    *
    * @param manifests - Provider manifests to compile
-   * @param projectManifest - Optional smallchat.json project manifest with overrides
+   * @param projectManifest - Optional smallchat.json project manifest: its
+   *   hint overrides and its "compiler" thresholds (duplicateThreshold,
+   *   allowDuplicates, collisionThreshold, generateSemanticOverloads,
+   *   semanticOverloadThreshold) apply unless the constructor set them.
    */
   async compile(
     manifests: ProviderManifest[],
     projectManifest?: SmallChatManifest,
   ): Promise<CompilationResult> {
+    this.applySettings(projectManifest?.compiler);
+
     // Phase 1: PARSE
     let allTools: ParsedTool[] = [];
     for (const manifest of manifests) {
       allTools.push(...parseMCPManifest(manifest));
+    }
+    for (const where of hintsWithPriority(manifests, projectManifest)) {
+      console.warn(`  Ignored compiler hint "priority" (${where}): dispatch ranks candidates by similarity only.`);
     }
 
     // Apply project-level hint overrides from smallchat.json
@@ -97,16 +170,35 @@ export class ToolCompiler {
       }
     }
 
-    // Phase 2: EMBED — generate embeddings and intern selectors
+    // Phase 2: EMBED — generate embeddings and register selectors.
+    // Every tool gets its own selector under its exact canonical name; a
+    // selector is never shared between tools, whatever the embeddings say.
     // Compiler hints can steer this phase:
     //   - selectorHint: appended to embedding text
-    //   - pinSelector: bypasses vector interning entirely
+    //   - pinSelector: the tool's canonical, taken literally
     //   - aliases: additional selectors pointing to the same IMP
+    const selectorTable = new SelectorTable(this.vectorIndex, this.embedder);
     const toolSelectors: Map<ParsedTool, ToolSelector> = new Map();
     const toolEmbeddings: Map<ParsedTool, Float32Array> = new Map();
     const aliasSelectors: Map<ParsedTool, ToolSelector[]> = new Map();
-    let mergedCount = 0;
-    const selectorsBefore = this.selectorTable.size;
+    const toolIds: Map<ParsedTool, string> = new Map();
+    const seenToolIds: Set<string> = new Set();
+    const selectorOwners: Map<string, string> = new Map(); // canonical → tool id
+    // normalized alias phrase → the tool that declared it, and its spelling
+    const aliasOwners: Map<string, { id: string; alias: string }> = new Map();
+    const toolRefs: CompiledToolRef[] = [];
+
+    const claim = (canonical: string, id: string, embedding: Float32Array): ToolSelector => {
+      const owner = selectorOwners.get(canonical);
+      if (owner !== undefined && owner !== id) {
+        throw new SelectorConflictError(
+          `Selector "${canonical}" is claimed by both ${owner} and ${id}. ` +
+          'Each tool needs its own selector — change the pinSelector, namespace, or alias.',
+        );
+      }
+      selectorOwners.set(canonical, id);
+      return selectorTable.register(embedding, canonical);
+    };
 
     // Warn if multiple tools in the same collision group claim "preferred"
     const preferredByProvider: Map<string, string[]> = new Map();
@@ -114,11 +206,17 @@ export class ToolCompiler {
     for (const tool of allTools) {
       const hints = tool.compilerHints;
 
-      // Build embedding text — selectorHint steers the vector
-      let embeddingText = `${tool.name}: ${tool.description}`;
-      if (hints?.selectorHint) {
-        embeddingText += ` ${hints.selectorHint}`;
+      const id = toolId(tool.providerId, tool.name);
+      if (seenToolIds.has(id)) {
+        throw new SelectorConflictError(
+          `Tool id "${id}" is declared more than once — tool names must be unique within a provider.`,
+        );
       }
+      toolIds.set(tool, id);
+      seenToolIds.add(id);
+
+      // Build embedding text — selectorHint steers the vector
+      const embeddingText = toolEmbeddingText(tool.name, tool.description, hints?.selectorHint);
 
       // Determine canonical — pinSelector overrides the default
       const namespace = tool.providerHints?.namespace;
@@ -130,19 +228,7 @@ export class ToolCompiler {
       const embedding = await this.embedder.embed(embeddingText);
       toolEmbeddings.set(tool, embedding);
 
-      let selector: ToolSelector;
-      if (hints?.pinSelector) {
-        // Pinned: register with the embedding but force the canonical name
-        selector = await this.selectorTable.intern(embedding, hints.pinSelector);
-      } else {
-        selector = await this.selectorTable.intern(embedding, canonical);
-      }
-
-      // Track merged (deduplicated) tools
-      if (this.selectorTable.size === selectorsBefore + toolSelectors.size) {
-        mergedCount++;
-      }
-
+      const selector = claim(canonical, id, embedding);
       toolSelectors.set(tool, selector);
 
       // Track preferred hints for collision warning
@@ -153,26 +239,48 @@ export class ToolCompiler {
       }
 
       // Process aliases — each alias gets its own selector pointing to the same tool
-      if (hints?.aliases && hints.aliases.length > 0) {
-        const aliases: ToolSelector[] = [];
-        for (const alias of hints.aliases) {
-          const aliasEmbedding = await this.embedder.embed(alias);
-          const aliasCanonical = `${canonical}~alias~${alias.replace(/\s+/g, '_')}`;
-          const aliasSel = await this.selectorTable.intern(aliasEmbedding, aliasCanonical);
-          aliases.push(aliasSel);
+      const aliases: ToolSelector[] = [];
+      for (const alias of new Set(hints?.aliases ?? [])) {
+        // One phrase, one tool: two tools sharing an alias would embed it
+        // identically and tie on every intent near it.
+        const phrase = normalizePinPhrase(alias);
+        const other = aliasOwners.get(phrase);
+        if (other !== undefined && other.id !== id) {
+          throw new SelectorConflictError(
+            `Alias "${alias}" of ${id} is also an alias of ${other.id} ("${other.alias}"). ` +
+            'An alias phrase can belong to only one tool; remove it from one of them.',
+          );
         }
+        aliasOwners.set(phrase, { id, alias });
+        const aliasEmbedding = await this.embedder.embed(alias);
+        const aliasCanonical = `${canonical}~alias~${alias.replace(/\s+/g, '_')}`;
+        aliases.push(claim(aliasCanonical, id, aliasEmbedding));
+      }
+      if (aliases.length > 0) {
         aliasSelectors.set(tool, aliases);
       }
+
+      toolRefs.push({
+        id,
+        providerId: tool.providerId,
+        toolName: tool.name,
+        selector: selector.canonical,
+        aliases: aliases.map(a => a.canonical),
+      });
     }
 
     // Phase 2.5: SEMANTIC OVERLOAD GENERATION (optional compiler pass)
     const overloadTables: Map<string, OverloadTableData> = new Map();
     const semanticOverloads: SemanticOverloadGroup[] = [];
+    // Tool id → overload group index; tools in one group are deliberately
+    // similar, so they are exempt from duplicate detection.
+    const overloadGroupOf: Map<string, number> = new Map();
 
     if (this.generateSemanticOverloads) {
       const groups = this.findSemanticGroups(allTools, toolEmbeddings);
 
-      for (const group of groups) {
+      for (const [groupIndex, group] of groups.entries()) {
+        for (const t of group.tools) overloadGroupOf.set(toolIds.get(t)!, groupIndex);
         const canonicalSelector = group.tools[0].providerId + '.' + group.tools[0].name;
         const overloadEntries: OverloadEntryData[] = [];
 
@@ -208,6 +316,42 @@ export class ToolCompiler {
       }
     }
 
+    // Phase 2.6: DUPLICATE DETECTION — distinct tools whose selectors embed
+    // at or above the duplicate threshold. Reported once per tool pair (the
+    // most similar selector pair), in manifest order.
+    const allSelectors = selectorTable.all();
+    const duplicatesByPair: Map<string, DuplicateToolPair> = new Map();
+    for (let i = 0; i < allSelectors.length; i++) {
+      for (let j = i + 1; j < allSelectors.length; j++) {
+        const a = allSelectors[i];
+        const b = allSelectors[j];
+        const idA = selectorOwners.get(a.canonical)!;
+        const idB = selectorOwners.get(b.canonical)!;
+        if (idA === idB) continue;
+        const groupA = overloadGroupOf.get(idA);
+        if (groupA !== undefined && groupA === overloadGroupOf.get(idB)) continue;
+
+        const similarity = cosineSim(a.vector, b.vector);
+        if (similarity < this.duplicateThreshold) continue;
+
+        const key = `${idA}\u0000${idB}`;
+        const previous = duplicatesByPair.get(key);
+        if (!previous || similarity > previous.similarity) {
+          duplicatesByPair.set(key, {
+            toolA: idA,
+            toolB: idB,
+            selectorA: a.canonical,
+            selectorB: b.canonical,
+            similarity,
+          });
+        }
+      }
+    }
+    const duplicates = [...duplicatesByPair.values()];
+    if (duplicates.length > 0 && !this.allowDuplicates) {
+      throw new DuplicateToolError(duplicates, this.duplicateThreshold);
+    }
+
     // Phase 3: LINK — build dispatch tables and detect collisions
     const dispatchTables: Map<string, Map<string, ToolIMP>> = new Map();
     const collisions: SelectorCollision[] = [];
@@ -241,10 +385,9 @@ export class ToolCompiler {
       dispatchTables.set(providerId, table);
     }
 
-    // Detect selector collisions (skip pairs that are now overloaded or aliased)
-    // 0.4.0 COLLISION FIREWALL: expanded detection to the 0.75-0.95 zone.
-    // In --strict mode, collisions in the 0.75-0.89 zone are errors, not warnings.
-    const isStrict = this.collisionThreshold < 0.89; // --strict lowers the threshold
+    // Detect selector collisions (skip pairs that are now overloaded or aliased).
+    // Collision firewall: pairs in the 0.75–duplicateThreshold zone are
+    // reported (warnings, never errors).
     const firewallThreshold = 0.75; // Collision firewall lower bound
 
     const overloadedCanonicals = new Set(overloadTables.keys());
@@ -253,7 +396,6 @@ export class ToolCompiler {
       for (const a of aliases) aliasCanonicals.add(a.canonical);
     }
 
-    const allSelectors = this.selectorTable.all();
     for (let i = 0; i < allSelectors.length; i++) {
       for (let j = i + 1; j < allSelectors.length; j++) {
         const a = allSelectors[i];
@@ -270,7 +412,8 @@ export class ToolCompiler {
         const similarity = cosineSim(a.vector, b.vector);
 
         // 0.4.0: Collision firewall — detect in the 0.75-0.95 zone
-        if (similarity > firewallThreshold && similarity < 0.95) {
+        // (pairs at or above the duplicate threshold are reported as duplicates)
+        if (similarity > firewallThreshold && similarity < this.duplicateThreshold) {
           const aPreferred = this.isPreferredTool(a.canonical, allTools, toolSelectors);
           const bPreferred = this.isPreferredTool(b.canonical, allTools, toolSelectors);
 
@@ -287,7 +430,7 @@ export class ToolCompiler {
           } else if (bPreferred) {
             hint = `"${b.canonical}" is preferred (compiler hint) over "${a.canonical}" (${(similarity * 100).toFixed(1)}% similar).`;
           } else if (severity === 'collision-zone') {
-            hint = `Collision zone (${(similarity * 100).toFixed(1)}%): "${a.canonical}" and "${b.canonical}" — dispatches will trigger MEDIUM-confidence verification. Consider renaming, merging, or pinning.`;
+            hint = `Collision zone (${(similarity * 100).toFixed(1)}%): "${a.canonical}" and "${b.canonical}" — an intent near both may resolve to needs-disambiguation, or to the other tool. Consider distinct descriptions, a selectorHint, or calling them by tool id.`;
           } else {
             hint = `Disambiguation needed: "${a.canonical}" and "${b.canonical}" are similar (${(similarity * 100).toFixed(1)}%).`;
           }
@@ -319,9 +462,10 @@ export class ToolCompiler {
       selectors: new Map(allSelectors.map(s => [s.canonical, s])),
       dispatchTables,
       protocols: [],
+      tools: toolRefs,
       toolCount: allTools.length,
-      uniqueSelectorCount: this.selectorTable.size,
-      mergedCount,
+      uniqueSelectorCount: allSelectors.length,
+      duplicates,
       collisions,
       overloadTables,
       semanticOverloads,
@@ -368,21 +512,26 @@ export class ToolCompiler {
 
   /** Create a ToolIMP (as a ToolProxy) from a parsed tool */
   private createIMP(tool: ParsedTool): ToolIMP {
-    const constraints = createConstraints(tool);
-    return new ToolProxy(
+    const constraints = createSchemaConstraints(
+      tool.inputSchema as unknown as Record<string, unknown> | undefined,
+      tool.arguments,
+    );
+    const proxy = new ToolProxy(
       tool.providerId,
       tool.name,
       tool.transportType,
       async (): Promise<ToolSchema> => ({
         name: tool.name,
         description: tool.description,
-        inputSchema: { type: 'object', properties: {} },
+        inputSchema: tool.inputSchema ?? { type: 'object', properties: {} },
         arguments: tool.arguments,
       }),
       constraints,
       undefined,
       getTransport,
     );
+    proxy.annotations = tool.annotations;
+    return proxy;
   }
 
   /**
@@ -469,28 +618,25 @@ export class ToolCompiler {
   }
 }
 
-/** Create argument constraints from a parsed tool */
-function createConstraints(tool: ParsedTool): ArgumentConstraints {
-  const required = tool.arguments.filter(a => a.required);
-  const optional = tool.arguments.filter(a => !a.required);
-
-  return {
-    required,
-    optional,
-    validate(args: Record<string, unknown>): ValidationResult {
-      const errors = [];
-      for (const arg of required) {
-        if (!(arg.name in args)) {
-          errors.push({
-            path: arg.name,
-            message: `Required argument "${arg.name}" is missing`,
-            expected: arg.type.type,
-          });
-        }
-      }
-      return { valid: errors.length === 0, errors };
-    },
-  };
+/**
+ * Where a removed `priority` compiler hint is still set. It never affected
+ * dispatch, so 1.0 removed it; compile warns instead of silently ignoring it.
+ */
+function hintsWithPriority(manifests: ProviderManifest[], project?: SmallChatManifest): string[] {
+  const has = (hints: unknown): boolean =>
+    typeof hints === 'object' && hints !== null && 'priority' in hints;
+  const found: string[] = [];
+  for (const m of manifests) {
+    if (has(m.compilerHints)) found.push(`provider ${m.id}`);
+    for (const t of m.tools) if (has(t.compilerHints)) found.push(`${m.id}.${t.name}`);
+  }
+  for (const [id, hints] of Object.entries(project?.providerHints ?? {})) {
+    if (has(hints)) found.push(`smallchat.json providerHints.${id}`);
+  }
+  for (const [id, hints] of Object.entries(project?.toolHints ?? {})) {
+    if (has(hints)) found.push(`smallchat.json toolHints.${id}`);
+  }
+  return found;
 }
 
 /** Cosine similarity between two vectors */
@@ -507,22 +653,23 @@ function cosineSim(a: Float32Array, b: Float32Array): number {
 
 export interface CompilerOptions {
   collisionThreshold?: number;
+  /**
+   * Cosine similarity at or above which two distinct tools are reported as
+   * duplicates (default 0.95). Duplicates are a compile error unless
+   * `allowDuplicates` is set; tools are never merged.
+   */
+  duplicateThreshold?: number;
+  /** @deprecated Renamed to `duplicateThreshold` (tools are no longer merged). */
   deduplicationThreshold?: number;
+  /**
+   * Keep near-duplicate tools and report them in `CompilationResult.duplicates`
+   * instead of throwing DuplicateToolError. Default false.
+   */
+  allowDuplicates?: boolean;
   /** Enable compiler-generated overloads for semantically similar tools */
   generateSemanticOverloads?: boolean;
   /** Similarity threshold for grouping tools as overloads (default 0.82) */
   semanticOverloadThreshold?: number;
-  /** Priority hints from dream analysis — tools to boost, demote, or exclude. */
-  priorityHints?: {
-    boosted: Map<string, number>;
-    demoted: Map<string, number>;
-    excluded: Set<string>;
-  };
-  /**
-   * 0.4.0 --strict mode: raises all thresholds, enables verification on every
-   * dispatch, and treats ambiguity as an error instead of a warning.
-   */
-  strict?: boolean;
   /**
    * MCP Apps: run AppCompiler after the tool LINK phase to compile UI components.
    * Defaults to true when any tools declare uiResourceUri; set to false to skip.

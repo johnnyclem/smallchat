@@ -10,13 +10,15 @@ import {
 import type { DreamConfig } from '../../dream/types.js';
 
 export const dreamCommand = new Command('dream')
-  .description('Re-compile tools using Claude memory and session log insights')
+  .description('Re-compile tools using Claude memory and session log insights (experimental: heuristic, not part of tool dispatch; may change in any 1.x release)')
   .option('-s, --source [path]', 'Source manifests (same as compile --source)')
   .option('-o, --output <path>', 'Output artifact path')
-  .option('-e, --embedder <type>', 'Embedder: onnx or local')
+  .option('-e, --embedder <type>', 'Embedder: onnx (default) or hash')
   .option('--auto', 'Enable auto-dream (replace artifact without confirmation)')
   .option('--memory <paths...>', 'Additional memory file paths')
   .option('--log-dir <path>', 'Claude log directory')
+  .option('--exclude <tools...>', 'Leave these tool names out of the compiled artifact')
+  .option('--apply-proposed-exclusions', 'Also leave out the tools the heuristics propose excluding (off by default)')
   .option('--dry-run', 'Analyze and report without compiling')
   .option('--config <path>', 'Path to smallchat.dream.json')
   .option('--rollback', 'Rollback to last non-auto-generated artifact')
@@ -68,6 +70,8 @@ export const dreamCommand = new Command('dream')
     if (options.auto) configOverrides.autoDream = true;
     if (options.memory) configOverrides.memoryPaths = options.memory.map((p: string) => resolve(p));
     if (options.logDir) configOverrides.logDir = resolve(options.logDir);
+    if (options.exclude) configOverrides.exclude = options.exclude;
+    if (options.applyProposedExclusions) configOverrides.applyProposedExclusions = true;
 
     const result = await compileLatest({
       configOverrides,

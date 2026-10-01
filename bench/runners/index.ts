@@ -10,6 +10,8 @@ import type {
   CaseScore,
   MethodMetrics,
   Difficulty,
+  OutcomeCounts,
+  RunnerResult,
 } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -18,7 +20,7 @@ import type {
 
 function scoreCase(
   benchCase: BenchCase,
-  result: { ranked: Array<{ toolId: string; score: number; components?: Record<string, number> }>; latencyMs: number },
+  result: RunnerResult,
 ): CaseScore {
   const top1 = result.ranked[0]?.toolId ?? null;
   const top3 = result.ranked.slice(0, 3).map(r => r.toolId);
@@ -36,6 +38,9 @@ function scoreCase(
     ? top3.includes(benchCase.expected) || top3.some(t => benchCase.acceptable.includes(t))
     : top3.some(t => benchCase.acceptable.includes(t));
 
+  const isCorrect = (toolId: string | undefined): boolean =>
+    toolId !== undefined && (toolId === benchCase.expected || benchCase.acceptable.includes(toolId));
+
   return {
     caseId: benchCase.id,
     difficulty: benchCase.difficulty,
@@ -45,7 +50,37 @@ function scoreCase(
     top3Hit: isTop3Hit,
     latencyMs: result.latencyMs,
     components: result.ranked[0]?.components,
+    ...(result.outcome !== undefined ? {
+      outcome: result.outcome,
+      resolvedCorrect: result.outcome === 'resolved' && isCorrect(result.chosen),
+    } : {}),
   };
+}
+
+/** Outcome counts of a deciding runner, or undefined for ranking-only runners. */
+function countOutcomes(scores: CaseScore[]): OutcomeCounts | undefined {
+  if (scores.length === 0 || scores.some(s => s.outcome === undefined)) return undefined;
+  const counts: OutcomeCounts = {
+    resolved: 0,
+    resolvedCorrect: 0,
+    resolvedWrong: 0,
+    needsDisambiguation: 0,
+    unresolved: 0,
+    throttled: 0,
+  };
+  for (const s of scores) {
+    switch (s.outcome) {
+      case 'resolved':
+        counts.resolved++;
+        if (s.resolvedCorrect) counts.resolvedCorrect++;
+        else counts.resolvedWrong++;
+        break;
+      case 'needs-disambiguation': counts.needsDisambiguation++; break;
+      case 'unresolved': counts.unresolved++; break;
+      case 'throttled': counts.throttled++; break;
+    }
+  }
+  return counts;
 }
 
 function computeMetrics(method: string, scores: CaseScore[]): MethodMetrics {
@@ -91,6 +126,8 @@ function computeMetrics(method: string, scores: CaseScore[]): MethodMetrics {
     };
   }
 
+  const outcomes = countOutcomes(scores);
+
   return {
     method,
     accuracyTop1: top1Hits / total,
@@ -100,6 +137,13 @@ function computeMetrics(method: string, scores: CaseScore[]): MethodMetrics {
     byDifficulty: byDifficulty as Record<Difficulty, { top1: number; acceptable: number; count: number }>,
     byCategory,
     cases: scores,
+    ...(outcomes ? {
+      outcomes,
+      resolvedCorrectRate: outcomes.resolvedCorrect / total,
+      resolvedWrongRate: outcomes.resolvedWrong / total,
+      needsDisambiguationRate: outcomes.needsDisambiguation / total,
+      unresolvedRate: outcomes.unresolved / total,
+    } : {}),
   };
 }
 
@@ -244,6 +288,23 @@ export function formatResults(metrics: MethodMetrics[]): string {
   }
 
   lines.push('');
+
+  // Decisions — only runners that decide (run a tool or refuse) report these
+  const deciding = metrics.filter(m => m.outcomes);
+  if (deciding.length > 0) {
+    lines.push('── Decisions (what the runtime would do on its own) ──');
+    lines.push('');
+    for (const m of deciding) {
+      const o = m.outcomes!;
+      lines.push(`  ${m.method}:`);
+      lines.push(`    resolved, correct tool   ${pct(m.resolvedCorrectRate!).padEnd(6)} (${o.resolvedCorrect})`);
+      lines.push(`    resolved, wrong tool     ${pct(m.resolvedWrongRate!).padEnd(6)} (${o.resolvedWrong})`);
+      lines.push(`    needs-disambiguation     ${pct(m.needsDisambiguationRate!).padEnd(6)} (${o.needsDisambiguation})`);
+      lines.push(`    unresolved               ${pct(m.unresolvedRate!).padEnd(6)} (${o.unresolved})`);
+      if (o.throttled > 0) lines.push(`    throttled                ${o.throttled}`);
+    }
+    lines.push('');
+  }
 
   // Per-difficulty breakdown
   lines.push('── By Difficulty ──');

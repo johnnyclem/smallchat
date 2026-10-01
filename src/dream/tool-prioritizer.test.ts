@@ -52,14 +52,15 @@ describe('prioritizeTools', () => {
     expect(hints.demoted.has('broken_tool')).toBe(true);
   });
 
-  it('excludes tools with strong negative signals in memory', () => {
+  it('proposes (but does not apply) exclusion for strong negative signals in memory', () => {
     const mentions: MemoryToolMention[] = [
       { toolName: 'broken_tool', context: "avoid broken_tool — it's deprecated", sentiment: 'negative', source: 'a.md' },
       { toolName: 'broken_tool', context: "don't use broken_tool anymore", sentiment: 'negative', source: 'b.md' },
     ];
 
     const hints = prioritizeTools(mentions, [], knownTools);
-    expect(hints.excluded.has('broken_tool')).toBe(true);
+    expect(hints.excluded.has('broken_tool')).toBe(false);
+    expect(hints.proposedExclusions.has('broken_tool')).toBe(true);
   });
 
   it('combines usage stats and memory insights', () => {

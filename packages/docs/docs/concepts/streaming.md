@@ -8,13 +8,13 @@ import TabItem from '@theme/TabItem';
 
 # Streaming
 
-smallchat opens the actual provider stream. Dispatch resolves the intent once, then hands control straight to the LLM provider. Tokens arrive the moment they are generated. No waiting for the full result.
+Streaming is dispatch, one event at a time: the intent is resolved once, under the same dispatch policy as `dispatch()`, then the chosen tool runs and its output arrives as events. When the tool's transport streams tokens (`ToolTransport.supportsInference` / `executeInference`, e.g. an upstream tool that streams), they arrive as they are produced; otherwise the result comes as a chunk. smallchat calls no LLM provider itself: every token comes from the tool that runs.
 
 ## The three tiers
 
 | Tier | Method | Granularity | Use case |
 |------|--------|-------------|----------|
-| 1 | `inferenceStream` | Token-level deltas | Streaming LLM inference directly to the UI |
+| 1 | `inferenceStream` | Text: the tool's token deltas, or its result as one string | Streaming a tool's text straight to the UI |
 | 2 | `dispatchStream` | Chunk-level results | Tool results streamed in logical chunks |
 | 3 | `dispatch` | Completed result | Synchronous-style, wait for full output |
 
@@ -26,10 +26,9 @@ All three tiers share the same dispatch resolution path. The difference is only 
 <TabItem value="typescript" label="TypeScript">
 
 ```typescript
-import { ToolRuntime } from '@smallchat/core';
+import { loadRuntime } from '@smallchat/core';
 
-const runtime = new ToolRuntime({ ... });
-await runtime.load('./tools.json');
+const { runtime } = await loadRuntime('./tools.toolkit.json');
 
 for await (const event of runtime.dispatchStream('summarize this document', { url: '...' })) {
   switch (event.type) {
@@ -37,16 +36,18 @@ for await (const event of runtime.dispatchStream('summarize this document', { ur
       console.log('Resolving:', event.intent);
       break;
     case 'tool-start':
-      console.log('Invoking:', event.tool, 'on', event.provider);
+      console.log('Invoking:', event.toolId, `(${event.confidence})`);
       break;
     case 'chunk':
-      process.stdout.write(event.content);
+      console.log(event.content);
       break;
     case 'done':
-      console.log('\nDone.');
+      // An intent that did not resolve to one tool ends here with an
+      // isError result (metadata.outcome says why); nothing ran.
+      console.log(event.result.isError ? `Not run: ${event.result.metadata?.outcome}` : 'Done.');
       break;
     case 'error':
-      console.error('Error:', event.message);
+      console.error('Error:', event.error);
       break;
   }
 }

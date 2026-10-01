@@ -12,7 +12,6 @@
 // Core message representation — imported from shared types
 // ---------------------------------------------------------------------------
 
-import type { ConversationMessage } from '../types.js';
 export type { ConversationMessage } from '../types.js';
 export { normalizeTimestamp } from '../types.js';
 

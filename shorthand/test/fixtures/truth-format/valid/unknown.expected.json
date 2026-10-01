@@ -1,0 +1,53 @@
+{
+  "fold": {
+    "01J9UNKNOWNTB00000000000001": {
+      "type": "TB",
+      "status": "archived",
+      "current": false
+    },
+    "01J9UNKNOWNTB00000000000002": {
+      "type": "TB",
+      "status": "retracted",
+      "current": false
+    },
+    "01J9UNKNOWNTB00000000000003": {
+      "type": "TB",
+      "status": "active",
+      "current": true
+    },
+    "01J9UNKNOWNUV00000000000001": {
+      "type": "UV",
+      "status": "open",
+      "current": true
+    }
+  },
+  "import": [
+    {
+      "line": 1,
+      "outcome": "inserted",
+      "note": "an unknown field is ignored (and preserved by readers that re-serialize)"
+    },
+    {
+      "line": 2,
+      "outcome": "proposal",
+      "reason": "unknown-status"
+    },
+    {
+      "line": 3,
+      "outcome": "proposal",
+      "reason": "unknown-value",
+      "note": "evidence kind 'url'"
+    },
+    {
+      "line": 4,
+      "outcome": "proposal",
+      "reason": "unknown-value",
+      "note": "verifyBy kind 'query'"
+    },
+    {
+      "line": 5,
+      "outcome": "held",
+      "note": "status 'archived' is not one stenographer 1.0 knows; readers fold it and fail closed"
+    }
+  ]
+}

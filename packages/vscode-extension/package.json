@@ -2,7 +2,7 @@
   "name": "smallchat-vscode",
   "displayName": "smallchat",
   "description": "Syntax highlighting and intellisense for smallchat manifest files",
-  "version": "0.5.0",
+  "version": "1.0.0",
   "publisher": "smallchat",
   "engines": {
     "vscode": "^1.85.0"
@@ -26,7 +26,7 @@
     ],
     "jsonValidation": [
       {
-        "fileMatch": ["*-manifest.json", "*.toolkit.json", "smallchat.config.json"],
+        "fileMatch": ["*-manifest.json", "smallchat.config.json"],
         "url": "./schemas/manifest.schema.json"
       },
       {

@@ -51,6 +51,16 @@ describe('LamportClock', () => {
     expect(peeked.counter).toBe(2);
     expect(clock.current()).toBe(2); // unchanged
   });
+
+  it('observe() advances to a remote counter without ticking, and never goes back', () => {
+    const clock = new LamportClock('agent-A');
+    clock.observe(7);
+    expect(clock.current()).toBe(7);
+    clock.observe(7);
+    clock.observe(3);
+    expect(clock.current()).toBe(7);
+    expect(clock.tick().counter).toBe(8);
+  });
 });
 
 // ===========================================================================

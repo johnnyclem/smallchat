@@ -1,0 +1,184 @@
+{
+  "formatVersion": "1.0",
+  "embedder": {
+    "kind": "hash",
+    "model": "smallchat-hash-v1",
+    "modelSha256": null,
+    "dims": 16,
+    "maxLength": null,
+    "pooling": "none",
+    "normalize": true
+  },
+  "providers": {
+    "notes": {
+      "id": "notes",
+      "name": "Notes",
+      "transportType": "mcp",
+      "launch": {
+        "transport": "stdio",
+        "command": "notes-mcp",
+        "args": [
+          "--stdio"
+        ],
+        "env": [
+          "NOTES_TOKEN"
+        ]
+      }
+    }
+  },
+  "tools": {
+    "notes/create_note": {
+      "id": "notes/create_note",
+      "providerId": "notes",
+      "name": "create_note",
+      "title": "Create note",
+      "description": "Create a new note with a title and body",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        }
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false
+      },
+      "transportType": "mcp",
+      "selector": "notes.create_note",
+      "compilerHints": {
+        "aliases": [
+          "jot something down"
+        ]
+      }
+    },
+    "notes/delete_note": {
+      "id": "notes/delete_note",
+      "providerId": "notes",
+      "name": "delete_note",
+      "description": "Permanently delete a note by id",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true
+      },
+      "transportType": "mcp",
+      "selector": "notes.delete_note"
+    }
+  },
+  "selectors": {
+    "notes.create_note": {
+      "canonical": "notes.create_note",
+      "toolId": "notes/create_note",
+      "kind": "tool",
+      "vector": [
+        0.13168539106845856,
+        0,
+        0,
+        0,
+        0.5706366896629333,
+        0,
+        0,
+        0,
+        0.7023220658302307,
+        0,
+        0,
+        0.08779025822877884,
+        0.3950561583042145,
+        0,
+        0,
+        0
+      ]
+    },
+    "notes.create_note~alias~jot_something_down": {
+      "canonical": "notes.create_note~alias~jot_something_down",
+      "toolId": "notes/create_note",
+      "kind": "alias",
+      "vector": [
+        0.39391928911209106,
+        0,
+        0,
+        0,
+        0.26261287927627563,
+        0,
+        0.26261287927627563,
+        0,
+        0.7878385782241821,
+        0,
+        0.13130643963813782,
+        0,
+        0.26261287927627563,
+        0,
+        0,
+        0
+      ]
+    },
+    "notes.delete_note": {
+      "canonical": "notes.delete_note",
+      "toolId": "notes/delete_note",
+      "kind": "tool",
+      "vector": [
+        0.4888128936290741,
+        0,
+        0,
+        0,
+        0.7060630917549133,
+        0,
+        0,
+        0.10862509161233902,
+        0.32587528228759766,
+        0,
+        0,
+        0,
+        0.3801878094673157,
+        0,
+        0,
+        0
+      ]
+    }
+  },
+  "collisions": [
+    {
+      "selectorA": "notes.create_note",
+      "selectorB": "notes.delete_note",
+      "similarity": 0.8463399293979357,
+      "hint": "Collision zone (84.6%): \"notes.create_note\" and \"notes.delete_note\" — an intent near both may resolve to needs-disambiguation, or to the other tool. Consider distinct descriptions, a selectorHint, or calling them by tool id."
+    }
+  ],
+  "duplicates": [],
+  "stats": {
+    "toolCount": 2,
+    "selectorCount": 3,
+    "providerCount": 1,
+    "collisionCount": 1,
+    "duplicateCount": 0
+  },
+  "contentHash": "eb0df0508b6a8c4d4c3ae5be490419728db5d83a584412f4c3c17da7dce7d4dd"
+}

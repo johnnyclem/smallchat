@@ -167,3 +167,74 @@ describe('SqliteVectorIndex', () => {
     expect(results.length).toBeLessThanOrEqual(10);
   }, 30_000);
 });
+
+// ---------------------------------------------------------------------------
+// SC-INF-02 — vec0 defaulted to L2 distance, which search() read as cosine
+// ---------------------------------------------------------------------------
+
+describe('SC-INF-02: SqliteVectorIndex scores cosine distance', () => {
+  /** Unit vector at exactly `cos` from e0 (completed along e1). */
+  function atCosine(cos: number, dims: number): Float32Array {
+    const v = new Float32Array(dims);
+    v[0] = cos;
+    v[1] = Math.sqrt(1 - cos * cos);
+    return v;
+  }
+
+  it('returns 1 − cosine as the distance and filters on it', () => {
+    const index = new SqliteVectorIndex(':memory:', 384);
+    const q = atCosine(1, 384);
+    index.insert('near', atCosine(0.9, 384));
+    index.insert('far', atCosine(0.5, 384));
+
+    const results = index.search(q, 5, 0.6);
+    expect(results.map(r => r.id)).toEqual(['near']);
+    expect(results[0].distance).toBeCloseTo(0.1, 5);
+    index.close();
+  });
+
+  it('agrees with MemoryVectorIndex on non-identical vectors', async () => {
+    const { MemoryVectorIndex } = await import('./memory-vector-index.js');
+    const sqlite = new SqliteVectorIndex(':memory:', 384);
+    const memory = new MemoryVectorIndex();
+    for (let i = 0; i < 25; i++) {
+      const v = randomNormalizedVec(384);
+      sqlite.insert(`v${i}`, v);
+      memory.insert(`v${i}`, v);
+    }
+    const q = randomNormalizedVec(384);
+    const a = sqlite.search(q, 25, -1);
+    const b = memory.search(q, 25, -1);
+    expect(a.map(r => r.id)).toEqual(b.map(r => r.id));
+    for (let i = 0; i < a.length; i++) expect(a[i].distance).toBeCloseTo(b[i].distance, 5);
+    sqlite.close();
+  });
+
+  it('rebuilds an existing L2 table (0.x / pre-cosine databases) in place', async () => {
+    const { mkdtempSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const Database = (await import('better-sqlite3')).default;
+    const sqliteVec = await import('sqlite-vec');
+
+    const dir = mkdtempSync(join(tmpdir(), 'sc-vec-'));
+    const path = join(dir, 'old.db');
+    try {
+      const db = new Database(path);
+      sqliteVec.load(db);
+      db.exec('CREATE VIRTUAL TABLE vec_selectors USING vec0(id TEXT PRIMARY KEY, embedding FLOAT[4])');
+      const near = new Float32Array([0.9, Math.sqrt(1 - 0.81), 0, 0]);
+      db.prepare('INSERT INTO vec_selectors(id, embedding) VALUES (?, ?)').run('near', Buffer.from(near.buffer));
+      db.close();
+
+      const index = new SqliteVectorIndex(path, 4);
+      const results = index.search(new Float32Array([1, 0, 0, 0]), 1, 0.6);
+      expect(results.map(r => r.id)).toEqual(['near']);
+      expect(results[0].distance).toBeCloseTo(0.1, 5);
+      expect(index.size()).toBe(1);
+      index.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

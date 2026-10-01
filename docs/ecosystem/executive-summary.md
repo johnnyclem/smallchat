@@ -1,5 +1,36 @@
 # The Agent Stack: Executive Summary (SmallChat vantage point)
 
+> **Archived (pre-1.0 snapshot, July 2026).** This evaluation describes smallchat as it was
+> before 1.0. Its findings about this repository are out of date; corrected for 1.0 (XSUITE-16):
+>
+> - **npm and CI.** Only `@smallchat/core@0.1.0` (and `@smallchat/examples@0.1.0`) were ever
+>   published; 0.5.0 was not. The repo is at 1.0.0, unreleased. CI exists
+>   (`.github/workflows/ci.yml`: type check, tests, the shorthand mirror check and its suite,
+>   build, golden dispatch traces, the workspace packages and a packed-tarball install, on Node 22
+>   and 24). The suite has ~1,400 tests, plus ~680 in the `@shorthand/core` mirror.
+> - **Short-Hand is a dependency, not a vendored fork.** `@smallchat/core` depends on
+>   `@shorthand/core` `^1.0.0` from npm, published from the short-hand repository, which merged the
+>   former `smallchat/shorthand` copy into itself. `shorthand/` in this repo is a byte-for-byte
+>   mirror of that release (`scripts/sync-shorthand.mjs`, checked in CI), and its `repository` URL
+>   is the hyphenated `short-hand`. `@shorthand/core` 1.0 has no runtime dependencies; the ONNX
+>   embedding module exists only in smallchat's `src/embedding`.
+> - **The importance fork is gone.** `@smallchat/core/importance` re-exports
+>   `@shorthand/core/importance` unchanged.
+> - **The root entry no longer re-exports compaction, CRDT, truth, memex or dream.**
+>   `@smallchat/core/compaction`, `/crdt`, `/importance` and `/truth` exist in 1.x as deprecated
+>   re-exports of `@shorthand/core`; memex and dream are the experimental `@smallchat/core/memex`
+>   and `/dream` subpaths.
+> - **Stenographer is wired, by contract rather than code.** `@shorthand/core`'s truth module reads
+>   stenographer's Truth Format v2 and runs its golden fixtures; stenographer delivers objections
+>   to smallchat's channel bridge (`POST /event`, authenticated, `{channel, content, meta}`); the
+>   decision log is hash-chained like the truth format. Neither repo depends on the other's code.
+> - **The suite is six repositories**, not four: also smallchat-swift (which runs this repo's
+>   `spec/` vectors) and polytician.
+>
+> It is kept for its reasoning; see the [README](../../README.md) and
+> [CHANGELOG](../../CHANGELOG.md) for the current state. Claims about AgentVault and the other
+> projects were not re-verified.
+
 **Scope:** AgentVault, SmallChat, Stenographer, and Short-Hand — evaluated as a single ecosystem,
 from inside the `johnnyclem/smallchat` repository.
 
@@ -22,7 +53,7 @@ from inside the `johnnyclem/smallchat` repository.
 | Project | One-line role | Language | License | Maturity |
 |---|---|---|---|---|
 | **AgentVault** | Deploys AI agents to Internet Computer canisters for persistent, 24/7, sovereign execution | TypeScript / Motoko | MIT | Active, per AgentVault's own docs: 508 tests, v1.0 docs *(README-derived, not verified from here)* |
-| **SmallChat** (this repo) | Deterministic, in-process semantic tool dispatch — resolves a natural-language intent to the right tool via vector similarity, selector tables, and an auditable resolution proof | TypeScript (+ Swift port) | MIT | Public, `@smallchat/core` v0.5.0 on npm, ~1,250+ specs, no CI workflow configured in-repo |
+| **SmallChat** (this repo) | Deterministic, in-process semantic tool dispatch — resolves a natural-language intent to the right tool via vector similarity, selector tables, and an auditable resolution proof | TypeScript (+ Swift port) | MIT | *(pre-1.0 claim, corrected above: npm has only 0.1.0; CI exists)* Public, `@smallchat/core` v0.5.0 on npm, ~1,250+ specs, no CI workflow configured in-repo |
 | **Stenographer** | A passive "court reporter" that tails agent conversation logs and builds a searchable GraphRAG index (entities, relations, decisions) | TypeScript | — | Alpha (`0.1.0-alpha.2`), 0 stars, 10 commits *(README/repo-metadata only, not verified)* |
 | **Short-Hand** | Progressive, LSM-tree-style compaction of conversation history into a token-budgeted context frame | TypeScript | MIT | Public, npm package, v0.1.0 in the copy vendored here |
 
@@ -75,7 +106,7 @@ There is also a smaller, easy-to-fix metadata bug: the vendored `shorthand/packa
 **does not exist** as a public repository — only `https://github.com/johnnyclem/short-hand`
 (hyphenated) does. Anyone following that link from the vendored package metadata hits a 404.
 
-## Stenographer: still zero references, confirmed from this side too
+## Stenographer: still zero references, confirmed from this side too *(pre-1.0; see the correction above)*
 
 A case-insensitive search of this entire repository (source, tests, docs, `package.json`,
 `package-lock.json`, examples) for `stenograph` turns up nothing. AgentVault's docs reported the

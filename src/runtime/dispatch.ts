@@ -1,30 +1,43 @@
-import type { Embedder, ToolCandidate, ToolIMP, ToolProtocol, ToolResult, ToolSelector, VectorIndex, DispatchEvent, InferenceDelta } from '../core/types.js';
+import type { Embedder, ExecuteOptions, ToolIMP, ToolProtocol, ToolResult, ToolSelector, VectorIndex, DispatchEvent, InferenceDelta, InferenceStream, ToolRefinementNeeded, ValidationError } from '../core/types.js';
 import { ResolutionCache } from '../core/resolution-cache.js';
-import { SelectorTable, canonicalize, VectorFloodError } from '../core/selector-table.js';
+import { SelectorTable, intentKey, intentSelector } from '../core/selector-table.js';
+import { SemanticRateLimiter, DEFAULT_PRINCIPAL } from '../core/semantic-rate-limiter.js';
+import type { SemanticRateLimiterOptions } from '../core/semantic-rate-limiter.js';
 import { ToolClass } from '../core/tool-class.js';
-import { SCObject, wrapValue, unwrapValue } from '../core/sc-object.js';
-import type { OverloadResolutionResult } from '../core/overload-table.js';
+import { unwrapValue } from '../core/sc-object.js';
 import { SelectorNamespace } from '../core/selector-namespace.js';
-import { SignatureValidationError } from '../core/overload-table.js';
-import { validateNamedArgumentTypes } from '../core/sc-types.js';
+import { OverloadAmbiguityError, SignatureValidationError } from '../core/overload-table.js';
 import { IntentPinRegistry } from '../core/intent-pin.js';
-import type { IntentPinMatch } from '../core/intent-pin.js';
-import { computeTier, requiresVerification, requiresDecomposition, requiresRefinement, createProof, addProofStep, DEFAULT_THRESHOLDS } from '../core/confidence.js';
-import type { ConfidenceTier, ResolutionProof, TierThresholds } from '../core/confidence.js';
+import { compareRanked, computeTier, DEFAULT_THRESHOLDS, quantizeScore } from '../core/confidence.js';
+import type { ConfidenceTier, TierThresholds } from '../core/confidence.js';
+import { addProofStep, createProof, finalizeProof, proofClock } from '../core/proof.js';
+import type { CandidateSource, DecisionCode, ProofCandidate, ProofStage, ResolutionOutcome, ResolutionProof } from '../core/proof.js';
+import { cosineSimilarity } from '../core/vector-math.js';
+import { canonicalJson } from '../core/jcs.js';
+import { callDigest } from '../core/call-digest.js';
+import { compileArgumentValidator, InputSchemaError } from '../core/argument-validator.js';
+import type { ArgumentCoercion } from '../core/argument-validator.js';
 import type { LLMClient, ToolSummary } from '../core/llm-client.js';
 import { NULL_LLM_CLIENT } from '../core/llm-client.js';
 import { verify } from './verification.js';
-import type { VerificationResult } from './verification.js';
 import { decompose, executeDecomposition } from './decomposition.js';
-import { refine, buildRefinementResult } from './refinement.js';
+import type { DecompositionResult } from './decomposition.js';
+import { refine } from './refinement.js';
 import { DispatchObserver } from './observer.js';
-import type { ObserverOptions } from './observer.js';
+import type { DispatchFeedback, ObserverOptions } from './observer.js';
 import { SemanticMap } from './semantic-map.js';
 import type { SemanticMapOptions, LearnedPreference } from './semantic-map.js';
+import { evaluateDispatchPolicy, isDestructive } from './policy.js';
+import type { DispatchPolicyOptions, PinState, PolicyCode, PolicyVerdict } from './policy.js';
+import type { DecisionExecution, DecisionKind, DecisionLog } from './decision-log.js';
 
 /**
  * UnrecognizedIntent — doesNotRecognizeSelector: equivalent.
- * Thrown when no tool anywhere in the registry can handle an intent.
+ *
+ * @deprecated Never thrown by the 1.0 runtime: an intent that matches
+ * nothing is a result with `metadata.outcome: 'unresolved'` (and
+ * `DispatchBuilder.execContent()` throws `DispatchError`). Kept for code
+ * that checks `instanceof`; removed in a later major version.
  */
 export class UnrecognizedIntent extends Error {
   selector: ToolSelector;
@@ -59,34 +72,12 @@ export class UnrecognizedIntent extends Error {
 }
 
 /**
- * FallbackStep — a single step in the fallback chain, recording what was tried.
- */
-export interface FallbackStep {
-  strategy: 'superclass' | 'broadened_search' | 'llm_disambiguate';
-  tried: string;
-  result: 'hit' | 'miss';
-}
-
-/**
- * FallbackChainResult — returned instead of throwing when no exact match is found.
- * Contains the resolution attempt trace and either a resolved tool or a stub
- * inviting the caller to search further.
- */
-export interface FallbackChainResult {
-  tool: string;
-  message: string;
-  intent: string;
-  nearestSelectors: Array<{ id: string; distance: number }>;
-  fallbackSteps: FallbackStep[];
-}
-
-/**
- * DispatchConfig — configuration for 0.4.0 dispatch features.
+ * DispatchConfig — configuration for dispatch features.
  */
 export interface DispatchConfig {
-  /** LLM client for Pillars 2c, 3, 4 (optional — features degrade without it) */
+  /** LLM client for verification, decomposition, refinement (optional — features degrade without it) */
   llmClient?: LLMClient;
-  /** Enable --strict mode: verify all dispatches, treat ambiguity as error */
+  /** Strict mode: verify every dispatch below EXACT, and raise the search floor to MEDIUM */
   strict?: boolean;
   /** Custom tier thresholds */
   thresholds?: TierThresholds;
@@ -97,25 +88,90 @@ export interface DispatchConfig {
   /** Options for the semantic map, when one is not supplied */
   semanticMapOptions?: SemanticMapOptions;
   /**
-   * When true, and no LLMClient is configured, resolutions that land in the
-   * MEDIUM or LOW confidence tiers defer to the refinement protocol (ask the
-   * user) instead of auto-dispatching the best vector match. Without an
-   * LLMClient, verification degrades to schema-only and decomposition can't
-   * run, so both tiers otherwise fall through to execution — safe for
-   * read-only tools, a footgun for write/destructive ones. Defaults to
-   * false to preserve prior behavior.
+   * Below HIGH confidence (MEDIUM/LOW), auto-dispatch a resolved tool only
+   * when an LLM verifier (LLMClient.microCheck) approved it for the intent.
+   * Without approval the outcome is needs-disambiguation. Default true.
+   * Set false to restore 0.x behaviour (schema/keyword verification only).
    */
   requireLLMForSubHighDispatch?: boolean;
+  /**
+   * Treat tools without any MCP annotations as destructive (they then run
+   * only by exact id, a pinned phrase or EXACT similarity). Default false.
+   */
+  treatUnannotatedAsDestructive?: boolean;
+  /** Type coercion applied before argument validation. Default 'none'. */
+  argumentCoercion?: ArgumentCoercion;
+  /** contentHash of the artifact the tools came from — recorded in every proof */
+  artifactHash?: string;
+  /**
+   * Opt-in semantic rate limiting of novel intents, per principal (see
+   * SemanticRateLimiter). Off when unset.
+   */
+  rateLimiter?: SemanticRateLimiterOptions;
+  /**
+   * How many levels deep LOW-tier decomposition may go: sub-intents of the
+   * dispatched intent are depth 1, theirs depth 2, and so on. A dispatch at
+   * this depth is never decomposed further. Default 2.
+   */
+  maxDecompositionDepth?: number;
+  /**
+   * Cap on sub-intents dispatched (at any depth) for one top-level
+   * dispatch; the rest are reported as not dispatched. Default 16.
+   */
+  maxSubDispatches?: number;
+  /**
+   * Append-only decision log: one hash-chained line per resolve(),
+   * dispatch and dispatch by id, written before anything executes (see
+   * runtime/decision-log.ts). Off when unset.
+   */
+  decisionLog?: DecisionLog;
+}
+
+/**
+ * `metadata.outcome` of a dispatch result: a ResolutionOutcome, or
+ * - 'invalid-arguments': the arguments failed the tool's inputSchema;
+ * - 'aborted': the caller's signal fired before the tool started;
+ * - 'not-dispatched': a decomposition sub-intent past the sub-dispatch limit
+ *   (inside a decomposed result's content).
+ * Only 'resolved' means a tool ran; its own failure is `isError: true` with
+ * outcome 'resolved'. Every other outcome ran nothing and is `isError: true`.
+ */
+export type DispatchOutcome = ResolutionOutcome | 'invalid-arguments' | 'aborted' | 'not-dispatched';
+
+/** Per-dispatch options. */
+export interface DispatchOptions {
+  /**
+   * Who the dispatch is for (an MCP session, user or API key). Scopes the
+   * semantic rate limiter and principal-scoped feedback. Default: the
+   * shared DEFAULT_PRINCIPAL.
+   */
+  principal?: string;
+  /**
+   * Aborts the dispatch: nothing executes once it has fired, and the
+   * running tool receives it (ToolIMP.execute options.signal).
+   */
+  signal?: AbortSignal;
+}
+
+/** Default decomposition depth bound (DispatchConfig.maxDecompositionDepth). */
+export const DEFAULT_MAX_DECOMPOSITION_DEPTH = 2;
+/** Default cap on sub-dispatches per request (DispatchConfig.maxSubDispatches). */
+export const DEFAULT_MAX_SUB_DISPATCHES = 16;
+
+/** One executable tool in the dispatch registry. */
+export interface RegisteredTool {
+  /** Canonical tool id `<providerId>/<toolName>` */
+  id: string;
+  imp: ToolIMP;
+  /** Selector canonicals that dispatch to this tool */
+  selectors: string[];
 }
 
 /**
  * DispatchContext — the runtime context for tool dispatch.
  *
  * Holds the selector table, resolution cache, tool classes (providers),
- * vector index, and protocol registry. This is the environment in which
- * toolkit_dispatch operates.
- *
- * 0.4.0: Now includes LLM client, observer, and strict mode config.
+ * vector index, protocol registry, and the dispatch policy configuration.
  */
 export class DispatchContext {
   readonly selectorTable: SelectorTable;
@@ -130,22 +186,30 @@ export class DispatchContext {
   readonly strict: boolean;
   readonly thresholds: TierThresholds;
   readonly requireLLMForSubHighDispatch: boolean;
+  readonly treatUnannotatedAsDestructive: boolean;
+  readonly argumentCoercion: ArgumentCoercion;
+  readonly artifactHash: string | null;
+  /** Opt-in semantic rate limiter (null when RuntimeOptions.rateLimiter is unset) */
+  readonly rateLimiter: SemanticRateLimiter | null;
+  readonly maxDecompositionDepth: number;
+  readonly maxSubDispatches: number;
+  /** Decision log every decision is appended to (null when off) */
+  readonly decisionLog: DecisionLog | null;
 
   private toolClasses: Map<string, ToolClass> = new Map();
   private protocols: Map<string, ToolProtocol> = new Map();
   /**
-   * Dispatch index — selector canonical → the classes that declare it.
-   *
-   * The inline-cache analogue for resolution: instead of re-scanning every
-   * registered class for every vector match (O(matches × classes)), the hot
-   * path consults only the classes that actually own the matched selector.
-   * This is what lets the registry scale to thousands of tools.
+   * Dispatch index — selector canonical → the classes that declare it
+   * (directly or through a superclass). The hot path consults only the
+   * classes that own a matched selector.
    */
   private selectorToClasses: Map<string, ToolClass[]> = new Map();
+  /** Tool index — canonical tool id → the one IMP it names (O(1) dispatch by id) */
+  private toolsById: Map<string, RegisteredTool> = new Map();
+  /** Ids claimed by two different IMPs; dispatch by such an id is refused */
+  private ambiguousIds: Set<string> = new Set();
   /** Memoized tool summaries for LLM-powered features; invalidated on registry mutation */
   private toolSummariesCache: ToolSummary[] | null = null;
-  /** Reentrancy guard so the forwarding chain's decomposition can't loop forever */
-  private inForwardDecompose = false;
 
   constructor(
     selectorTable: SelectorTable,
@@ -165,14 +229,34 @@ export class DispatchContext {
     this.llmClient = dispatchConfig?.llmClient ?? NULL_LLM_CLIENT;
     this.strict = dispatchConfig?.strict ?? false;
     this.thresholds = dispatchConfig?.thresholds ?? { ...DEFAULT_THRESHOLDS };
-    this.requireLLMForSubHighDispatch = dispatchConfig?.requireLLMForSubHighDispatch ?? false;
+    this.requireLLMForSubHighDispatch = dispatchConfig?.requireLLMForSubHighDispatch ?? true;
+    this.treatUnannotatedAsDestructive = dispatchConfig?.treatUnannotatedAsDestructive ?? false;
+    this.argumentCoercion = dispatchConfig?.argumentCoercion ?? 'none';
+    this.artifactHash = dispatchConfig?.artifactHash ?? null;
+    this.rateLimiter = dispatchConfig?.rateLimiter ? new SemanticRateLimiter(dispatchConfig.rateLimiter) : null;
+    this.maxDecompositionDepth = dispatchConfig?.maxDecompositionDepth ?? DEFAULT_MAX_DECOMPOSITION_DEPTH;
+    this.maxSubDispatches = dispatchConfig?.maxSubDispatches ?? DEFAULT_MAX_SUB_DISPATCHES;
+    this.decisionLog = dispatchConfig?.decisionLog ?? null;
     this.observer = new DispatchObserver(dispatchConfig?.observerOptions);
     this.semanticMap = dispatchConfig?.semanticMap
       ?? new SemanticMap(dispatchConfig?.semanticMapOptions);
   }
 
+  /** The policy options every dispatch path evaluates against. */
+  get policyOptions(): DispatchPolicyOptions {
+    return {
+      thresholds: this.thresholds,
+      requireLLMForSubHighDispatch: this.requireLLMForSubHighDispatch,
+      treatUnannotatedAsDestructive: this.treatUnannotatedAsDestructive,
+    };
+  }
+
   /**
-   * Register a provider (ToolClass).
+   * Register a provider (ToolClass). A class with the same name replaces
+   * the one registered before (hot reload): its selectors and tool ids are
+   * re-indexed from scratch, so nothing of the old class stays reachable.
+   * Cached resolutions are flushed either way — a new tool may now be the
+   * better match for an intent cached before it existed.
    *
    * Throws SelectorShadowingError if the class contains selectors that
    * would shadow protected core selectors.
@@ -182,18 +266,51 @@ export class DispatchContext {
     const ownSelectors = Array.from(toolClass.dispatchTable.keys());
     this.selectorNamespace.assertNoShadowing(toolClass.name, ownSelectors);
 
+    const replaces = this.toolClasses.has(toolClass.name);
     this.toolClasses.set(toolClass.name, toolClass);
-    this.indexClass(toolClass);
+    if (replaces) this.reindex();
+    else this.indexClass(toolClass);
+    this.cache.flush();
   }
 
-  /** Index a class's selectors → owning class, and invalidate the summary cache. */
+  /**
+   * Remove a provider by name: its tools leave the dispatch index and
+   * every cached resolution is flushed. Returns false when no class has
+   * that name.
+   */
+  unregisterClass(name: string): boolean {
+    if (!this.toolClasses.delete(name)) return false;
+    this.reindex();
+    this.cache.flush();
+    return true;
+  }
+
+  /** Index a class's selectors → owning class and its tools by id; invalidate summaries. */
   private indexClass(toolClass: ToolClass): void {
-    for (const canonical of toolClass.dispatchTable.keys()) {
+    for (const canonical of new Set(toolClass.allSelectors())) {
       const owners = this.selectorToClasses.get(canonical) ?? [];
       if (!owners.includes(toolClass)) owners.push(toolClass);
       this.selectorToClasses.set(canonical, owners);
+
+      const imp = toolClass.resolveSelector({ canonical } as ToolSelector);
+      if (imp) this.indexTool(imp, canonical);
+    }
+    for (const table of toolClass.overloadTables.values()) {
+      for (const entry of table.allOverloads()) this.indexTool(entry.imp, table.selectorCanonical);
     }
     this.toolSummariesCache = null;
+  }
+
+  private indexTool(imp: ToolIMP, selector: string): void {
+    const id = toolIdOf(imp);
+    const existing = this.toolsById.get(id);
+    if (!existing) {
+      this.toolsById.set(id, { id, imp, selectors: [selector] });
+    } else if (existing.imp === imp) {
+      if (!existing.selectors.includes(selector)) existing.selectors.push(selector);
+    } else {
+      this.ambiguousIds.add(id);
+    }
   }
 
   /**
@@ -202,6 +319,8 @@ export class DispatchContext {
    */
   reindex(): void {
     this.selectorToClasses.clear();
+    this.toolsById.clear();
+    this.ambiguousIds.clear();
     for (const toolClass of this.toolClasses.values()) this.indexClass(toolClass);
     this.toolSummariesCache = null;
   }
@@ -212,19 +331,55 @@ export class DispatchContext {
   }
 
   /**
-   * Resolve a canonical selector id to a concrete IMP + selector, if any
-   * registered class still owns it. Used by the semantic map to turn a learned
-   * preference back into an executable dispatch. Returns null if the selector
-   * has since been unregistered (a stale learned preference).
+   * The tool a canonical id names, or undefined when no tool has that id
+   * (or two different tools claim it). O(1); no embedding.
    */
-  resolveLearnedSelector(selectorId: string): { imp: ToolIMP; selector: ToolSelector } | null {
-    const selector = this.selectorTable.get(selectorId);
+  getTool(toolId: string): RegisteredTool | undefined {
+    if (this.ambiguousIds.has(toolId)) return undefined;
+    return this.toolsById.get(toolId);
+  }
+
+  /** Whether two different tools claim this id (dispatch by it is refused). */
+  isAmbiguousToolId(toolId: string): boolean {
+    return this.ambiguousIds.has(toolId);
+  }
+
+  /** Every registered tool id, sorted. */
+  toolIds(): string[] {
+    return [...this.toolsById.keys()].filter(id => !this.ambiguousIds.has(id)).sort();
+  }
+
+  /** The tool a selector canonical dispatches to (its first owning class), if any. */
+  toolForSelector(canonical: string): { imp: ToolIMP; selector: ToolSelector; toolId: string } | null {
+    const selector = this.selectorTable.get(canonical);
     if (!selector) return null;
-    for (const toolClass of this.classesForSelector(selectorId)) {
+    for (const toolClass of this.classesForSelector(canonical)) {
       const imp = toolClass.resolveSelector(selector);
-      if (imp) return { imp, selector };
+      if (imp) return { imp, selector, toolId: toolIdOf(imp) };
     }
     return null;
+  }
+
+  /** Whether `selectorId` dispatches to the tool `toolId` (as default, overload or in any class). */
+  selectorReachesTool(selectorId: string, toolId: string): boolean {
+    return this.getTool(toolId)?.selectors.includes(selectorId) ?? false;
+  }
+
+  /**
+   * Resolve a learned preference to a concrete IMP + selector. With
+   * `toolId`, that exact tool, provided the selector still dispatches to it;
+   * without, the selector's default tool (its first owning class). Returns
+   * null if the selector or tool has since been unregistered (a stale
+   * learned preference).
+   */
+  resolveLearnedSelector(selectorId: string, toolId?: string): { imp: ToolIMP; selector: ToolSelector } | null {
+    if (toolId !== undefined) {
+      const selector = this.selectorTable.get(selectorId);
+      const tool = this.getTool(toolId);
+      return selector && tool && tool.selectors.includes(selectorId) ? { imp: tool.imp, selector } : null;
+    }
+    const found = this.toolForSelector(selectorId);
+    return found ? { imp: found.imp, selector: found.selector } : null;
   }
 
   /**
@@ -232,12 +387,34 @@ export class DispatchContext {
    *
    * Called when the user resolves a refinement by choosing one of the deferred
    * options. Embeds the original (unresolvable) intent and records a mapping to
-   * the chosen selector so that the exact intent resolves instantly next time,
-   * and *similar* intents get a confidence boost toward the same selector.
+   * the chosen selector — and, with `toolId`, the tool chosen through it (an
+   * overload variant, or one of several classes declaring the selector) — so
+   * that the exact intent resolves to that tool instantly next time, and
+   * *similar* intents get a confidence boost toward it. Throws when `toolId`
+   * is given and the selector does not dispatch to it. Learned preferences
+   * never authorize a pinned or destructive tool: the dispatch policy
+   * requires an exact phrase or EXACT similarity for those.
    */
-  async reinforceRefinement(originalIntent: string, selectorId: string): Promise<LearnedPreference> {
-    const selector = await this.selectorTable.resolve(originalIntent);
-    return this.semanticMap.reinforce(canonicalize(originalIntent), selector.vector, selectorId);
+  async reinforceRefinement(originalIntent: string, selectorId: string, toolId?: string): Promise<LearnedPreference> {
+    if (toolId !== undefined && !this.selectorReachesTool(selectorId, toolId)) {
+      throw new Error(`Selector "${selectorId}" does not dispatch to tool "${toolId}"`);
+    }
+    const vector = await this.embedder.embed(originalIntent);
+    const preference = this.semanticMap.reinforce(originalIntent, vector, selectorId, Date.now(), toolId);
+    // A learned boost can change how nearby intents rank.
+    this.cache.flush();
+    return preference;
+  }
+
+  /**
+   * Explicit feedback about an intent → tool decision (see
+   * DispatchObserver.feedback). `correct: false` keeps resolution from
+   * choosing that tool for that intent (for `principal` only, when given);
+   * `correct: true` clears it. Cached resolutions are flushed.
+   */
+  feedback(input: DispatchFeedback): void {
+    this.observer.feedback(input);
+    this.cache.flush();
   }
 
   /**
@@ -266,7 +443,7 @@ export class DispatchContext {
   }
 
   /** ISA chain — check protocol conformance for a selector */
-  resolveViaProtocol(selector: ToolSelector): ToolCandidate | null {
+  resolveViaProtocol(selector: ToolSelector): { imp: ToolIMP; confidence: number; selector: ToolSelector } | null {
     for (const [, toolClass] of this.toolClasses) {
       for (const protocol of toolClass.protocols) {
         const isRequired = protocol.requiredSelectors.some(
@@ -288,744 +465,1059 @@ export class DispatchContext {
   }
 
   /**
-   * Forwarding chain — slow path when no compiled tool matches.
-   *
-   * Instead of throwing immediately, walks a fallback chain:
-   *  1. Superclass traversal — check superclass dispatch tables across all classes
-   *  2. Broadened vector search — lower the similarity threshold to find near-misses
-   *  3. LLM disambiguation stub — placeholder for Phase 3 LLM-assisted resolution
-   *  4. Return a stub result inviting the caller to search, rather than crashing
+   * The pinned canonicals that apply to a tool: every pinned selector the
+   * tool is reachable through — its own selectors, the overload tables it
+   * is a variant in (whichever class declares them), and `via`, the
+   * selector a candidate matched through.
    */
-  async forward(
-    selector: ToolSelector,
+  private pinnedCanonicalsOf(toolId: string, via?: string): string[] {
+    if (this.intentPins.size === 0) return [];
+    const reachable = new Set(this.toolsById.get(toolId)?.selectors ?? []);
+    if (via !== undefined) reachable.add(via);
+    return this.intentPins.pinnedCanonicals().filter(c => reachable.has(c));
+  }
+
+  /**
+   * How the intent pins apply to one tool for one intent (see
+   * pinnedCanonicalsOf; `via` is the selector the candidate matched
+   * through). `ownSimilarity` computes the cosine similarity between the
+   * intent's own embedding and a selector (for 'elevated' pins).
+   */
+  async pinStatesFor(
+    toolId: string,
     intent: string,
-    args?: Record<string, unknown>,
-  ): Promise<ToolResult> {
-    const fallbackSteps: FallbackStep[] = [];
-
-    // Step 1: SUPERCLASS TRAVERSAL — walk isa chains for a match
-    for (const toolClass of this.getClasses()) {
-      if (!toolClass.superclass) continue;
-
-      const imp = toolClass.superclass.resolveSelector(selector);
-      if (imp) {
-        fallbackSteps.push({
-          strategy: 'superclass',
-          tried: `${toolClass.name} → ${toolClass.superclass.name}`,
-          result: 'hit',
-        });
-        this.cache.store(selector, imp, 0.6);
-        return executeWithArgs(imp, args ?? {});
+    ownSimilarity: (selector: ToolSelector) => Promise<number>,
+    via?: string,
+  ): Promise<PinState[]> {
+    const states: PinState[] = [];
+    for (const canonical of this.pinnedCanonicalsOf(toolId, via)) {
+      const pin = this.intentPins.getPin(canonical)!;
+      const phrase = this.intentPins.matchesPinnedPhrase(canonical, intent);
+      if (pin.policy === 'exact') {
+        states.push({ canonical, policy: 'exact', satisfied: phrase });
+        continue;
       }
-
-      fallbackSteps.push({
-        strategy: 'superclass',
-        tried: `${toolClass.name} → ${toolClass.superclass.name}`,
-        result: 'miss',
+      const pinnedSelector = this.selectorTable.get(canonical);
+      const similarity = phrase ? null : pinnedSelector ? await ownSimilarity(pinnedSelector) : null;
+      const verdict = this.intentPins.checkSimilarity(canonical, similarity ?? 0, intent);
+      states.push({
+        canonical,
+        policy: 'elevated',
+        satisfied: phrase || verdict?.verdict === 'accept',
+        similarity,
+        requiredThreshold: verdict?.requiredThreshold,
       });
     }
+    return states;
+  }
 
-    // Step 2: BROADENED SEARCH — lower threshold to find near-misses
-    const broadMatches = await this.selectorTable.searchTools(selector.vector, 5, 0.5);
-    if (broadMatches.length > 0) {
-      // Try to resolve the best broad match
-      for (const match of broadMatches) {
-        const matchSelector = this.selectorTable.get(match.id);
-        if (!matchSelector) continue;
+  /** Whether any intent pin applies to this tool (see pinnedCanonicalsOf). */
+  isPinnedTool(toolId: string, via?: string): boolean {
+    return this.pinnedCanonicalsOf(toolId, via).length > 0;
+  }
 
-        for (const toolClass of this.classesForSelector(match.id)) {
-          const imp = toolClass.resolveSelector(matchSelector);
-          if (imp) {
-            fallbackSteps.push({
-              strategy: 'broadened_search',
-              tried: `${match.id} (distance: ${match.distance.toFixed(3)})`,
-              result: 'hit',
-            });
-            const confidence = toConfidence(match.distance);
-            this.cache.store(selector, imp, confidence);
-            return executeWithArgs(imp, args ?? {});
-          }
-        }
-      }
-
-      fallbackSteps.push({
-        strategy: 'broadened_search',
-        tried: broadMatches.map(m => m.id).join(', '),
-        result: 'miss',
-      });
-    }
-
-    // Step 3: LLM DISAMBIGUATION — decompose an unrecognized compound intent.
-    //
-    // This is the genuinely-missing capability at this depth: refinement has
-    // already been tried before forwarding, but decomposition (breaking the
-    // intent into sub-intents and dispatching each through the normal pipeline)
-    // is otherwise only attempted in the LOW tier. The reentrancy guard stops a
-    // pathological LLM from looping forward → decompose → forward forever.
-    if (this.llmClient !== NULL_LLM_CLIENT && this.llmClient.decompose && !this.inForwardDecompose) {
-      const decompResult = await decompose(intent, this.getToolSummaries(), this.llmClient);
-      if (decompResult.decomposed) {
-        this.inForwardDecompose = true;
-        try {
-          const execResult = await executeDecomposition(
-            decompResult,
-            (subIntent, subArgs) => toolkit_dispatch(this, subIntent, subArgs),
-          );
-          fallbackSteps.push({
-            strategy: 'llm_disambiguate',
-            tried: `decompose → ${decompResult.subIntents.length} sub-intents (${decompResult.strategy})`,
-            result: 'hit',
-          });
-          return {
-            content: execResult.content,
-            isError: execResult.isError,
-            metadata: { ...execResult.metadata, fallback: true, fallbackSteps },
-          };
-        } finally {
-          this.inForwardDecompose = false;
-        }
-      }
-      fallbackSteps.push({
-        strategy: 'llm_disambiguate',
-        tried: 'decompose (no sub-intents produced)',
-        result: 'miss',
-      });
-    } else {
-      fallbackSteps.push({
-        strategy: 'llm_disambiguate',
-        tried: this.inForwardDecompose ? 'decompose (skipped — already decomposing)' : 'no llm client',
-        result: 'miss',
-      });
-    }
-
-    // Step 4: Return a stub instead of throwing
-    const nearest = await this.selectorTable.searchTools(selector.vector, 3, 0.5);
-
-    const fallbackResult: FallbackChainResult = {
-      tool: 'unknown',
-      message: nearest.length > 0
-        ? `No exact match for "${intent}". Nearest: ${nearest.map(n => n.id).join(', ')}. Want me to search?`
-        : `No match for "${intent}"—want me to search?`,
-      intent,
-      nearestSelectors: nearest,
-      fallbackSteps,
-    };
-
-    return {
-      content: fallbackResult,
-      isError: false,
-      metadata: {
-        fallback: true,
-        stepsAttempted: fallbackSteps.length,
-        fallbackSteps,
+  /** A new proof stamped with this context's thresholds, guards and identity. */
+  newProof(intent: string | null): ResolutionProof {
+    return createProof(intent, {
+      thresholds: this.thresholds,
+      guards: {
+        requireLLMForSubHighDispatch: this.requireLLMForSubHighDispatch,
+        strict: this.strict,
+        llmVerifier: typeof this.llmClient.microCheck === 'function',
+        treatUnannotatedAsDestructive: this.treatUnannotatedAsDestructive,
       },
-    };
+      embedder: this.embedder.fingerprint ?? null,
+      artifactHash: this.artifactHash,
+    });
   }
 
   /** Get all registered tool classes */
   getClasses(): ToolClass[] {
     return Array.from(this.toolClasses.values());
   }
+
+  /**
+   * Append a decision to the decision log, if one is configured. Throws
+   * DecisionLogError when the line cannot be written — callers record
+   * before executing, so nothing runs unrecorded.
+   */
+  logDecision(kind: DecisionKind, proof: ResolutionProof, execution: DecisionExecution, principal?: string, toolId?: string): void {
+    this.decisionLog?.record({ kind, proof, execution, ...(principal !== undefined ? { principal } : {}), ...(toolId !== undefined ? { toolId } : {}) });
+  }
 }
 
-/**
- * ResolutionOutcome — the result of the shared resolve phase.
- *
- * Either a resolved IMP ready for execution, or a forwarded ToolResult
- * from the fallback chain (no IMP to execute).
- *
- * 0.4.0: Now includes confidence tier and resolution proof.
- */
-type ResolutionOutcome =
-  | {
-      kind: 'resolved';
-      imp: ToolIMP;
-      confidence: number;
-      tier: ConfidenceTier;
-      selector: ToolSelector;
-      candidates: ToolCandidate[];
-      proof: ResolutionProof;
-    }
-  | {
-      kind: 'forwarded';
-      result: ToolResult;
-      proof: ResolutionProof;
-    }
-  | {
-      kind: 'decomposed';
-      result: ToolResult;
-      proof: ResolutionProof;
-    }
-  | {
-      kind: 'refined';
-      result: ToolResult;
-      proof: ResolutionProof;
-    };
+/** Canonical tool id of an IMP: `<providerId>/<toolName>`. */
+export function toolIdOf(imp: Pick<ToolIMP, 'providerId' | 'toolName'>): string {
+  return `${imp.providerId}/${imp.toolName}`;
+}
+
+// ---------------------------------------------------------------------------
+// Resolution — pure: chooses a tool (or refuses to), never executes
+// ---------------------------------------------------------------------------
+
+export interface ResolveOptions {
+  /**
+   * Record what resolution learns: cache a HIGH/EXACT result under this
+   * intent's identity key (intentKey), and consult that cache. Default
+   * false for `runtime.resolve()`, which then changes nothing in the
+   * runtime beyond the (opt-in) rate limiter's window; `dispatch()`
+   * resolves with learning on. Intents are never interned either way.
+   */
+  learn?: boolean;
+  /**
+   * The arguments the call will carry, when known. Used to choose among
+   * overloads and by verification's required-parameter check.
+   */
+  args?: Record<string, unknown>;
+  /** Who is asking — scopes the rate limiter and feedback (DispatchOptions.principal) */
+  principal?: string;
+}
+
+/** One ranked candidate of a resolution. */
+export type ResolutionCandidate = ProofCandidate;
+
+/** What `resolve(intent)` decided. Nothing has executed. */
+export interface Resolution {
+  outcome: ResolutionOutcome;
+  intent: string;
+  /** Tier of the chosen (or best) candidate */
+  tier: ConfidenceTier;
+  /** Canonical tool id resolution chose — present only when outcome is 'resolved' */
+  chosen?: string;
+  /** Score of the chosen candidate */
+  confidence?: number;
+  /** Eligible candidates, best first (excluded ones are listed in the proof) */
+  candidates: ResolutionCandidate[];
+  proof: ResolutionProof;
+  /** Why the runtime would not pick a tool on its own (needs-disambiguation / unresolved / throttled) */
+  reason?: string;
+  /** Options to present to the user; each carries a toolId for dispatchById */
+  refinement?: ToolRefinementNeeded;
+  /** outcome 'throttled': milliseconds until this principal may try again */
+  retryAfterMs?: number;
+}
+
+interface Candidate {
+  imp: ToolIMP;
+  toolId: string;
+  /** The tool selector the candidate matched through */
+  selector: ToolSelector;
+  /** Quantized score (quantizeScore) */
+  score: number;
+  similarity: number | null;
+  source: CandidateSource;
+}
+
+interface InternalResolution {
+  resolution: Resolution;
+  /** The chosen IMP when resolved */
+  imp: ToolIMP | null;
+  /** Set when dispatch should run a decomposition instead of one tool */
+  decomposition: DecompositionResult | null;
+}
+
+interface ResolveRun {
+  learn: boolean;
+  args?: Record<string, unknown>;
+  principal?: string;
+  /** Dispatch (not resolve) may decompose LOW-tier / unmatched intents */
+  allowDecomposition: boolean;
+  /** Decomposition depth of this dispatch (sub-intents are depth + 1) */
+  depth: number;
+  /** intentKeys of the intents this one was decomposed from */
+  ancestors: readonly string[];
+}
+
+/** Nearest tools offered as refinement options start at this similarity. */
+const REFINEMENT_FLOOR = 0.3;
+
+/** How many vector matches resolution considers. */
+const SEARCH_TOP_K = 5;
 
 /**
- * Convert a vector distance into a confidence score, clamped to [0, 1].
- *
- * Some backends can return a cosine distance greater than 1 (vectors more
- * than orthogonal); without the clamp that would yield a negative confidence
- * and corrupt tier computation. Confidence is never negative.
+ * Convert a vector distance into a confidence score: 1 − distance,
+ * clamped to [0, 1] and quantized (quantizeScore), so that backends that
+ * differ in the last bits of a distance produce the same score.
  */
 function toConfidence(distance: number): number {
-  return Math.max(0, 1 - distance);
+  return quantizeScore(1 - distance);
+}
+
+/** The decision code recorded when the policy refuses a candidate. */
+function denial(verdict: PolicyVerdict): DecisionCode {
+  return verdict.code as Exclude<PolicyCode, 'allow'>;
+}
+
+/** Candidates ranked by quantized score, ties broken by canonical tool id. */
+function rank(candidates: Candidate[]): Candidate[] {
+  return [...candidates].sort(compareRanked);
 }
 
 /**
- * resolveToolIMP — shared resolution logic for both sync and streaming dispatch.
+ * Resolve an intent to at most one tool. Never executes anything.
  *
- * 0.4.0 resolution order:
- * 1. Cache lookup (sub-millisecond)
- * 2. Overload resolution (if args provided and overloads exist)
- * 3. Dispatch table via vector similarity (milliseconds)
- * 4. Confidence-tiered branching:
- *    - EXACT/HIGH: dispatch immediately
- *    - MEDIUM: pre-flight verification (Pillar 2)
- *    - LOW: intent decomposition (Pillar 3)
- *    - NONE: refinement protocol (Pillar 4)
- * 5. ISA chain / protocol conformance
- * 6. Forwarding chain (expensive, self-healing)
+ * Order: pinned phrase → learned exact intent → cache → (rate limit) →
+ * ranked candidates (vector and overload matches, learned similar-intent
+ * boosts, protocol conformance). Every candidate passes the pin gate; the
+ * chosen one passes verification (below HIGH, or in strict mode) and the
+ * dispatch policy (runtime/policy.ts). Anything the policy refuses is
+ * needs-disambiguation.
  *
- * Every dispatch now includes a ResolutionProof trace.
+ * Determinism: for the same artifact, embedder and runtime state
+ * (registered classes, pins, semantic map, negative examples, cache), the
+ * same intent text yields the same outcome, candidates and proofDigest.
+ * Scores are quantized to 1e-4 and ties ordered by canonical tool id;
+ * other intents the process has seen do not enter into it. An LLM
+ * verifier's answers are an input like any other.
  */
-async function resolveToolIMP(
+export async function resolveIntent(
   context: DispatchContext,
   intent: string,
-  args?: Record<string, unknown>,
-): Promise<ResolutionOutcome> {
-  const proof = createProof(intent);
-  const t0 = Date.now();
+  options: ResolveOptions = {},
+): Promise<Resolution> {
+  const r = await resolveInternal(context, intent, {
+    learn: options.learn ?? false,
+    args: options.args,
+    principal: options.principal,
+    allowDecomposition: false,
+    depth: 0,
+    ancestors: [],
+  });
+  context.logDecision('resolve', r.resolution.proof, 'none', options.principal);
+  return r.resolution;
+}
 
-  // 1. RESOLVE SELECTOR (embed + intern)
-  const selector = await context.selectorTable.resolve(intent);
-  const intentCanonical = canonicalize(intent);
+async function resolveInternal(
+  context: DispatchContext,
+  intent: string,
+  run: ResolveRun,
+): Promise<InternalResolution> {
+  const proof = context.newProof(intent);
+  const llm = context.llmClient;
+  const args = run.args;
+  const hasArgs = args !== undefined && Object.keys(args).length > 0;
+  const excluded: ProofCandidate[] = [];
+  const key = intentKey(intent);
+  let clock = proofClock();
 
-  // 1a. INTENT PIN — exact match fast path
+  const step = (stage: ProofStage, decision: string, detail?: Record<string, unknown>): void => {
+    const now = proofClock();
+    addProofStep(proof, detail === undefined ? { stage, decision } : { stage, decision, detail }, now - clock);
+    clock = now;
+  };
+
+  const isNegative = (toolId: string): boolean => context.observer.isNegativeExample(intent, toolId, run.principal);
+
+  // The intent's own embedding, computed at most once. Similarities that
+  // authorize pinned or destructive tools are always measured from it.
+  let ownVector: Float32Array | null = null;
+  const embedOwn = async (): Promise<Float32Array> => (ownVector ??= await context.embedder.embed(intent));
+  const ownSimilarity = async (selector: ToolSelector): Promise<number> =>
+    quantizeScore(cosineSimilarity(await embedOwn(), selector.vector));
+
+  const toProofCandidate = (c: Candidate, excludedBy?: string): ProofCandidate => ({
+    toolId: c.toolId,
+    selector: c.selector.canonical,
+    score: c.score,
+    similarity: c.similarity,
+    tier: computeTier(c.score, context.thresholds),
+    source: c.source,
+    ...(excludedBy ? { excluded: excludedBy } : {}),
+  });
+
+  /** Pin gate + dispatch policy for one candidate. */
+  const judge = async (c: Candidate, llmApproved: boolean): Promise<PolicyVerdict> => {
+    let similarity = c.similarity;
+    const via = c.selector.canonical;
+    if (similarity !== null && (isDestructive(c.imp.annotations, context.policyOptions) || context.isPinnedTool(c.toolId, via))) {
+      // Always measured from this intent's own text.
+      similarity = await ownSimilarity(c.selector);
+    }
+    const pins = await context.pinStatesFor(c.toolId, intent, ownSimilarity, via);
+    return evaluateDispatchPolicy(
+      { mode: 'intent', toolId: c.toolId, imp: c.imp, source: c.source, score: c.score, similarity, llmApproved, pins },
+      context.policyOptions,
+    );
+  };
+
+  const isPinFailure = (v: PolicyVerdict): boolean =>
+    v.code === 'pin-exact-required' || v.code === 'pin-elevated-required';
+
+  const finish = (
+    outcome: ResolutionOutcome,
+    decision: DecisionCode,
+    ranked: Candidate[],
+    chosen: Candidate | null,
+    extra: { reason?: string; refinement?: ToolRefinementNeeded; imp?: ToolIMP | null; decomposition?: DecompositionResult | null; retryAfterMs?: number } = {},
+  ): InternalResolution => {
+    const best = chosen ?? ranked[0] ?? null;
+    proof.outcome = outcome;
+    proof.decision = decision;
+    proof.tier = best ? computeTier(best.score, context.thresholds) : 'none';
+    proof.chosen = outcome === 'resolved' && chosen ? chosen.toolId : null;
+    proof.confidence = outcome === 'resolved' && chosen ? chosen.score : null;
+    proof.candidates = [...ranked.map(c => toProofCandidate(c)), ...excluded];
+    finalizeProof(proof);
+    const resolution: Resolution = {
+      outcome,
+      intent,
+      tier: proof.tier,
+      candidates: ranked.map(c => toProofCandidate(c)),
+      proof,
+      ...(proof.chosen ? { chosen: proof.chosen, confidence: proof.confidence! } : {}),
+      ...(extra.reason ? { reason: extra.reason } : {}),
+      ...(extra.refinement ? { refinement: extra.refinement } : {}),
+      ...(extra.retryAfterMs !== undefined ? { retryAfterMs: extra.retryAfterMs } : {}),
+    };
+    return { resolution, imp: extra.imp ?? null, decomposition: extra.decomposition ?? null };
+  };
+
+  const disambiguate = (decision: DecisionCode, ranked: Candidate[], reason: string): InternalResolution => {
+    const refinement: ToolRefinementNeeded = {
+      type: 'tool_refinement_needed',
+      originalIntent: intent,
+      question: `${reason}. Choose a tool and call it by id.`,
+      options: ranked.slice(0, 5).map(c => ({
+        label: c.toolId,
+        intent: c.selector.canonical.replace(/[:._]/g, ' ').trim(),
+        confidence: c.score,
+        selectorId: c.selector.canonical,
+        toolId: c.toolId,
+      })),
+      narrowedIntents: [],
+    };
+    return finish('needs-disambiguation', decision, ranked, null, { reason, refinement });
+  };
+
+  /**
+   * Ask the LLM to split the intent, keeping only sub-intents that differ
+   * from it and from every intent it was itself split from (a model that
+   * answers with the intent itself would otherwise recurse).
+   */
+  const tryDecompose = async (): Promise<DecompositionResult | null> => {
+    if (!run.allowDecomposition || !llm.decompose || run.depth >= context.maxDecompositionDepth) return null;
+    const d = await decompose(intent, context.getToolSummaries(), llm, { currentDepth: run.depth, maxDepth: context.maxDecompositionDepth });
+    const seen = new Set([key, ...run.ancestors]);
+    const proposed = d.subIntents.length;
+    d.subIntents = d.subIntents.filter(sub => typeof sub.intent === 'string' && !seen.has(intentKey(sub.intent)));
+    d.decomposed = d.decomposed && d.subIntents.length > 0;
+    step('decomposition', d.decomposed
+      ? `Decomposed into ${d.subIntents.length} sub-intent(s) (${d.strategy})`
+      : proposed > 0
+        ? `Decomposition only restated the intent (${proposed} sub-intent(s) refused)`
+        : 'Decomposition produced no sub-intents', { depth: run.depth, proposed, kept: d.subIntents.length });
+    return d.decomposed ? d : null;
+  };
+
+  // 1. PINNED PHRASE — the intent is, verbatim, a pinned phrase.
   if (context.intentPins.size > 0) {
-    const pinT0 = Date.now();
-    const exactPinMatch = context.intentPins.checkExact(intentCanonical);
-    if (exactPinMatch && exactPinMatch.verdict === 'accept') {
-      const pinnedSelector = context.selectorTable.get(exactPinMatch.canonical);
-      if (pinnedSelector) {
-        for (const toolClass of context.classesForSelector(exactPinMatch.canonical)) {
-          const imp = toolClass.resolveSelector(pinnedSelector);
-          if (imp) {
-            context.cache.store(selector, imp, 1.0);
-            addProofStep(proof, {
-              stage: 'intent_pin',
-              input: intentCanonical,
-              output: exactPinMatch.canonical,
-              decision: `Intent pin exact match → ${imp.toolName} at 1.0`,
-            }, Date.now() - pinT0);
-            proof.tier = 'exact';
-            proof.resolvedTool = imp.toolName;
-            return {
-              kind: 'resolved',
-              imp,
-              confidence: 1.0,
-              tier: 'exact',
-              selector: pinnedSelector,
-              candidates: [],
-              proof,
-            };
-          }
-        }
-      }
+    const pinMatch = context.intentPins.checkExact(intent);
+    const owner = pinMatch ? context.toolForSelector(pinMatch.canonical) : null;
+    if (pinMatch && owner) {
+      const c: Candidate = { imp: owner.imp, toolId: owner.toolId, selector: owner.selector, score: 1, similarity: null, source: 'pin' };
+      const verdict = await judge(c, false);
+      step('intent_pin', `"${intent}" is a pinned phrase of ${pinMatch.canonical} → ${c.toolId}`, { pin: pinMatch.canonical, policy: pinMatch.policy });
+      if (verdict.allow) return finish('resolved', 'pin-exact', [c], c, { imp: c.imp });
+      step('policy', verdict.reason, { code: verdict.code, toolId: c.toolId });
+      return disambiguate(denial(verdict), [c], verdict.reason);
     }
   }
 
-  // 1b. SEMANTIC MAP — exact fast-path for a previously-disambiguated intent.
-  //
-  // If the user has taught us this exact intent before (by resolving a
-  // refinement), resolve straight to the selector they chose. This is what
-  // stops smallchat from re-asking the same question every time: defer once,
-  // remember forever.
+  // 2. LEARNED EXACT — the user taught this exact intent (same intentKey) before.
   if (context.semanticMap.size > 0) {
-    const smT0 = Date.now();
-    const learned = context.semanticMap.lookupExact(intentCanonical);
-    if (learned) {
-      const resolved = context.resolveLearnedSelector(learned.selectorId);
-      if (resolved && !context.observer.isNegativeExample(intent, resolved.imp.toolName)) {
-        const confidence = context.semanticMap.exactConfidence;
-        context.cache.store(selector, resolved.imp, confidence);
-        const tier = computeTier(confidence, context.thresholds);
-        addProofStep(proof, {
-          stage: 'semantic_map',
-          input: intentCanonical,
-          output: learned.selectorId,
-          decision: `Learned preference (exact, ${learned.reinforcements}× reinforced) → ${resolved.imp.toolName} at ${confidence.toFixed(3)} (${tier})`,
-        }, Date.now() - smT0);
-        proof.tier = tier;
-        proof.resolvedTool = resolved.imp.toolName;
-        return {
-          kind: 'resolved',
-          imp: resolved.imp,
-          confidence,
-          tier,
-          selector: resolved.selector,
-          candidates: [],
-          proof,
-        };
+    const learned = context.semanticMap.lookupExact(intent);
+    const resolved = learned ? context.resolveLearnedSelector(learned.selectorId, learned.toolId) : null;
+    if (learned && resolved && !isNegative(toolIdOf(resolved.imp))) {
+      const c: Candidate = {
+        imp: resolved.imp,
+        toolId: toolIdOf(resolved.imp),
+        selector: resolved.selector,
+        score: quantizeScore(context.semanticMap.exactConfidence),
+        similarity: null,
+        source: 'semantic-map-exact',
+      };
+      const usable = !(context.strict && computeTier(c.score, context.thresholds) !== 'exact');
+      const verdict = await judge(c, false);
+      if (usable && verdict.allow) {
+        step('semantic_map', `Learned preference (exact, ${learned.reinforcements}x reinforced) → ${c.toolId} at ${c.score.toFixed(3)}`, { selector: learned.selectorId, reinforcements: learned.reinforcements });
+        return finish('resolved', 'learned-exact', [c], c, { imp: c.imp });
       }
+      step('semantic_map', `Learned preference for ${c.toolId} not used: ${usable ? verdict.reason : 'strict mode verifies below EXACT'}`, { selector: learned.selectorId, code: verdict.code });
+      if (isPinFailure(verdict)) excluded.push(toProofCandidate(c, verdict.code));
     }
   }
 
-  // 2. CHECK CACHE (the inline cache / method cache)
-  const hasArgs = args && Object.keys(args).length > 0;
-  if (!hasArgs) {
-    const cacheT0 = Date.now();
-    const cached = context.cache.lookup(selector);
-    if (cached) {
-      const tier = computeTier(cached.confidence, context.thresholds);
-      addProofStep(proof, {
-        stage: 'cache',
-        input: selector.canonical,
-        output: cached.imp.toolName,
-        decision: `Cache hit → ${cached.imp.toolName} at ${cached.confidence.toFixed(3)} (${tier})`,
-      }, Date.now() - cacheT0);
-      proof.tier = tier;
-      proof.resolvedTool = cached.imp.toolName;
-      return { kind: 'resolved', imp: cached.imp, confidence: cached.confidence, tier, selector, candidates: [], proof };
+  // 3. CACHE — a previous HIGH/EXACT resolution of this exact intent text
+  // (no-arg calls only: with arguments, overload choice depends on them).
+  if (run.learn && !hasArgs) {
+    const cached = context.cache.lookup(key);
+    if (cached && !isNegative(toolIdOf(cached.imp))) {
+      const id = toolIdOf(cached.imp);
+      const toolSelector = context.getTool(id)?.selectors[0];
+      const c: Candidate = {
+        imp: cached.imp,
+        toolId: id,
+        selector: (toolSelector && context.selectorTable.get(toolSelector)) || cached.selector,
+        score: quantizeScore(cached.confidence),
+        similarity: null,
+        source: 'cache',
+      };
+      const usable = !(context.strict && computeTier(c.score, context.thresholds) !== 'exact');
+      const verdict = await judge(c, false);
+      if (usable && verdict.allow) {
+        step('cache', `Cache hit → ${c.toolId} at ${c.score.toFixed(3)}`, { toolId: c.toolId });
+        return finish('resolved', 'cache', [c], c, { imp: c.imp });
+      }
+      step('cache', `Cached ${c.toolId} not used: ${usable ? verdict.reason : 'strict mode verifies below EXACT'}`, { toolId: c.toolId, code: verdict.code });
     }
   }
 
-  // 3. SEARCH DISPATCH TABLE (vector similarity)
-  // Use the LOW threshold as the vector search floor — we handle all tiers
-  const searchT0 = Date.now();
-  const searchThreshold = context.strict ? context.thresholds.medium : context.thresholds.low;
-  const matches = await context.selectorTable.searchTools(selector.vector, 5, searchThreshold);
-  const candidates: ToolCandidate[] = [];
+  // 4. RATE LIMIT (opt-in) — a novel intent from this principal is about to be embedded.
+  const principal = run.principal ?? DEFAULT_PRINCIPAL;
+  if (context.rateLimiter && ownVector === null) {
+    const verdict = context.rateLimiter.evaluate(key, principal);
+    if (!verdict.allowed) {
+      step('rate_limit', `Rate limit (${verdict.reason}) reached for this principal; the intent was not embedded`, { reason: verdict.reason });
+      return finish('throttled', 'rate-limited', [], null, {
+        reason: `Too many novel intents (${verdict.reason}); retry in ${Math.ceil(verdict.retryAfterMs / 1000)}s`,
+        retryAfterMs: verdict.retryAfterMs,
+      });
+    }
+  }
+
+  // 5. EMBED the intent — its own vector, never interned.
+  const selector = intentSelector(intent, await embedOwn());
+  context.rateLimiter?.record(key, selector.vector, principal);
+
+  // 6. VECTOR SEARCH — every match (and overload) becomes a ranked candidate.
+  // One search serves both the candidates (>= floor) and, when there are
+  // none, the refinement options (>= REFINEMENT_FLOOR).
+  const floor = context.strict ? context.thresholds.medium : context.thresholds.low;
+  const nearest = await context.selectorTable.searchTools(selector.vector, SEARCH_TOP_K, Math.min(floor, REFINEMENT_FLOOR));
+  const matches = nearest.filter(m => toConfidence(m.distance) >= floor);
+  const byTool = new Map<string, Candidate>();
+  const offer = (c: Candidate): void => {
+    const existing = byTool.get(c.toolId);
+    if (!existing || c.score > existing.score) byTool.set(c.toolId, c);
+  };
 
   for (const match of matches) {
     const matchSelector = context.selectorTable.get(match.id);
     if (!matchSelector) continue;
+    const similarity = toConfidence(match.distance);
 
-    // 3.PIN: INTENT PIN — guard pinned candidates against semantic collision
-    if (context.intentPins.size > 0) {
-      const pinCheck = context.intentPins.checkSimilarity(
-        match.id,
-        toConfidence(match.distance),
-        intentCanonical,
-      );
-      if (pinCheck) {
-        if (pinCheck.verdict === 'reject') continue;
-      }
-    }
-
-    // Consult only the classes that declare this selector (dispatch index),
-    // not the entire registry — O(owners) instead of O(all classes).
     for (const toolClass of context.classesForSelector(match.id)) {
-      // 3a. OVERLOAD RESOLUTION
+      let imp: ToolIMP | null = null;
+      let source: CandidateSource = 'vector';
+
       if (hasArgs && toolClass.hasOverloads(matchSelector)) {
-        const overloadResult = toolClass.validateAndResolveSelectorWithNamedArgs(
-          matchSelector,
-          args,
-        );
-        if (overloadResult) {
-          const confidence = toConfidence(match.distance);
-          // Skip negative examples
-          if (context.observer.isNegativeExample(intent, overloadResult.imp.toolName)) continue;
-          context.cache.store(selector, overloadResult.imp, confidence);
-          const tier = computeTier(confidence, context.thresholds);
-          addProofStep(proof, {
-            stage: 'overload',
-            input: { intent, args },
-            output: overloadResult.imp.toolName,
-            decision: `Overload match → ${overloadResult.imp.toolName} at ${confidence.toFixed(3)} (${tier})`,
-          }, Date.now() - searchT0);
-          proof.tier = tier;
-          proof.resolvedTool = overloadResult.imp.toolName;
-          return {
-            kind: 'resolved',
-            imp: overloadResult.imp,
-            confidence,
-            tier,
-            selector: matchSelector,
-            candidates: [],
-            proof,
-          };
+        try {
+          const overload = toolClass.validateAndResolveSelectorWithNamedArgs(matchSelector, args!);
+          if (overload) {
+            imp = overload.imp;
+            source = 'overload';
+            step('overload', `Overload of ${match.id} for these arguments → ${toolIdOf(imp)} (${overload.signature.signatureKey})`, { selector: match.id, signature: overload.signature.signatureKey });
+          }
+        } catch (err) {
+          if (err instanceof OverloadAmbiguityError) {
+            step('overload', `Overloads of ${match.id} are ambiguous for these arguments`, { selector: match.id });
+            continue;
+          }
+          if (!(err instanceof SignatureValidationError)) throw err;
+          step('overload', `No overload of ${match.id} accepts these argument types (${err.signature.signatureKey})`, {
+            selector: match.id,
+            violations: err.violations.map(v => ({ parameter: v.parameterName, expected: v.expected, received: v.received })),
+          });
+          continue;
         }
       }
 
-      const imp = toolClass.resolveSelector(matchSelector);
-      if (imp) {
-        // Skip negative examples
-        if (context.observer.isNegativeExample(intent, imp.toolName)) continue;
-        candidates.push({
-          imp,
-          confidence: toConfidence(match.distance),
-          selector: matchSelector,
-        });
+      imp ??= toolClass.resolveSelector(matchSelector);
+      if (!imp) continue;
+      const c: Candidate = { imp, toolId: toolIdOf(imp), selector: matchSelector, score: similarity, similarity, source };
+      if (isNegative(c.toolId)) {
+        excluded.push(toProofCandidate(c, 'negative-example'));
+        continue;
       }
+      offer(c);
     }
   }
 
-  addProofStep(proof, {
-    stage: 'vector_search',
-    input: { intent, threshold: searchThreshold },
-    output: candidates.map(c => ({ tool: c.imp.toolName, confidence: c.confidence.toFixed(3) })),
-    decision: `Vector search found ${candidates.length} candidates`,
-  }, Date.now() - searchT0);
+  step('vector_search', `Vector search found ${byTool.size} candidate tool(s) at or above ${floor}`, {
+    floor,
+    matches: matches.map(m => ({ selector: m.id, similarity: toConfidence(m.distance) })),
+  });
 
-  // 3b. SEMANTIC MAP — similar-intent boost.
-  //
-  // A near-miss the user *previously* disambiguated should not fall back to
-  // "ask again". If this intent is similar to one the user has already resolved,
-  // boost the learned selector's confidence — enough to lift it out of the NONE
-  // zone and often to dispatch it directly. The learned selector may score below
-  // the vector-search floor (that's why it was a near-miss), so we inject it as
-  // a candidate when it isn't already present.
+  // 7. LEARNED SIMILAR — a near-miss the user previously disambiguated gets a boost.
   if (context.semanticMap.size > 0) {
-    const smT0 = Date.now();
     const smMatch = context.semanticMap.lookupSimilar(selector.vector);
-    if (smMatch) {
-      const resolved = context.resolveLearnedSelector(smMatch.preference.selectorId);
-      if (resolved && !context.observer.isNegativeExample(intent, resolved.imp.toolName)) {
-        const existing = candidates.find(c => c.selector.canonical === smMatch.preference.selectorId);
-        const base = existing ? existing.confidence : smMatch.similarity;
-        const boosted = Math.min(context.semanticMap.boostCeiling, base + smMatch.boost);
-        if (existing) {
-          existing.confidence = boosted;
-        } else {
-          candidates.push({ imp: resolved.imp, confidence: boosted, selector: resolved.selector });
-        }
-        addProofStep(proof, {
-          stage: 'semantic_map',
-          input: { intent, similarity: smMatch.similarity.toFixed(3) },
-          output: smMatch.preference.selectorId,
-          decision: `Learned preference (similar, ${smMatch.preference.reinforcements}× reinforced) ${existing ? 'boosted' : 'injected'} ${resolved.imp.toolName} → ${boosted.toFixed(3)} (+${smMatch.boost.toFixed(3)})`,
-        }, Date.now() - smT0);
-      }
+    const resolved = smMatch ? context.resolveLearnedSelector(smMatch.preference.selectorId, smMatch.preference.toolId) : null;
+    if (smMatch && resolved && !isNegative(toolIdOf(resolved.imp))) {
+      const id = toolIdOf(resolved.imp);
+      const existing = byTool.get(id);
+      const base = existing ? existing.score : smMatch.similarity;
+      const boosted = quantizeScore(Math.min(context.semanticMap.boostCeiling, base + smMatch.boost));
+      byTool.set(id, {
+        imp: resolved.imp,
+        toolId: id,
+        selector: existing?.selector ?? resolved.selector,
+        score: boosted,
+        similarity: existing?.similarity ?? null,
+        source: 'semantic-map-similar',
+      });
+      step('semantic_map', `Learned preference (similar, ${smMatch.preference.reinforcements}x reinforced) ${existing ? 'boosted' : 'injected'} ${id} → ${boosted.toFixed(3)} (+${smMatch.boost.toFixed(3)})`, {
+        selector: smMatch.preference.selectorId,
+        intentSimilarity: smMatch.similarity,
+        boost: quantizeScore(smMatch.boost),
+      });
     }
   }
 
-  // Also check cache for non-overloaded case when args were provided
-  if (hasArgs) {
-    const cached = context.cache.lookup(selector);
-    if (cached) {
-      const tier = computeTier(cached.confidence, context.thresholds);
-      proof.tier = tier;
-      proof.resolvedTool = cached.imp.toolName;
-      return { kind: 'resolved', imp: cached.imp, confidence: cached.confidence, tier, selector, candidates: [], proof };
-    }
-  }
-
-  if (candidates.length === 0) {
-    // 4a. ISA CHAIN — check protocol conformance
-    const protoT0 = Date.now();
+  // 8. PROTOCOL CONFORMANCE — only when nothing matched by vector.
+  if (byTool.size === 0) {
     const protocolMatch = context.resolveViaProtocol(selector);
     if (protocolMatch) {
-      context.cache.store(selector, protocolMatch.imp, protocolMatch.confidence);
-      const tier = computeTier(protocolMatch.confidence, context.thresholds);
-      addProofStep(proof, {
-        stage: 'protocol',
-        input: selector.canonical,
-        output: protocolMatch.imp.toolName,
-        decision: `Protocol conformance → ${protocolMatch.imp.toolName} at ${protocolMatch.confidence.toFixed(3)}`,
-      }, Date.now() - protoT0);
-      proof.tier = tier;
-      proof.resolvedTool = protocolMatch.imp.toolName;
-      return {
-        kind: 'resolved',
+      const c: Candidate = {
         imp: protocolMatch.imp,
-        confidence: protocolMatch.confidence,
-        tier,
+        toolId: toolIdOf(protocolMatch.imp),
         selector: protocolMatch.selector,
-        candidates: [],
-        proof,
+        score: quantizeScore(protocolMatch.confidence),
+        similarity: null,
+        source: 'protocol',
       };
+      offer(c);
+      step('protocol', `Protocol conformance → ${c.toolId} at ${c.score.toFixed(3)}`, { selector: protocolMatch.selector.canonical });
     }
-
-    // No candidates at all — try refinement (Pillar 4) before forwarding
-    const refineT0 = Date.now();
-    const nearest = await context.selectorTable.searchTools(selector.vector, 5, 0.3);
-    const toolSummaries = context.getToolSummaries();
-    const refinementResult = await refine(intent, nearest, toolSummaries, context.llmClient);
-    addProofStep(proof, {
-      stage: 'refinement',
-      input: intent,
-      output: refinementResult.refined ? 'options generated' : 'no options',
-      decision: refinementResult.refined
-        ? `Refinement protocol generated ${refinementResult.refinement!.options.length} options`
-        : 'Refinement failed — falling through to forwarding chain',
-    }, Date.now() - refineT0);
-
-    if (refinementResult.refined && refinementResult.refinement) {
-      proof.tier = 'none';
-      return {
-        kind: 'refined',
-        result: buildRefinementResult(refinementResult.refinement),
-        proof,
-      };
-    }
-
-    // 4b. FORWARDING — slow path
-    const fwdT0 = Date.now();
-    const result = await context.forward(selector, intent, args);
-    addProofStep(proof, {
-      stage: 'forwarding',
-      input: intent,
-      output: 'forwarded',
-      decision: 'Fell through to forwarding chain',
-    }, Date.now() - fwdT0);
-    proof.tier = 'none';
-    return { kind: 'forwarded', result, proof };
   }
 
-  // Sort by confidence descending
-  candidates.sort((a, b) => b.confidence - a.confidence);
-  const best = candidates[0];
-  const tier = computeTier(best.confidence, context.thresholds);
-  proof.tier = tier;
-
-  // Without an LLMClient, MEDIUM verification degrades to schema-only (a
-  // near pass-through) and LOW decomposition can't run at all — both tiers
-  // fall through to "dispatch best match" by default, which silently
-  // auto-executes anything scoring above the LOW floor. That's a footgun for
-  // write/destructive tools: a 0.60 mismatch auto-runs with no human in the
-  // loop. Opt in via `requireLLMForSubHighDispatch` to make that combination
-  // (no LLM + sub-HIGH confidence) defer to the user instead.
-  if (
-    context.requireLLMForSubHighDispatch &&
-    context.llmClient === NULL_LLM_CLIENT &&
-    tier !== 'exact' &&
-    tier !== 'high'
-  ) {
-    const refineT0 = Date.now();
-    const nearest = await context.selectorTable.searchTools(selector.vector, 5, 0.3);
-    const toolSummaries = context.getToolSummaries();
-    const refinementResult = await refine(intent, nearest, toolSummaries, context.llmClient);
-    addProofStep(proof, {
-      stage: 'refinement',
-      input: intent,
-      output: refinementResult.refined ? 'options generated' : 'no options',
-      decision: `No LLM client configured — refusing to auto-dispatch a ${tier}-confidence match (requireLLMForSubHighDispatch)`,
-    }, Date.now() - refineT0);
-
-    if (refinementResult.refined && refinementResult.refinement) {
-      proof.tier = 'none';
-      return { kind: 'refined', result: buildRefinementResult(refinementResult.refinement), proof };
+  // 9. PIN GATE — a pinned tool is never a candidate for an intent its pin refuses.
+  const eligible: Candidate[] = [];
+  for (const c of byTool.values()) {
+    const via = c.selector.canonical;
+    if (!context.isPinnedTool(c.toolId, via)) {
+      eligible.push(c);
+      continue;
     }
-
-    const fwdT0 = Date.now();
-    const result = await context.forward(selector, intent, args);
-    addProofStep(proof, {
-      stage: 'forwarding',
-      input: intent,
-      output: 'forwarded',
-      decision: 'No refinement options — forwarded instead of auto-dispatching without an LLM client',
-    }, Date.now() - fwdT0);
-    proof.tier = 'none';
-    return { kind: 'forwarded', result, proof };
+    const pins = await context.pinStatesFor(c.toolId, intent, ownSimilarity, via);
+    const refused = pins.find(p => !p.satisfied);
+    if (refused) {
+      excluded.push(toProofCandidate(c, refused.policy === 'exact' ? 'pin-exact-required' : 'pin-elevated-required'));
+      step('intent_pin', `${c.toolId} excluded: pinned '${refused.policy}' (${refused.canonical}) and this intent does not satisfy it`, { toolId: c.toolId, pin: refused.canonical });
+    } else {
+      eligible.push(c);
+    }
   }
 
-  // -----------------------------------------------------------------------
-  // CONFIDENCE-TIERED BRANCHING (0.4.0 core logic)
-  // -----------------------------------------------------------------------
+  const ranked = rank(eligible);
 
-  // MEDIUM tier → Pre-flight verification (Pillar 2)
-  if (requiresVerification(tier) || (context.strict && tier !== 'exact')) {
-    const verifyT0 = Date.now();
-    const verification = await verify(
-      best.imp,
-      intent,
-      args ?? {},
-      context.llmClient,
-      { skipLLMCheck: !context.llmClient.microCheck },
-    );
-    addProofStep(proof, {
-      stage: 'verification',
-      input: { tool: best.imp.toolName, intent },
-      output: verification,
-      decision: verification.pass
-        ? `Verification passed for ${best.imp.toolName} (schema: ${verification.schemaMatch}, overlap: ${(verification.descriptionOverlap * 100).toFixed(0)}%)`
-        : `Verification FAILED: ${verification.reason}`,
-    }, Date.now() - verifyT0);
-
-    if (!verification.pass) {
-      // Verification failed — try next candidate or fall through
-      const remaining = candidates.slice(1);
-      for (const alt of remaining) {
-        const altVerification = await verify(alt.imp, intent, args ?? {}, context.llmClient, { skipLLMCheck: true });
-        if (altVerification.pass) {
-          context.cache.store(selector, alt.imp, alt.confidence);
-          proof.resolvedTool = alt.imp.toolName;
-          return {
-            kind: 'resolved',
-            imp: alt.imp,
-            confidence: alt.confidence,
-            tier: computeTier(alt.confidence, context.thresholds),
-            selector: alt.selector,
-            candidates,
-            proof,
-          };
+  // 10. NOTHING MATCHED — unresolved (refinement options, or decomposition when dispatching).
+  if (ranked.length === 0) {
+    const refinement = await refine(intent, nearest, context.getToolSummaries(), llm);
+    if (refinement.refined && refinement.refinement) {
+      for (const option of refinement.refinement.options) {
+        if (option.selectorId) {
+          const owner = context.toolForSelector(option.selectorId);
+          if (owner) option.toolId = owner.toolId;
         }
       }
-      // All candidates failed verification — try refinement
-      const nearest = await context.selectorTable.searchTools(selector.vector, 5, 0.3);
-      const toolSummaries = context.getToolSummaries();
-      const refinementResult = await refine(intent, nearest, toolSummaries, context.llmClient);
-      if (refinementResult.refined && refinementResult.refinement) {
-        proof.tier = 'none';
-        return { kind: 'refined', result: buildRefinementResult(refinementResult.refinement), proof };
+      step('refinement', `No candidate above ${floor}; ${refinement.refinement.options.length} refinement option(s)`);
+      return finish('unresolved', 'no-candidates', ranked, null, {
+        reason: `No tool matched "${intent}"`,
+        refinement: refinement.refinement,
+      });
+    }
+
+    const d = await tryDecompose();
+    if (d) return finish('resolved', 'decomposed', ranked, null, { decomposition: d });
+
+    step('refinement', `No candidate above ${floor} and no refinement options`);
+    return finish('unresolved', 'no-candidates', ranked, null, { reason: `No tool matched "${intent}"` });
+  }
+
+  const best = ranked[0];
+  const bestTier = computeTier(best.score, context.thresholds);
+  const subHigh = (t: ConfidenceTier) => t === 'medium' || t === 'low';
+
+  // 11. LOW-tier decomposition (dispatch only): a compound intent may need several tools.
+  if (bestTier === 'low') {
+    const d = await tryDecompose();
+    if (d) return finish('resolved', 'decomposed', ranked, null, { decomposition: d });
+  }
+
+  // 12. VERIFICATION — below HIGH, or below EXACT in strict mode. The best
+  // candidate and every alternate get the same strategies, the LLM included.
+  let chosen: Candidate | null = best;
+  let llmApproved = false;
+  const needsVerification = subHigh(bestTier) || (context.strict && bestTier !== 'exact');
+  if (needsVerification) {
+    const llmVerifier = typeof llm.microCheck === 'function';
+    if (subHigh(bestTier) && context.requireLLMForSubHighDispatch && !llmVerifier) {
+      step('verification', `Best candidate is ${bestTier}; no LLM verifier is configured to approve it`);
+    } else {
+      chosen = null;
+      for (const c of ranked) {
+        const tier = computeTier(c.score, context.thresholds);
+        if (tier === 'none') break;
+        if (subHigh(tier) && context.requireLLMForSubHighDispatch && !llmVerifier) break;
+        const forceLLM = subHigh(tier) && context.requireLLMForSubHighDispatch;
+        const v = await verify(c.imp, intent, args ?? {}, llm, {
+          skipLLMCheck: !llmVerifier,
+          forceLLMCheck: forceLLM,
+          skipSchemaCheck: args === undefined,
+        });
+        step('verification', v.pass
+          ? `Verification passed for ${c.toolId} (overlap ${(v.descriptionOverlap * 100).toFixed(0)}%${v.llmConfirmed === true ? ', LLM approved' : ''})`
+          : `Verification failed for ${c.toolId}: ${v.reason}`, {
+          toolId: c.toolId,
+          pass: v.pass,
+          schemaMatch: v.schemaMatch,
+          descriptionOverlap: v.descriptionOverlap,
+          llmConfirmed: v.llmConfirmed ?? null,
+        });
+        if (v.pass) {
+          chosen = c;
+          llmApproved = v.llmConfirmed === true;
+          break;
+        }
+      }
+      if (!chosen) {
+        return disambiguate('verification-failed', ranked, `No candidate for "${intent}" passed verification`);
       }
     }
   }
 
-  // LOW tier → Intent decomposition (Pillar 3)
-  if (requiresDecomposition(tier)) {
-    const decompT0 = Date.now();
-    const toolSummaries = context.getToolSummaries();
-    const decompResult = await decompose(intent, toolSummaries, context.llmClient);
-    addProofStep(proof, {
-      stage: 'decomposition',
-      input: intent,
-      output: decompResult.decomposed ? `${decompResult.subIntents.length} sub-intents` : 'not decomposed',
-      decision: decompResult.decomposed
-        ? `Decomposed into ${decompResult.subIntents.length} sub-intents (${decompResult.strategy})`
-        : 'Decomposition unavailable — dispatching best match',
-    }, Date.now() - decompT0);
-
-    if (decompResult.decomposed) {
-      // Execute the decomposition using toolkit_dispatch as the dispatcher
-      const execResult = await executeDecomposition(
-        decompResult,
-        (subIntent, subArgs) => toolkit_dispatch(context, subIntent, subArgs),
-      );
-      return { kind: 'decomposed', result: execResult, proof };
-    }
-    // If decomposition isn't available (no LLM), fall through to dispatch best match
+  // 13. POLICY — the same rule set as every other path.
+  const verdict = await judge(chosen, llmApproved);
+  step('policy', verdict.reason, { code: verdict.code, toolId: chosen.toolId });
+  if (!verdict.allow) {
+    return disambiguate(denial(verdict), ranked, verdict.reason);
   }
 
-  // NONE tier → Refinement protocol (Pillar 4)
-  //
-  // NOTE: this branch is effectively unreachable for the candidate path. The
-  // vector search floor is `thresholds.low` (and `thresholds.medium` in strict
-  // mode), so any surviving candidate already scores >= low and never computes
-  // to the `none` tier. The candidates-empty case above handles true NONE via
-  // protocol → refine → forward. Kept for completeness and custom thresholds.
-  if (requiresRefinement(tier)) {
-    const refineT0 = Date.now();
-    const nearest = await context.selectorTable.searchTools(selector.vector, 5, 0.3);
-    const toolSummaries = context.getToolSummaries();
-    const refinementResult = await refine(intent, nearest, toolSummaries, context.llmClient);
-    addProofStep(proof, {
-      stage: 'refinement',
-      input: intent,
-      output: refinementResult.refined ? 'options generated' : 'no options',
-      decision: refinementResult.refined
-        ? `Refinement protocol generated ${refinementResult.refinement!.options.length} options`
-        : 'Refinement failed — forwarding chain',
-    }, Date.now() - refineT0);
+  const chosenTier = computeTier(chosen.score, context.thresholds);
+  const decision: DecisionCode = llmApproved && subHigh(chosenTier)
+    ? 'llm-verified'
+    : subHigh(chosenTier) ? 'verified' : 'ranked';
 
-    if (refinementResult.refined && refinementResult.refinement) {
-      return { kind: 'refined', result: buildRefinementResult(refinementResult.refinement), proof };
-    }
-
-    // Fall through to forwarding
-    const result = await context.forward(selector, intent, args);
-    return { kind: 'forwarded', result, proof };
+  // Learn: cache plain vector resolutions of ordinary tools (never pinned or destructive ones).
+  if (run.learn && chosen.source === 'vector' && !context.isPinnedTool(chosen.toolId, chosen.selector.canonical)
+      && !isDestructive(chosen.imp.annotations, context.policyOptions)) {
+    context.cache.store(selector, chosen.imp, chosen.score);
   }
 
-  // EXACT/HIGH tier — dispatch immediately
-  context.cache.store(selector, best.imp, best.confidence);
-  proof.resolvedTool = best.imp.toolName;
+  return finish('resolved', decision, ranked, chosen, { imp: chosen.imp });
+}
 
-  return {
-    kind: 'resolved',
-    imp: best.imp,
-    confidence: best.confidence,
-    tier,
-    selector: best.selector,
-    candidates,
-    proof,
-  };
+// ---------------------------------------------------------------------------
+// Execution — the one boundary every dispatch path goes through
+// ---------------------------------------------------------------------------
+
+export interface DispatchByIdOptions {
+  /**
+   * proofDigest of the resolution this call acts on (e.g. a
+   * `runtime.resolve()` proposal the user confirmed). Recorded in the proof.
+   */
+  resolutionDigest?: string;
+  /**
+   * Aborts the call: nothing executes once it has fired, and the running
+   * tool receives it (ToolIMP.execute options.signal).
+   */
+  signal?: AbortSignal;
+  /** Who the call is for; recorded in the decision log */
+  principal?: string;
+}
+
+interface PreparedCall {
+  ok: true;
+  args: Record<string, unknown>;
+  callDigest: string | null;
+}
+
+interface RejectedCall {
+  ok: false;
+  errors: ValidationError[];
+}
+
+/** Input schema of an IMP, loaded at most once per IMP. */
+const schemaByImp = new WeakMap<ToolIMP, { schema: unknown }>();
+
+async function inputSchemaOf(imp: ToolIMP): Promise<unknown> {
+  if (imp.constraints?.inputSchema) return imp.constraints.inputSchema;
+  const cached = schemaByImp.get(imp);
+  if (cached) return cached.schema;
+  const loaded = imp.schema ?? await imp.schemaLoader();
+  const schema = loaded?.inputSchema;
+  schemaByImp.set(imp, { schema });
+  return schema;
 }
 
 /**
- * toolkit_dispatch — the hot path. Equivalent to objc_msgSend.
- *
- * Uses resolveToolIMP for resolution, then executes synchronously.
- *
- * 0.4.0: Now records dispatch to the observer (Pillar 5) and annotates
- * results with confidence tier and resolution proof.
+ * Unwrap SCObjects, validate against the tool's inputSchema (and its own
+ * constraints), and compute the canonical call digest. Nothing executes
+ * unless this succeeds.
  */
-export async function toolkit_dispatch(
+async function prepareCall(
   context: DispatchContext,
-  intent: string,
-  args?: Record<string, unknown>,
-): Promise<ToolResult> {
-  const outcome = await resolveToolIMP(context, intent, args);
-
-  if (outcome.kind === 'forwarded') {
-    return annotateResult(outcome.result, outcome.proof);
+  imp: ToolIMP,
+  toolId: string,
+  args: Record<string, unknown>,
+): Promise<PreparedCall | RejectedCall> {
+  if (args === null || typeof args !== 'object' || Array.isArray(args)) {
+    return { ok: false, errors: [{ path: '', message: 'arguments must be a JSON object' }] };
+  }
+  const unwrapped: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(args)) {
+    unwrapped[key] = unwrapValue(value);
   }
 
-  if (outcome.kind === 'decomposed') {
-    return annotateResult(outcome.result, outcome.proof);
+  let schema: unknown;
+  try {
+    schema = await inputSchemaOf(imp);
+  } catch (err) {
+    return { ok: false, errors: [{ path: '', message: `could not load ${toolId}'s inputSchema: ${(err as Error).message}` }] };
   }
 
-  if (outcome.kind === 'refined') {
-    return annotateResult(outcome.result, outcome.proof);
+  let value = unwrapped;
+  if (schema !== undefined && schema !== null) {
+    try {
+      const check = compileArgumentValidator(schema, { coerce: context.argumentCoercion }).check(unwrapped);
+      if (!check.valid) return { ok: false, errors: check.errors };
+      value = check.value;
+    } catch (err) {
+      if (!(err instanceof InputSchemaError)) throw err;
+      return { ok: false, errors: [{ path: '', message: `${toolId} cannot be called: its ${err.message}` }] };
+    }
   }
 
-  const result = await executeWithArgs(outcome.imp, args ?? {});
+  const own = imp.constraints.validate(value);
+  if (!own.valid) return { ok: false, errors: own.errors };
 
-  // Record dispatch for observer (Pillar 5)
-  context.observer.recordDispatch({
-    intent,
-    tool: outcome.imp.toolName,
-    confidence: outcome.confidence,
-    timestamp: Date.now(),
-    schemaRejected: result.isError && result.metadata?.validationErrors !== undefined,
-  });
-
-  // Track schema rejections
-  if (result.isError && result.metadata?.validationErrors) {
-    context.observer.recordSchemaRejection(
-      outcome.imp.toolName,
-      intent,
-      typeof result.content === 'object' && result.content !== null
-        ? JSON.stringify(result.content)
-        : String(result.content),
-    );
+  try {
+    canonicalJson(value);
+  } catch (err) {
+    return { ok: false, errors: [{ path: '', message: `arguments are not plain JSON: ${(err as Error).message}` }] };
   }
-
-  // Annotate with confidence tier and proof
-  result.metadata = {
-    ...result.metadata,
-    confidence: outcome.confidence,
-    tier: outcome.tier,
-    proof: outcome.proof,
-  };
-
-  // Annotate ambiguous results so callers know disambiguation may be needed
-  if (outcome.candidates.length > 1 && outcome.confidence <= 0.90) {
-    result.metadata = {
-      ...result.metadata,
-      ambiguous: true,
-      candidateCount: outcome.candidates.length,
-      topCandidates: outcome.candidates.slice(0, 3).map(c => ({
-        tool: c.imp.toolName,
-        confidence: c.confidence,
-      })),
-    };
+  let digest: string | null = null;
+  try {
+    digest = callDigest(toolId, value);
+  } catch {
+    digest = null; // an id that is not `<providerId>/<toolName>`; the call itself is fine
   }
-
-  return result;
+  return { ok: true, args: value, callDigest: digest };
 }
 
-/** Add proof metadata to any ToolResult */
-function annotateResult(result: ToolResult, proof: ResolutionProof): ToolResult {
+/** The result returned when arguments fail validation. Nothing ran. */
+function invalidArgumentsResult(toolId: string, errors: ValidationError[], proof: ResolutionProof): ToolResult {
+  return {
+    content: {
+      error: `Invalid arguments for ${toolId}; the tool was not called.`,
+      errors: errors.map(e => (e.path ? `${e.path}: ${e.message}` : e.message)),
+    },
+    isError: true,
+    metadata: {
+      outcome: 'invalid-arguments',
+      toolId,
+      validationErrors: errors,
+      proof,
+    },
+  };
+}
+
+/** Record the validation result in the proof and finalize it. */
+function recordCall(proof: ResolutionProof, toolId: string, prepared: PreparedCall | RejectedCall, started: number): void {
+  if (prepared.ok) {
+    proof.ran = toolId;
+    proof.callDigest = prepared.callDigest;
+    addProofStep(proof, { stage: 'validation', decision: `Arguments valid for ${toolId}; executing`, detail: { callDigest: prepared.callDigest } }, proofClock() - started);
+  } else {
+    addProofStep(proof, {
+      stage: 'validation',
+      decision: `Arguments rejected for ${toolId} (${prepared.errors.length} error(s)); nothing executed`,
+      detail: { paths: prepared.errors.map(e => e.path) },
+    }, proofClock() - started);
+  }
+  finalizeProof(proof);
+}
+
+/** Annotate a tool's result with what ran and why. */
+function annotateExecuted(
+  result: ToolResult,
+  toolId: string,
+  proof: ResolutionProof,
+): ToolResult {
   result.metadata = {
     ...result.metadata,
+    outcome: 'resolved',
+    toolId,
+    callDigest: proof.callDigest,
+    confidence: proof.confidence,
     tier: proof.tier,
     proof,
   };
   return result;
 }
+
+/**
+ * The result of a call whose AbortSignal fired before the tool started.
+ * Nothing ran.
+ */
+function abortedResult(toolId: string, proof: ResolutionProof, signal: AbortSignal): ToolResult {
+  proof.ran = null;
+  addProofStep(proof, { stage: 'execution', decision: `The caller aborted before ${toolId} started; nothing executed` }, 0);
+  finalizeProof(proof);
+  const why = signal.reason instanceof Error ? signal.reason.message : 'aborted';
+  return {
+    content: { error: `Dispatch of ${toolId} was aborted (${why}); nothing was executed.` },
+    isError: true,
+    metadata: { outcome: 'aborted', toolId, proof },
+  };
+}
+
+/** The result of an intent that did not resolve to one tool. Nothing ran. */
+function notExecutedResult(resolution: Resolution): ToolResult {
+  const options = resolution.refinement?.options ?? [];
+  return {
+    content: {
+      error: `${resolution.reason ?? `No tool was chosen for "${resolution.intent}"`}. Nothing was executed.`,
+      outcome: resolution.outcome,
+      intent: resolution.intent,
+      candidates: resolution.candidates.slice(0, 5).map(c => ({ toolId: c.toolId, score: c.score, tier: c.tier })),
+      ...(options.length > 0 ? { options: options.map(o => o.toolId ?? o.label) } : {}),
+    },
+    isError: true,
+    ...(resolution.refinement ? { refinement: resolution.refinement } : {}),
+    metadata: {
+      outcome: resolution.outcome,
+      tier: resolution.tier,
+      proof: resolution.proof,
+      ...(resolution.refinement ? { refinement: true, optionCount: options.length } : {}),
+      ...(resolution.retryAfterMs !== undefined ? { retryAfterMs: resolution.retryAfterMs } : {}),
+    },
+  };
+}
+
+/** The proof of a dispatch by exact tool id (before execution). */
+function exactIdProof(
+  context: DispatchContext,
+  toolId: string,
+  tool: RegisteredTool,
+  options: DispatchByIdOptions,
+  started: number,
+): ResolutionProof {
+  const proof = context.newProof(null);
+  const verdict = evaluateDispatchPolicy(
+    { mode: 'id', toolId, imp: tool.imp, source: 'exact-id', score: 1, similarity: null, llmApproved: false, pins: [] },
+    context.policyOptions,
+  );
+  proof.resolutionDigest = options.resolutionDigest ?? null;
+  proof.outcome = 'resolved';
+  proof.decision = 'exact-id';
+  proof.tier = 'exact';
+  proof.chosen = toolId;
+  proof.confidence = 1;
+  proof.candidates = [{ toolId, selector: tool.selectors[0], score: 1, similarity: null, tier: 'exact', source: 'exact-id' }];
+  addProofStep(proof, { stage: 'exact_id', decision: verdict.reason, detail: { toolId } }, proofClock() - started);
+  return proof;
+}
+
+/**
+ * dispatchById — execute exactly the named tool. O(1) lookup, no
+ * embedding, no resolution. Arguments are validated against the tool's
+ * inputSchema first; invalid arguments, an unknown id or an ambiguous id
+ * return an isError result and run nothing.
+ */
+export async function dispatchById(
+  context: DispatchContext,
+  toolId: string,
+  args: Record<string, unknown> = {},
+  options: DispatchByIdOptions = {},
+): Promise<ToolResult> {
+  const started = proofClock();
+  const tool = context.getTool(toolId);
+
+  if (!tool) {
+    const proof = context.newProof(null);
+    proof.resolutionDigest = options.resolutionDigest ?? null;
+    const ambiguous = context.isAmbiguousToolId(toolId);
+    proof.decision = 'unknown-tool';
+    addProofStep(proof, { stage: 'exact_id', decision: ambiguous ? `${toolId} is claimed by more than one tool` : `${toolId} is not a registered tool` }, proofClock() - started);
+    finalizeProof(proof);
+    context.logDecision('dispatch-by-id', proof, 'none', options.principal, toolId);
+    return {
+      content: {
+        error: ambiguous
+          ? `Tool id "${toolId}" is claimed by more than one registered tool; nothing was executed.`
+          : `Unknown tool "${toolId}"; nothing was executed. Tool ids have the form "<providerId>/<toolName>".`,
+      },
+      isError: true,
+      metadata: { outcome: 'unresolved', toolId, proof },
+    };
+  }
+
+  const proof = exactIdProof(context, toolId, tool, options, started);
+  if (options.signal?.aborted) {
+    const aborted = abortedResult(toolId, proof, options.signal);
+    context.logDecision('dispatch-by-id', proof, 'aborted', options.principal);
+    return aborted;
+  }
+  const callStarted = proofClock();
+  const prepared = await prepareCall(context, tool.imp, toolId, args);
+  recordCall(proof, toolId, prepared, callStarted);
+  if (!prepared.ok) {
+    context.logDecision('dispatch-by-id', proof, 'invalid-arguments', options.principal);
+    return invalidArgumentsResult(toolId, prepared.errors, proof);
+  }
+
+  context.logDecision('dispatch-by-id', proof, 'ran', options.principal);
+  const result = await execute(tool.imp, prepared.args, options.signal);
+  return annotateExecuted(result, toolId, proof);
+}
+
+/** Run an IMP, passing ExecuteOptions only when there is a signal to carry. */
+function execute(imp: ToolIMP, args: Record<string, unknown>, signal: AbortSignal | undefined): Promise<ToolResult> {
+  return signal ? imp.execute(args, { signal }) : imp.execute(args);
+}
+
+/**
+ * toolkit_dispatch — the convenience path: resolve(intent) → policy →
+ * execute exactly the chosen tool (through the same validation boundary
+ * as dispatchById). When resolution does not settle on one tool, nothing
+ * runs and the result is an isError result carrying the candidates.
+ */
+export async function toolkit_dispatch(
+  context: DispatchContext,
+  intent: string,
+  args?: Record<string, unknown>,
+  options: DispatchOptions = {},
+): Promise<ToolResult> {
+  return dispatchIntent(context, intent, args, rootFrame(options));
+}
+
+/**
+ * Per-request dispatch state. Each top-level dispatch gets its own frame,
+ * so concurrent dispatches never see each other's depth or budget.
+ */
+interface DispatchFrame {
+  depth: number;
+  /** intentKeys of the intents this one was decomposed from */
+  ancestors: readonly string[];
+  /** Sub-dispatches left for the whole request (shared by the tree) */
+  budget: { remaining: number; limit: number };
+  principal?: string;
+  signal?: AbortSignal;
+}
+
+function rootFrame(options: DispatchOptions, budget?: number): DispatchFrame {
+  return {
+    depth: 0,
+    ancestors: [],
+    budget: { remaining: budget ?? Infinity, limit: budget ?? Infinity },
+    principal: options.principal,
+    signal: options.signal,
+  };
+}
+
+/** Run a decomposition's sub-intents, one level deeper, within the request's budget. */
+function runDecomposition(
+  context: DispatchContext,
+  intent: string,
+  decomposition: DecompositionResult,
+  frame: DispatchFrame,
+): Promise<ToolResult> {
+  if (frame.budget.limit === Infinity) {
+    frame.budget.remaining = frame.budget.limit = context.maxSubDispatches;
+  }
+  const child: DispatchFrame = {
+    ...frame,
+    depth: frame.depth + 1,
+    ancestors: [...frame.ancestors, intentKey(intent)],
+  };
+  return executeDecomposition(decomposition, async (subIntent, subArgs) => {
+    if (frame.budget.remaining <= 0) {
+      return {
+        content: { error: `Not dispatched: the sub-dispatch limit (${frame.budget.limit}) for this request was reached.` },
+        isError: true,
+        metadata: { outcome: 'not-dispatched' },
+      };
+    }
+    frame.budget.remaining--;
+    return dispatchIntent(context, subIntent, subArgs, child);
+  });
+}
+
+async function dispatchIntent(
+  context: DispatchContext,
+  intent: string,
+  args: Record<string, unknown> | undefined,
+  frame: DispatchFrame,
+): Promise<ToolResult> {
+  const r = await resolveInternal(context, intent, {
+    learn: true,
+    args,
+    principal: frame.principal,
+    allowDecomposition: true,
+    depth: frame.depth,
+    ancestors: frame.ancestors,
+  });
+  const { resolution } = r;
+
+  if (r.decomposition) {
+    // Each sub-intent goes through this same pipeline (and policy), one level deeper.
+    context.logDecision('dispatch', resolution.proof, 'decomposed', frame.principal);
+    const result = await runDecomposition(context, intent, r.decomposition, frame);
+    result.metadata = { ...result.metadata, outcome: 'resolved', tier: resolution.tier, proof: resolution.proof };
+    return result;
+  }
+
+  if (resolution.outcome !== 'resolved' || !r.imp) {
+    context.logDecision('dispatch', resolution.proof, 'none', frame.principal);
+    return notExecutedResult(resolution);
+  }
+
+  const toolId = resolution.chosen!;
+  const proof = resolution.proof;
+  if (frame.signal?.aborted) {
+    const aborted = abortedResult(toolId, proof, frame.signal);
+    context.logDecision('dispatch', proof, 'aborted', frame.principal);
+    return aborted;
+  }
+  const callStarted = proofClock();
+  const prepared = await prepareCall(context, r.imp, toolId, args ?? {});
+  recordCall(proof, toolId, prepared, callStarted);
+  if (!prepared.ok) {
+    context.logDecision('dispatch', proof, 'invalid-arguments', frame.principal);
+    context.observer.recordSchemaRejection(toolId, intent, JSON.stringify(prepared.errors));
+    return invalidArgumentsResult(toolId, prepared.errors, proof);
+  }
+
+  context.logDecision('dispatch', proof, 'ran', frame.principal);
+  const result = annotateExecuted(await execute(r.imp, prepared.args, frame.signal), toolId, proof);
+
+  // Record dispatch for observer (Pillar 5)
+  context.observer.recordDispatch({
+    intent,
+    tool: toolId,
+    confidence: resolution.confidence ?? 0,
+    timestamp: Date.now(),
+    schemaRejected: result.isError === true && result.metadata?.validationErrors !== undefined,
+    ...(frame.principal !== undefined ? { principal: frame.principal } : {}),
+  });
+
+  // Annotate ambiguous results so callers know another tool was close
+  if (resolution.candidates.length > 1 && (resolution.confidence ?? 0) <= 0.90) {
+    result.metadata = {
+      ...result.metadata,
+      ambiguous: true,
+      candidateCount: resolution.candidates.length,
+      topCandidates: resolution.candidates.slice(0, 3).map(c => ({ toolId: c.toolId, confidence: c.score })),
+    };
+  }
+
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// Streaming
+// ---------------------------------------------------------------------------
 
 /**
  * smallchat_dispatchStream — async generator variant of toolkit_dispatch.
@@ -1037,127 +1529,219 @@ function annotateResult(result: ToolResult, proof: ResolutionProof): ToolResult 
  *   4. "done" — final result with the complete ToolResult
  *   5. "error" — if anything goes wrong at any stage
  *
- * Uses resolveToolIMP for resolution, then streams execution.
+ * Closing the generator early (a `break` in for-await) aborts the signal
+ * the running tool received.
  */
 export async function* smallchat_dispatchStream(
   context: DispatchContext,
   intent: string,
   args?: Record<string, unknown>,
+  options: DispatchOptions = {},
 ): AsyncGenerator<DispatchEvent> {
   yield { type: 'resolving', intent };
 
-  let outcome: ResolutionOutcome;
+  const frame = rootFrame(options);
+  let r: InternalResolution;
   try {
-    outcome = await resolveToolIMP(context, intent, args);
+    r = await resolveInternal(context, intent, {
+      learn: true,
+      args,
+      principal: frame.principal,
+      allowDecomposition: true,
+      depth: 0,
+      ancestors: [],
+    });
   } catch (err) {
-    const metadata: Record<string, unknown> = {};
-    if (err instanceof UnrecognizedIntent) {
-      metadata.nearestSelectors = err.nearestSelectors;
-      metadata.suggestion = err.suggestion;
-    }
-    if (err instanceof SignatureValidationError) {
-      metadata.typeConfusionGuard = true;
-      metadata.violations = err.violations;
-      metadata.signature = err.signature.signatureKey;
-    }
-    if (err instanceof VectorFloodError) {
-      metadata.throttled = true;
-      metadata.reason = 'vector-flooding';
-    }
-    yield {
-      type: 'error',
-      error: err instanceof Error ? err.message : String(err),
-      metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
-    };
+    yield streamError(err);
     return;
   }
 
-  if (outcome.kind === 'forwarded' || outcome.kind === 'decomposed' || outcome.kind === 'refined') {
-    yield { type: 'done', result: annotateResult(outcome.result, outcome.proof) };
+  if (r.decomposition) {
+    context.logDecision('dispatch', r.resolution.proof, 'decomposed', frame.principal);
+    const result = await runDecomposition(context, intent, r.decomposition, frame);
+    result.metadata = { ...result.metadata, outcome: 'resolved', tier: r.resolution.tier, proof: r.resolution.proof };
+    yield { type: 'done', result };
+    return;
+  }
+
+  if (r.resolution.outcome !== 'resolved' || !r.imp) {
+    context.logDecision('dispatch', r.resolution.proof, 'none', frame.principal);
+    yield { type: 'done', result: notExecutedResult(r.resolution) };
     return;
   }
 
   yield {
     type: 'tool-start',
-    toolName: outcome.imp.toolName,
-    providerId: outcome.imp.providerId,
-    confidence: outcome.confidence,
-    selector: outcome.selector.canonical,
+    toolId: r.resolution.chosen!,
+    toolName: r.imp.toolName,
+    providerId: r.imp.providerId,
+    confidence: r.resolution.confidence ?? 0,
+    selector: r.resolution.candidates.find(c => c.toolId === r.resolution.chosen)?.selector ?? '',
   };
 
-  yield* executeAndStream(outcome.imp, args ?? {});
+  yield* executeAndStream(context, r.imp, r.resolution.chosen!, args ?? {}, r.resolution.proof, options.signal,
+    execution => context.logDecision('dispatch', r.resolution.proof, execution, options.principal));
+}
+
+/**
+ * Streaming variant of dispatchById: executes exactly the named tool.
+ */
+export async function* smallchat_dispatchStreamById(
+  context: DispatchContext,
+  toolId: string,
+  args: Record<string, unknown> = {},
+  options: DispatchByIdOptions = {},
+): AsyncGenerator<DispatchEvent> {
+  const tool = context.getTool(toolId);
+  if (!tool) {
+    yield { type: 'done', result: await dispatchById(context, toolId, args, options) };
+    return;
+  }
+
+  const proof = exactIdProof(context, toolId, tool, options, proofClock());
+
+  yield {
+    type: 'tool-start',
+    toolId,
+    toolName: tool.imp.toolName,
+    providerId: tool.imp.providerId,
+    confidence: 1,
+    selector: tool.selectors[0],
+  };
+  yield* executeAndStream(context, tool.imp, toolId, args, proof, options.signal,
+    execution => context.logDecision('dispatch-by-id', proof, execution, options.principal));
+}
+
+function streamError(err: unknown): DispatchEvent {
+  const metadata: Record<string, unknown> = {};
+  if (err instanceof UnrecognizedIntent) {
+    metadata.nearestSelectors = err.nearestSelectors;
+    metadata.suggestion = err.suggestion;
+  }
+  if (err instanceof SignatureValidationError) {
+    metadata.typeConfusionGuard = true;
+    metadata.violations = err.violations;
+    metadata.signature = err.signature.signatureKey;
+  }
+  return {
+    type: 'error',
+    error: err instanceof Error ? err.message : String(err),
+    metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
+  };
 }
 
 /**
  * StreamableIMP — IMP with optional chunk-level streaming.
  */
 interface StreamableIMP extends ToolIMP {
-  executeStream?: (args: Record<string, unknown>) => AsyncIterable<ToolResult>;
+  executeStream?: (args: Record<string, unknown>, options?: ExecuteOptions) => AsyncIterable<ToolResult>;
 }
 
 /**
  * InferenceIMP — IMP with optional token-level progressive inference.
  *
  * This is the bridge for provider-native streaming: the IMP opens an
- * OpenAI or Anthropic SSE connection and yields individual deltas.
- * The generator signature we already have is perfect for it — each
- * InferenceDelta becomes a DispatchEventInferenceDelta event.
+ * OpenAI or Anthropic SSE connection and yields individual deltas. See
+ * InferenceStream (core/types.ts) for the contract: no deltas and no
+ * returned result means nothing executed. An IMP that also defines
+ * supportsInference() is asked first (ToolProxy answers for its transport).
  */
 interface InferenceIMP extends StreamableIMP {
-  executeInference?: (args: Record<string, unknown>) => AsyncIterable<InferenceDelta>;
+  executeInference?: (args: Record<string, unknown>, options?: ExecuteOptions) => InferenceStream | AsyncIterable<InferenceDelta>;
+  supportsInference?: () => boolean;
 }
 
 /**
- * Execute a tool and stream its result at the finest granularity the
- * IMP supports. Resolution order:
+ * Validate, then execute a tool and stream its result at the finest
+ * granularity the IMP supports:
  *
- *   1. executeInference  — token-level deltas (OpenAI / Anthropic SSE)
+ *   1. executeInference  — token-level deltas (OpenAI / Anthropic SSE),
+ *                          when the IMP supports it for this call
  *   2. executeStream     — chunk-level results
- *   3. execute           — single-shot fallback
+ *   3. execute           — single-shot
  *
- * Each tier falls through to the next, so every IMP works — providers
- * that expose a raw inference stream just get true progressive output.
+ * An inference stream that yields no deltas falls through to its returned
+ * result, or else to tiers 2–3. The tool receives an AbortSignal that
+ * fires when `signal` does or when the consumer closes the stream early.
  */
 async function* executeAndStream(
+  context: DispatchContext,
   imp: ToolIMP,
+  toolId: string,
   args: Record<string, unknown>,
+  proof: ResolutionProof,
+  signal: AbortSignal | undefined,
+  logDecision: (execution: DecisionExecution) => void,
 ): AsyncGenerator<DispatchEvent> {
-  // Run constraint validation before streaming — prevents type confusion
-  const validation = imp.constraints.validate(args);
-  if (!validation.valid) {
+  if (signal?.aborted) {
+    const aborted = abortedResult(toolId, proof, signal);
+    logDecision('aborted');
+    yield { type: 'done', result: aborted };
+    return;
+  }
+  const callStarted = proofClock();
+  const prepared = await prepareCall(context, imp, toolId, args);
+  recordCall(proof, toolId, prepared, callStarted);
+  if (!prepared.ok) {
+    logDecision('invalid-arguments');
     yield {
       type: 'error',
-      error: `Argument validation failed: ${validation.errors.map(e => e.message).join('; ')}`,
-      metadata: { validationErrors: validation.errors, typeConfusionGuard: true },
+      error: `Invalid arguments for ${toolId}; the tool was not called: ${prepared.errors.map(e => e.message).join('; ')}`,
+      metadata: { validationErrors: prepared.errors, toolId, proof },
     };
     return;
   }
+  const callArgs = prepared.args;
+  logDecision('ran');
 
-  const unwrapped: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(args)) {
-    unwrapped[key] = unwrapValue(value);
-  }
+  // The tool's signal: the caller's, plus our own for early close.
+  const controller = new AbortController();
+  const forward = (): void => controller.abort(signal?.reason);
+  signal?.addEventListener('abort', forward, { once: true });
+  const options: ExecuteOptions = { signal: controller.signal };
+  let finished = false;
 
   try {
     const inferenceImp = imp as InferenceIMP;
 
     // ---- Tier 1: Progressive inference (token-level) ----
-    if (typeof inferenceImp.executeInference === 'function') {
+    const inferenceSupported = typeof inferenceImp.executeInference === 'function'
+      && (typeof inferenceImp.supportsInference !== 'function' || inferenceImp.supportsInference());
+    if (inferenceSupported) {
       let tokenIndex = 0;
       const parts: string[] = [];
-
-      for await (const delta of inferenceImp.executeInference(unwrapped)) {
-        yield { type: 'inference-delta', delta, tokenIndex };
-        parts.push(delta.text);
-        tokenIndex++;
+      const stream = inferenceImp.executeInference!(callArgs, options);
+      const iterator = stream[Symbol.asyncIterator]() as AsyncIterator<InferenceDelta, ToolResult | void>;
+      let returned: ToolResult | void = undefined;
+      let exhausted = false;
+      try {
+        for (;;) {
+          const next = await iterator.next();
+          if (next.done) { exhausted = true; returned = next.value; break; }
+          yield { type: 'inference-delta', delta: next.value, tokenIndex };
+          parts.push(next.value.text);
+          tokenIndex++;
+        }
+      } finally {
+        if (!exhausted) await iterator.return?.();
       }
 
-      // Synthesise a final ToolResult from the accumulated tokens
-      const assembled = parts.join('');
-      const result: ToolResult = { content: assembled };
-      yield { type: 'chunk', content: assembled, index: 0 };
-      yield { type: 'done', result };
-      return;
+      if (tokenIndex > 0) {
+        // Synthesise a final ToolResult from the accumulated tokens
+        const assembled = parts.join('');
+        yield { type: 'chunk', content: assembled, index: 0 };
+        finished = true;
+        yield { type: 'done', result: annotateExecuted({ content: assembled }, toolId, proof) };
+        return;
+      }
+      if (returned && typeof returned === 'object') {
+        // The upstream answered without streaming: that is the result.
+        yield { type: 'chunk', content: returned.content, index: 0 };
+        finished = true;
+        yield { type: 'done', result: annotateExecuted(returned, toolId, proof) };
+        return;
+      }
+      // No deltas and no result: nothing executed — fall through.
     }
 
     // ---- Tier 2: Chunk-level streaming ----
@@ -1167,61 +1751,31 @@ async function* executeAndStream(
       let index = 0;
       let lastResult: ToolResult | undefined;
 
-      for await (const chunk of streamable.executeStream(unwrapped)) {
+      for await (const chunk of streamable.executeStream(callArgs, options)) {
         yield { type: 'chunk', content: chunk.content, index };
         index++;
         lastResult = chunk;
       }
 
-      yield {
-        type: 'done',
-        result: lastResult ?? { content: null },
-      };
+      finished = true;
+      yield { type: 'done', result: annotateExecuted(lastResult ?? { content: null }, toolId, proof) };
       return;
     }
 
-    // ---- Tier 3: Single-shot fallback ----
-    const result = await imp.execute(unwrapped);
+    // ---- Tier 3: Single-shot ----
+    const result = await imp.execute(callArgs, options);
     yield { type: 'chunk', content: result.content, index: 0 };
-    yield { type: 'done', result };
+    finished = true;
+    yield { type: 'done', result: annotateExecuted(result, toolId, proof) };
   } catch (err) {
+    finished = true;
     yield {
       type: 'error',
       error: err instanceof Error ? err.message : String(err),
     };
+  } finally {
+    signal?.removeEventListener('abort', forward);
+    // Closed before the result was delivered: tell the tool to stop.
+    if (!finished) controller.abort(new Error('dispatch stream closed'));
   }
-}
-
-/**
- * Execute an IMP with arguments, unwrapping any SCObject values
- * back to their underlying representations.
- *
- * Runs the IMP's own constraint validation before execution as
- * a final safety net against type confusion.
- */
-function executeWithArgs(
-  imp: ToolIMP,
-  args: Record<string, unknown>,
-): Promise<ToolResult> {
-  // Run constraint validation as a final safety net
-  const validation = imp.constraints.validate(args);
-  if (!validation.valid) {
-    return Promise.resolve({
-      content: {
-        error: 'Argument validation failed',
-        violations: validation.errors,
-      },
-      isError: true,
-      metadata: {
-        validationErrors: validation.errors,
-        typeConfusionGuard: true,
-      },
-    });
-  }
-
-  const unwrapped: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(args)) {
-    unwrapped[key] = unwrapValue(value);
-  }
-  return imp.execute(unwrapped);
 }

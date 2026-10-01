@@ -10,7 +10,7 @@ Inspects a compiled artifact and prints structured information about its content
 ## Usage
 
 ```bash
-npx @smallchat/core inspect <file> [--providers] [--selectors]
+npx -y @smallchat/core inspect <file> [--providers] [--selectors]
 ```
 
 ## Arguments
@@ -33,26 +33,31 @@ If neither `--providers` nor `--selectors` is specified, a summary is printed.
 ### Summary (no flags)
 
 ```bash
-npx @smallchat/core inspect tools.json
+npx -y @smallchat/core inspect tools.json
 ```
 
 Output:
 
 ```
-tools.json
-  Version:     1
-  Fingerprint: a3f2c1d8...
-  Providers:   3
-  Tools:       15
-  Selectors:   13   (2 deduplicated)
-  Overloads:   2
-  Size:        48 KB
+ToolKit artifact: /path/to/tools.json
+Format: 1.0
+Content hash: ba4389ec7f20aef0cea4ef8073bd0549b47eee0cf6920a3b32657bbdc6ad7262
+Stats:
+  Tools: 15
+  Selectors: 17
+  Providers: 3
+  Collisions: 2
+  Near-duplicates: 0
 ```
+
+`inspect` validates the artifact first (format 1.0 schema, consistency,
+content hash) and refuses pre-1.0 files. Add `--embeddings` to print the
+embedder fingerprint the artifact was compiled with.
 
 ### Providers
 
 ```bash
-npx @smallchat/core inspect tools.json --providers
+npx -y @smallchat/core inspect tools.json --providers
 ```
 
 Output:
@@ -67,7 +72,7 @@ Providers (3):
 ### Selectors
 
 ```bash
-npx @smallchat/core inspect tools.json --selectors
+npx -y @smallchat/core inspect tools.json --selectors
 ```
 
 Output:
@@ -92,7 +97,7 @@ Selectors (13):
 ### Both flags
 
 ```bash
-npx @smallchat/core inspect tools.json --providers --selectors
+npx -y @smallchat/core inspect tools.json --providers --selectors
 ```
 
 Prints providers followed by selectors.

@@ -11,16 +11,17 @@ const TERMINAL_LINES: Array<{ type: 'comment' | 'prompt' | 'output' | 'blank'; t
   { type: 'prompt', text: 'npm install @smallchat/core' },
   { type: 'blank' },
   { type: 'comment', text: '# Compile tool definitions' },
-  { type: 'prompt', text: 'npx @smallchat/core compile --source ./tools --output tools.json' },
-  { type: 'output', text: 'Compiling tools... ✓ 3 tools from 2 providers embedded.' },
+  { type: 'prompt', text: 'npx -y @smallchat/core compile --source ./manifests --output tools.json' },
+  { type: 'output', text: 'Tools: 3 (3 selectors, none shared) — format 1.0, onnx all-MiniLM-L6-v2' },
   { type: 'blank' },
-  { type: 'comment', text: '# Test a natural-language dispatch' },
-  { type: 'prompt', text: 'npx @smallchat/core resolve tools.json "search for code"' },
-  { type: 'output', text: 'Matched: github.search_code (confidence: 0.98)' },
+  { type: 'comment', text: '# Resolve an intent (resolve runs nothing)' },
+  { type: 'prompt', text: 'npx -y @smallchat/core resolve tools.json "search for code in GitHub repositories"' },
+  { type: 'output', text: 'Outcome: resolved (tier HIGH, decision ranked)' },
+  { type: 'output', text: 'Chosen: github/search_code  (serve name: github__search_code)' },
   { type: 'blank' },
-  { type: 'comment', text: '# Spin up the built-in MCP server' },
-  { type: 'prompt', text: 'npx @smallchat/core serve tools.json --port 3000' },
-  { type: 'output', text: 'smallchat server running on http://localhost:3000 ✓' },
+  { type: 'comment', text: '# Serve the upstream servers\' tools through one MCP server' },
+  { type: 'prompt', text: 'npx -y @smallchat/core serve --source tools.json --http' },
+  { type: 'output', text: 'smallchat MCP server (Streamable HTTP) at http://127.0.0.1:3001/mcp' },
 ];
 
 function TerminalWindow() {
@@ -102,7 +103,7 @@ const FEATURES = [
   {
     icon: '🔬',
     title: 'Deep dive',
-    desc: 'SelectorTable, DispatchContext, OverloadTable, ResolutionCache, ToolClass hierarchies, method swizzling, streaming tiers, and the MCP 2025-11-25 server — all documented.',
+    desc: 'SelectorTable, DispatchContext, OverloadTable, ResolutionCache, ToolClass hierarchies, method swizzling, streaming, and the MCP server built on the official SDK — all documented.',
     href: '/docs/concepts',
     linkLabel: 'Explore the internals',
   },
@@ -158,14 +159,14 @@ function ComparisonTable() {
               <td>Streaming</td>
               <td>CallbackManager + custom piping</td>
               <td>
-                <code>for await</code> over native provider deltas
+                <code>for await</code> over dispatch events (and the tool's own token deltas)
               </td>
             </tr>
             <tr>
               <td>Tool dispatch</td>
               <td>Chain/Agent hierarchy</td>
               <td>
-                One <code>smallchat_dispatchStream</code> call
+                One <code>runtime.dispatchStream(intent, args)</code> call, policy included
               </td>
             </tr>
             <tr>
@@ -181,9 +182,9 @@ function ComparisonTable() {
               </td>
             </tr>
             <tr>
-              <td>Bundle size</td>
+              <td>Footprint</td>
               <td>Multiple adapter packages</td>
-              <td>&lt; 5 MB, zero dependencies</td>
+              <td>One package: the MCP SDK, ONNX Runtime with a bundled 22 MB model, and SQLite</td>
             </tr>
           </tbody>
         </table>
@@ -196,7 +197,7 @@ function ComparisonTable() {
 
 const INSTALL_COMMANDS = {
   typescript: 'npm install @smallchat/core',
-  swift: '.package(url: "https://github.com/johnnyclem/smallchat-swift", from: "0.2.0")',
+  swift: '.package(url: "https://github.com/johnnyclem/smallchat-swift", from: "1.0.0")',
 };
 
 function InstallStrip() {
@@ -286,12 +287,12 @@ export default function Home(): JSX.Element {
   return (
     <Layout
       title="object oriented inference"
-      description="smallchat — a message-passing tool compiler for LLM tool use. Semantic dispatch, streaming, and an MCP server in one tiny package."
+      description="smallchat — a message-passing tool compiler for LLM tool use. Semantic dispatch, streaming, and an MCP server in one package."
     >
       {/* Hero */}
       <section className="hero-section">
         <div className="hero-badge">
-          <span style={{ fontSize: '0.9em' }}>&#x25CF;</span> v0.1.0 — MCP 2025-11-25 compliant
+          <span style={{ fontSize: '0.9em' }}>&#x25CF;</span> v1.0.0 — MCP servers on the official SDK
         </div>
 
         <h1 className="hero-title">object oriented inference</h1>
@@ -327,7 +328,7 @@ export default function Home(): JSX.Element {
           <div className="section-eyebrow">What you get</div>
           <div className="section-title">The Obj-C runtime for LLM tooling</div>
           <div className="section-subtitle">
-            Selectors, dispatch tables, forwarding chains, method swizzling — applied to tool
+            Selectors, dispatch tables, protocols, method swizzling — applied to tool
             orchestration.
           </div>
         </div>

@@ -2,7 +2,13 @@
  * WorkerVectorIndex — a VectorIndex proxy that runs sqlite-vec queries
  * on a dedicated Worker Thread, keeping the main event loop free.
  *
- * Implements the same VectorIndex interface as SqliteVectorIndex.
+ * Implements the VectorIndex interface with asynchronous search() and
+ * size() (the interface allows a Promise), so it can back a ToolRuntime
+ * directly:
+ *
+ *   const bridge = new EmbeddingWorkerBridge();
+ *   const runtime = new ToolRuntime(new WorkerVectorIndex(bridge), new WorkerEmbedder(bridge));
+ *
  * Shares an EmbeddingWorkerBridge with WorkerEmbedder so that both
  * ONNX inference and vector lookups run on the same off-main thread.
  */
@@ -36,19 +42,15 @@ export class WorkerVectorIndex implements VectorIndex {
     await this.bridge.request('vectorInsert', { id, vector });
   }
 
-  search(vector: Float32Array, topK: number, threshold: number): SelectorMatch[] {
-    // VectorIndex.search is synchronous in the interface, but we cannot
-    // block the main thread waiting for a worker response.
-    // Throw to indicate callers should use searchAsync instead.
-    throw new Error(
-      'WorkerVectorIndex.search() is not available synchronously. ' +
-      'Use searchAsync() instead, or use WorkerDispatchContext which handles this automatically.',
-    );
+  /**
+   * Search on the worker. Inserts sent earlier are processed first (the
+   * worker handles messages in order).
+   */
+  search(vector: Float32Array, topK: number, threshold: number): Promise<SelectorMatch[]> {
+    return this.searchAsync(vector, topK, threshold);
   }
 
-  /**
-   * Async search — the primary way to query the worker-backed vector index.
-   */
+  /** Same as search(). */
   async searchAsync(vector: Float32Array, topK: number, threshold: number): Promise<SelectorMatch[]> {
     const data = await this.bridge.request('vectorSearch', {
       query: vector,
@@ -66,10 +68,9 @@ export class WorkerVectorIndex implements VectorIndex {
     await this.bridge.request('vectorRemove', { id });
   }
 
-  size(): number {
-    throw new Error(
-      'WorkerVectorIndex.size() is not available synchronously. Use sizeAsync() instead.',
-    );
+  /** Number of vectors in the worker's index. */
+  size(): Promise<number> {
+    return this.sizeAsync();
   }
 
   async sizeAsync(): Promise<number> {

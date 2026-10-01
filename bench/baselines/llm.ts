@@ -1,26 +1,24 @@
 /**
- * LLM tool selection baseline — stub.
+ * Simulated LLM tool selection baseline — no model is called.
  *
- * In production, this would dump the full tool list into an LLM prompt
- * and ask it to pick the best tool. For benchmark purposes, this is a
- * deterministic simulation that uses a combination of embedding similarity
- * and heuristic scoring to approximate what an LLM would do.
+ * A stand-in for "dump the tool list into an LLM prompt and let it pick":
+ * hash-embedding similarity plus provider/tag mention boosts plus random
+ * noise scaled by a temperature. Its numbers say nothing about any real
+ * LLM; it is reported as 'simulated-llm'. Its latency is the measured
+ * compute time of the simulation (no network call is made or simulated).
  *
- * The key difference from embedding-only: this also considers the tool
- * descriptions more holistically (simulating "reading comprehension")
- * but introduces non-determinism via a randomized temperature parameter.
- *
- * Replace the resolve() body with actual LLM calls when API key is available.
+ * Replace the resolve() body with actual LLM calls when an API key is
+ * available, and rename the runner accordingly.
  */
 
-import { LocalEmbedder } from '../../src/embedding/local-embedder.js';
+import { HashEmbedder } from '../../src/embedding/hash-embedder.js';
 import { MemoryVectorIndex } from '../../src/embedding/memory-vector-index.js';
 import type { BenchTool, Runner, RunnerResult, ResolvedResult } from '../runners/types.js';
 
 export class LLMBaseline implements Runner {
-  name = 'llm';
+  name = 'simulated-llm';
   private tools: BenchTool[] = [];
-  private embedder = new LocalEmbedder(384);
+  private embedder = new HashEmbedder(384);
   private index = new MemoryVectorIndex();
   private toolById = new Map<string, BenchTool>();
   /** Simulated temperature — adds controlled noise to simulate LLM non-determinism */
@@ -44,9 +42,6 @@ export class LLMBaseline implements Runner {
 
   async resolve(query: string): Promise<RunnerResult> {
     const start = performance.now();
-
-    // Simulate LLM latency (real LLM calls are 500-2000ms)
-    const simulatedLatency = 400 + Math.random() * 800;
 
     const queryVector = await this.embedder.embed(query);
     const matches = this.index.search(queryVector, 10, 0.0);
@@ -87,7 +82,7 @@ export class LLMBaseline implements Runner {
     });
 
     ranked.sort((a, b) => b.score - a.score);
-    const latencyMs = performance.now() - start + simulatedLatency;
+    const latencyMs = performance.now() - start;
 
     return {
       caseId: '',

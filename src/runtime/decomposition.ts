@@ -27,7 +27,7 @@ export interface DecompositionResult {
 // ---------------------------------------------------------------------------
 
 export interface DecompositionOptions {
-  /** Maximum decomposition depth to prevent infinite chains (default: 3) */
+  /** Maximum decomposition depth to prevent infinite chains (default: 2) */
   maxDepth?: number;
   /** Current depth (used internally for recursive decomposition) */
   currentDepth?: number;
@@ -40,9 +40,11 @@ export interface DecompositionOptions {
 /**
  * Decompose a complex intent into sub-intents using available tools.
  *
- * Called when confidence is LOW (0.60-0.75). If no LLM client is available,
- * returns a non-decomposed result so dispatch can fall through to the
- * forwarding chain.
+ * Called by dispatch when the best candidate is LOW (0.60–0.75) or nothing
+ * matched. If no LLM client is available, or currentDepth has reached
+ * maxDepth, returns a non-decomposed result. Dispatch additionally drops
+ * sub-intents that restate the intent or one it was split from, and caps
+ * the sub-dispatches of one request (DispatchConfig.maxSubDispatches).
  */
 export async function decompose(
   intent: string,
@@ -50,7 +52,7 @@ export async function decompose(
   llmClient?: LLMClient,
   options?: DecompositionOptions,
 ): Promise<DecompositionResult> {
-  const maxDepth = options?.maxDepth ?? 3;
+  const maxDepth = options?.maxDepth ?? 2;
   const currentDepth = options?.currentDepth ?? 0;
 
   // Guard: depth limit

@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { RtkTransport, withRtk } from './rtk-transport.js';
+import { RtkTransport, withRtk, filterContentWithRtk } from './rtk-transport.js';
 import type { ITransport, TransportInput, TransportOutput } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -217,5 +217,31 @@ describe('RtkTransport', () => {
       expect(transport).toBeInstanceOf(RtkTransport);
       expect(transport.type).toBe(inner.type);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// An rtk that exits before reading its input (SC-SURF-17)
+// ---------------------------------------------------------------------------
+
+describe.skipIf(process.platform === 'win32')('an rtk binary that exits without reading stdin', () => {
+  const FOUR_MB = 'line of tool output\n'.repeat(220_000);
+
+  it('filterContentWithRtk returns the original content instead of crashing on EPIPE', async () => {
+    const result = await filterContentWithRtk(FOUR_MB, { binaryPath: '/bin/true' });
+    expect(result).toEqual({ compressed: FOUR_MB, savedPct: 0, enabled: false });
+  });
+
+  it('RtkTransport falls back to the uncompressed output', async () => {
+    const transport = new RtkTransport({ inner: makeMockTransport(FOUR_MB), binaryPath: '/bin/true' });
+    const result = await transport.execute(baseInput);
+    expect(result.content).toBe(FOUR_MB);
+    expect(result.metadata?.rtk?.enabled).toBe(false);
+  });
+
+  it('treats empty output from a "successful" rtk as a failure, not as the filtered result', async () => {
+    const result = await filterContentWithRtk('some output\n'.repeat(100), { binaryPath: '/bin/true' });
+    expect(result.enabled).toBe(false);
+    expect(result.compressed).toBe('some output\n'.repeat(100));
   });
 });

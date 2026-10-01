@@ -29,22 +29,59 @@ jobs:
       - name: Type check
         run: npm run lint
 
+      # packages/react/src/app-view.browser.test.ts runs a real MCP Apps view
+      # against AppView in Chromium; SMALLCHAT_BROWSER_TESTS=1 makes a missing
+      # browser a failure instead of a skip.
+      - name: Install Chromium (headless shell)
+        run: npx playwright-core install --with-deps --only-shell chromium
+
       - name: Test
         run: npm test
+        env:
+          SMALLCHAT_BROWSER_TESTS: '1'
 
-      # shorthand/ is a workspace member (not a standalone install like
-      # packages/docs) but its own test suite — compaction, CRDT, and
-      # importance-scoring, ~260 specs — was never run by root `npm test`,
-      # since the root vitest.config.ts only globs the root src/. Run it
-      # explicitly so this coverage is actually checked in CI.
+      # shorthand/ is a byte-for-byte mirror of @shorthand/core from the
+      # short-hand repository (scripts/sync-shorthand.mjs). SOURCE records
+      # the short-hand commit; check that commit out (this fails when it was
+      # never pushed) and fail when the mirror differs from it or from
+      # SOURCE, or from the published package once that version is on npm.
+      - name: Read the mirrored short-hand commit
+        id: shorthand
+        run: |
+          echo "commit=$(sed -n 's/^commit: //p' shorthand/SOURCE)" >> "$GITHUB_OUTPUT"
+
+      - name: Check out short-hand at that commit
+        uses: actions/checkout@v4
+        with:
+          repository: johnnyclem/short-hand
+          ref: ${{ steps.shorthand.outputs.commit }}
+          path: .short-hand-upstream
+
+      - name: Check the @shorthand/core mirror
+        run: npm run check:shorthand -- --registry
+        env:
+          SHORTHAND_DIR: .short-hand-upstream
+
+      # The mirror's own suite (compaction, CRDT properties, importance,
+      # truth format v2 conformance) is not globbed by the root vitest config.
       - name: Test shorthand
         run: npm test --workspace=shorthand
 
       - name: Build core
         run: npm run build
 
+      # Golden dispatch traces (examples/traces/) against an artifact compiled
+      # from examples/*-manifest.json: exit 1 on any changed decision.
+      - name: Replay golden traces
+        run: npm run test:traces
+
       - name: Build workspace packages
         run: npm run build:packages
+
+      # Pack @smallchat/core as it would be published, install the tarball
+      # into an empty project and load every export and the CLI there.
+      - name: Published package installs and loads
+        run: npm run test:pack
 
   audit:
     name: Dependency audit
@@ -61,9 +98,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # Fails only on critical-severity findings; see CHANGELOG.md for
-      # accepted-risk items (e.g. adm-zip via onnxruntime-node's
-      # install-time-only postinstall script).
+      # Fails only on critical-severity findings; see the Security section
+      # of CHANGELOG.md for advisories that remain open.
       - name: Audit (critical)
         run: npm audit --audit-level=critical
 

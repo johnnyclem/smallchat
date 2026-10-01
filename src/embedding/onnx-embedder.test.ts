@@ -122,3 +122,27 @@ describe('ONNXEmbedder', () => {
     expect(embedder.dimensions).toBe(384);
   });
 });
+
+// ---------------------------------------------------------------------------
+// SC-INF-21 — every embed was padded to 128 tokens (and batch-dependent)
+// ---------------------------------------------------------------------------
+
+describe('SC-INF-21: ONNXEmbedder embeds each text alone, unpadded', () => {
+  it('feeds a [1, tokenCount] tensor and gives a text the same vector alone or in a batch', async () => {
+    const embedder = new ONNXEmbedder({ cacheSize: 0 });
+    await embedder.whenReady();
+
+    const dims: number[][] = [];
+    const session = (embedder as unknown as { session: { run: (feeds: Record<string, { dims: readonly number[] }>) => Promise<unknown> } }).session;
+    const run = session.run.bind(session);
+    session.run = async (feeds) => { dims.push([...feeds.input_ids.dims]); return run(feeds); };
+
+    const short = await embedder.embed('list files');
+    expect(dims).toEqual([[1, 4]]);
+
+    embedder.clearCache();
+    const batch = await embedder.embedBatch(['search the issue tracker for open login bugs', 'list files']);
+    expect(dims.slice(1).every(d => d[0] === 1)).toBe(true);
+    expect(Array.from(batch[1])).toEqual(Array.from(short));
+  }, 30_000);
+});

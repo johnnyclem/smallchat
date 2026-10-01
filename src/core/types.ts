@@ -30,13 +30,18 @@ export interface ToolSelector {
 
   /**
    * Where this selector came from: a compiled tool (or alias) vs. a runtime
-   * intent resolved via SelectorTable.resolve(). Intent selectors share the
-   * interning table and vector index with tool selectors for cache-hit
-   * purposes, but have no owning ToolClass and must never be surfaced as
-   * dispatchable tools or refinement options. Defaults to 'tool' when
-   * omitted (selectors interned directly via intern() predate this field).
+   * intent embedded by SelectorTable.resolve(). Intent selectors are never
+   * added to the selector table or the vector index. Defaults to 'tool'
+   * when omitted.
    */
   provenance?: 'tool' | 'intent';
+
+  /**
+   * Identity of an intent selector: intentKey(text) — the normalized full
+   * text (core/selector-table.ts). The resolution cache keys on it. Absent
+   * on tool selectors, whose canonical is their identity.
+   */
+  key?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -73,6 +78,12 @@ export interface ToolRefinementNeeded {
      * user's choice is reinforced against the exact selector.
      */
     selectorId?: string;
+    /**
+     * Canonical tool id (`<providerId>/<toolName>`) of the option, when it
+     * names one tool. Pass it to `runtime.dispatchById()` to run exactly
+     * that tool.
+     */
+    toolId?: string;
   }>;
   narrowedIntents: string[];
 }
@@ -114,6 +125,13 @@ export interface ArgumentConstraints {
   required: ArgumentSpec[];
   optional: ArgumentSpec[];
   validate(args: Record<string, unknown>): ValidationResult;
+  /**
+   * The JSON Schema `validate` enforces, when these constraints are
+   * schema-backed (createSchemaConstraints). The runtime validates every
+   * call against the tool's inputSchema either way; see
+   * core/argument-validator.ts.
+   */
+  inputSchema?: Record<string, unknown>;
 }
 
 export interface ToolSchema {
@@ -134,14 +152,24 @@ export interface ToolIMP {
   schema: ToolSchema | null;
   /** Loads the full schema on demand */
   schemaLoader: () => Promise<ToolSchema>;
-  /** Execute the tool */
-  execute(args: Record<string, unknown>): Promise<ToolResult>;
+  /**
+   * Execute the tool. `options.signal` is aborted when the caller gives up
+   * (timeout, cancelled stream, AbortController); a tool should stop work
+   * and settle promptly when it fires.
+   */
+  execute(args: Record<string, unknown>, options?: ExecuteOptions): Promise<ToolResult>;
   /** Argument type constraints */
   constraints: ArgumentConstraints;
   /** Optional MCP Apps ui:// resource URI — present when this tool has an interactive view */
   uiUri?: string;
   /** Visibility for the UI resource: which audiences can invoke it */
   uiVisibility?: Array<'model' | 'app'>;
+  /**
+   * Behavioural hints declared by the upstream server (MCP tool
+   * annotations). The dispatch policy reads `destructiveHint` and
+   * `readOnlyHint`; smallchat does not verify them.
+   */
+  annotations?: ToolAnnotations;
 }
 
 // ---------------------------------------------------------------------------
@@ -158,10 +186,35 @@ export interface ToolIMP {
 // creates one.
 
 export interface ToolTransport {
-  execute(toolName: string, args: Record<string, unknown>): Promise<ToolResult>;
-  executeStream(toolName: string, args: Record<string, unknown>): AsyncGenerator<ToolResult>;
-  executeInference(toolName: string, args: Record<string, unknown>): AsyncGenerator<InferenceDelta>;
+  execute(toolName: string, args: Record<string, unknown>, options?: ExecuteOptions): Promise<ToolResult>;
+  executeStream(toolName: string, args: Record<string, unknown>, options?: ExecuteOptions): AsyncGenerator<ToolResult>;
+  /**
+   * Token-level inference streaming. Used only when supportsInference()
+   * returns true for the tool. See InferenceStream for the contract.
+   */
+  executeInference?(toolName: string, args: Record<string, unknown>, options?: ExecuteOptions): InferenceStream;
+  /**
+   * Whether executeInference can stream this tool. A transport without this
+   * method is treated as not supporting inference streaming, and streaming
+   * dispatch uses executeStream instead.
+   */
+  supportsInference?(toolName: string): boolean;
 }
+
+/** Per-call execution options. */
+export interface ExecuteOptions {
+  /** Aborted when the caller no longer wants the result */
+  signal?: AbortSignal;
+}
+
+/**
+ * A token-level inference stream. It yields deltas; when the upstream
+ * answers with a complete, non-streamed result instead, it yields nothing
+ * and returns that result. A stream that yields no deltas and returns
+ * nothing must not have executed the tool — the runtime then falls back to
+ * executeStream / execute.
+ */
+export type InferenceStream = AsyncGenerator<InferenceDelta, ToolResult | void, undefined>;
 
 export interface ToolTransportConnectionOptions {
   transportType: TransportType;
@@ -254,6 +307,8 @@ export interface DispatchEventResolving {
 
 export interface DispatchEventToolStart {
   type: 'tool-start';
+  /** Canonical tool id `<providerId>/<toolName>` of the tool about to run */
+  toolId: string;
   toolName: string;
   providerId: string;
   confidence: number;
@@ -388,17 +443,11 @@ export interface CompilerHint {
   aliases?: string[];
 
   /**
-   * Priority multiplier for dispatch ranking (default 1.0).
-   * Values > 1.0 boost this tool in ambiguous resolutions.
-   * Values < 1.0 demote it (useful for deprecated tools).
-   * e.g. 1.5 makes this tool 50% more likely to win ties.
-   */
-  priority?: number;
-
-  /**
-   * Mark this tool as the preferred resolution when multiple tools collide
-   * within the collision threshold. Only one tool per collision group should
-   * set this to true — the compiler warns if multiple do.
+   * Compile-time annotation: when this tool collides with another (the
+   * compiler's collision report), name it as the intended one. Only one tool
+   * per collision group should set it — the compiler warns if several do.
+   * It does not change dispatch ranking: candidates are ranked by
+   * similarity alone (quantized, ties broken by tool id).
    */
   preferred?: boolean;
 
@@ -421,11 +470,6 @@ export interface CompilerHint {
  * per-tool.
  */
 export interface ProviderCompilerHints {
-  /**
-   * Default priority multiplier for all tools from this provider.
-   */
-  priority?: number;
-
   /**
    * Namespace prefix prepended to all selector canonicals from this provider.
    * e.g. "vendor.github" → selectors become "vendor.github.search_code"
@@ -451,8 +495,14 @@ export interface ProviderCompilerHints {
 
 export interface ToolDefinition {
   name: string;
+  /** Human-readable display name (MCP `title`) */
+  title?: string;
   description: string;
   inputSchema: JSONSchemaType;
+  /** JSON Schema of the tool's structured result (MCP `outputSchema`) */
+  outputSchema?: Record<string, unknown>;
+  /** MCP tool annotations — behavioural hints declared by the upstream server */
+  annotations?: ToolAnnotations;
   providerId: string;
   transportType: TransportType;
   /** Optional compiler hints that steer semantic mapping for this tool */
@@ -463,12 +513,47 @@ export interface ToolDefinition {
   uiVisibility?: Array<'model' | 'app'>;
 }
 
+/**
+ * MCP tool annotations (spec 2025-03-26 and later). These are hints the
+ * upstream server declares about a tool's behaviour; smallchat carries them
+ * verbatim and does not verify them.
+ */
+export interface ToolAnnotations {
+  title?: string;
+  readOnlyHint?: boolean;
+  destructiveHint?: boolean;
+  idempotentHint?: boolean;
+  openWorldHint?: boolean;
+}
+
+/**
+ * How to reach an upstream provider. Environment variables are recorded by
+ * NAME only — values (tokens, keys) never enter a manifest or artifact.
+ */
+export type LaunchSpec = StdioLaunchSpec | RemoteLaunchSpec;
+
+export interface StdioLaunchSpec {
+  transport: 'stdio';
+  command: string;
+  args: string[];
+  /** Names of the environment variables the server expects (never values) */
+  env: string[];
+}
+
+export interface RemoteLaunchSpec {
+  /** 'streamable-http' and 'sse' are MCP transports; 'http' is a plain REST endpoint */
+  transport: 'streamable-http' | 'sse' | 'http';
+  url: string;
+}
+
 export interface ProviderManifest {
   id: string;
   name: string;
   tools: ToolDefinition[];
   transportType: TransportType;
   endpoint?: string;
+  /** How to launch or reach the upstream server (recorded by introspection) */
+  launch?: LaunchSpec;
   /** Opaque version string — cache entries tagged with this expire on change */
   version?: string;
   /** Provider-level compiler hints — defaults for all tools in this manifest */
@@ -492,9 +577,17 @@ export interface CompilationResult {
   selectors: Map<string, ToolSelector>;
   dispatchTables: Map<string, Map<string, ToolIMP>>;
   protocols: ToolProtocol[];
+  /** Every compiled tool, in manifest order, with the selectors it owns */
+  tools: CompiledToolRef[];
   toolCount: number;
+  /** Number of selectors (primary + alias) — one or more per tool, never shared */
   uniqueSelectorCount: number;
-  mergedCount: number;
+  /**
+   * Pairs of distinct tools whose embeddings are at or above the duplicate
+   * threshold. Non-empty only under `allowDuplicates`; otherwise compile()
+   * throws DuplicateToolError. Tools are never merged either way.
+   */
+  duplicates: DuplicateToolPair[];
   collisions: SelectorCollision[];
   /** Overload tables keyed by selector canonical name */
   overloadTables: Map<string, OverloadTableData>;
@@ -535,6 +628,28 @@ export interface SelectorCollision {
   hint: string;
 }
 
+/** A compiled tool and the selectors that dispatch to it */
+export interface CompiledToolRef {
+  /** Canonical tool id: `<providerId>/<toolName>` */
+  id: string;
+  providerId: string;
+  /** Upstream tool name, verbatim */
+  toolName: string;
+  /** Primary selector canonical */
+  selector: string;
+  /** Alias selector canonicals (from compiler-hint aliases) */
+  aliases: string[];
+}
+
+/** Two distinct tools the embedder cannot tell apart (similarity ≥ threshold) */
+export interface DuplicateToolPair {
+  toolA: string;
+  toolB: string;
+  selectorA: string;
+  selectorB: string;
+  similarity: number;
+}
+
 // ---------------------------------------------------------------------------
 // Embedder interface — abstracts the embedding model
 // ---------------------------------------------------------------------------
@@ -543,6 +658,35 @@ export interface Embedder {
   embed(text: string): Promise<Float32Array>;
   embedBatch(texts: string[]): Promise<Float32Array[]>;
   readonly dimensions: number;
+  /**
+   * Identity of the embedding function. Compiled artifacts record it, and
+   * every artifact load path refuses an embedder whose fingerprint differs —
+   * vectors from different embedders are not comparable. Custom embedders
+   * must set one (kind 'custom') to compile or load artifacts.
+   */
+  readonly fingerprint?: EmbedderFingerprint;
+}
+
+/**
+ * EmbedderFingerprint — everything that changes the vectors an embedder
+ * produces. Two embedders with equal fingerprints produce the same vector
+ * for the same text (up to floating-point differences across platforms).
+ */
+export interface EmbedderFingerprint {
+  /** 'onnx' (ONNXEmbedder), 'hash' (HashEmbedder), or 'custom' */
+  kind: 'onnx' | 'hash' | 'custom';
+  /** Model or algorithm id, e.g. 'all-MiniLM-L6-v2' or 'smallchat-hash-v1' */
+  model: string;
+  /** SHA-256 (hex) of the model file; null for the hash embedder */
+  modelSha256: string | null;
+  /** Vector dimensions */
+  dims: number;
+  /** Maximum token sequence length; null when the embedder has no tokenizer */
+  maxLength: number | null;
+  /** How token vectors are pooled into one vector */
+  pooling: 'mean' | 'cls' | 'none';
+  /** Whether output vectors are L2-normalized */
+  normalize: boolean;
 }
 
 // ---------------------------------------------------------------------------

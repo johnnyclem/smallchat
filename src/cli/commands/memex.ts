@@ -1,9 +1,9 @@
 /**
- * Memex CLI Command — compile, ingest, query, lint, and inspect knowledge bases.
+ * Memex CLI Command — compile, query, lint, inspect and export knowledge
+ * bases. Experimental: not part of the tool inference core.
  *
  * Usage:
  *   smallchat memex compile --schema tolkien.schema.json
- *   smallchat memex ingest  --source new-paper.md
  *   smallchat memex query   "What is the relationship between X and Y?"
  *   smallchat memex lint
  *   smallchat memex inspect --page numenor
@@ -27,6 +27,9 @@ import {
   serializeKnowledgeBase,
 } from '../../memex/knowledge-compiler.js';
 import { renderIndexMarkdown, renderLogMarkdown } from '../../memex/wiki-emitter.js';
+import { MemoryVectorIndex } from '../../embedding/memory-vector-index.js';
+import { SqliteVectorIndex } from '../../embedding/sqlite-vector-index.js';
+import { createEmbedder as createBuiltinEmbedder, parseEmbedderKind, resolveArtifactEmbedder } from '../../artifact/embedder.js';
 import type { MemexConfig, KnowledgeBase, KnowledgeSchema } from '../../memex/types.js';
 import type { Embedder, VectorIndex } from '../../core/types.js';
 
@@ -34,21 +37,34 @@ import type { Embedder, VectorIndex } from '../../core/types.js';
 // Embedder/VectorIndex factory (shared with compile command)
 // ---------------------------------------------------------------------------
 
+/** A built-in embedder by name: onnx or hash ("local" is hash's 0.x name); anything else is refused. */
 async function createEmbedder(type: string): Promise<Embedder> {
-  if (type === 'local') {
-    const { LocalEmbedder } = await import('../../embedding/local-embedder.js');
-    return new LocalEmbedder();
-  }
-  const { ONNXEmbedder } = await import('../../embedding/onnx-embedder.js');
-  return new ONNXEmbedder();
+  return createBuiltinEmbedder(parseEmbedderKind(type));
 }
 
-function createVectorIndex(embedderType: string, dbPath?: string): VectorIndex {
-  if (dbPath) {
-    const { SqliteVectorIndex } = require('../../embedding/sqlite-vector-index.js');
-    return new SqliteVectorIndex(dbPath);
+/**
+ * The embedder a knowledge base was compiled with, as for tool artifacts:
+ * an explicit -e must name the same kind. A knowledge base compiled before
+ * the embedder was recorded falls back to -e (default onnx), with a warning.
+ */
+async function knowledgeBaseEmbedder(kb: KnowledgeBase, artifactPath: string, requested?: string): Promise<Embedder> {
+  if (!kb.embedder) {
+    console.error(`Warning: ${artifactPath} does not record the embedder it was compiled with; using ${requested ?? 'onnx'}. Recompile it to pin the embedder.`);
+    return createEmbedder(requested ?? 'onnx');
   }
-  const { MemoryVectorIndex } = require('../../embedding/memory-vector-index.js');
+  if (requested !== undefined && parseEmbedderKind(requested) !== kb.embedder.kind) {
+    throw new Error(
+      `--embedder ${requested} does not match ${artifactPath}, which was compiled with the ` +
+      `${kb.embedder.kind} embedder (${kb.embedder.model})`,
+    );
+  }
+  return resolveArtifactEmbedder(kb.embedder, { source: artifactPath });
+}
+
+// Static imports: this is an ES module, so CommonJS require() is undefined
+// here and both compile and query crashed (SAT-16).
+function createVectorIndex(dbPath?: string): VectorIndex {
+  if (dbPath) return new SqliteVectorIndex(dbPath);
   return new MemoryVectorIndex();
 }
 
@@ -65,7 +81,7 @@ function loadArtifact(artifactPath: string): KnowledgeBase {
 // ---------------------------------------------------------------------------
 
 export const memexCommand = new Command('memex')
-  .description('Knowledge base compiler — compile, query, and maintain knowledge wikis');
+  .description('Knowledge base compiler — compile, query, and maintain knowledge wikis (experimental: not part of tool dispatch; its formats and heuristics may change in any 1.x release)');
 
 // ---------------------------------------------------------------------------
 // memex compile
@@ -77,7 +93,7 @@ memexCommand
   .option('-s, --schema <path>', 'Path to knowledge schema file', 'memex.schema.json')
   .option('--sources <paths...>', 'Additional source file paths')
   .option('-o, --output <path>', 'Output artifact path')
-  .option('-e, --embedder <type>', 'Embedder: onnx (default) or local', 'onnx')
+  .option('-e, --embedder <type>', 'Embedder: onnx (default) or hash ("local" is accepted for hash)', 'onnx')
   .option('--db-path <path>', 'SQLite database path (enables sqlite format)')
   .option('--dry-run', 'Analyze without writing artifact')
   .option('--markdown <dir>', 'Also export wiki as markdown files')
@@ -116,8 +132,14 @@ memexCommand
     console.log(`Compiling knowledge base: ${schema.name} (${schema.domain})`);
     console.log(`Schema: ${schemaPath}`);
 
-    const embedder = await createEmbedder(options.embedder);
-    const vectorIndex = createVectorIndex(options.embedder, options.dbPath);
+    let embedder: Embedder;
+    try {
+      embedder = await createEmbedder(options.embedder);
+    } catch (err) {
+      console.error((err as Error).message);
+      process.exit(1);
+    }
+    const vectorIndex = createVectorIndex(options.dbPath);
 
     const result = await compile({
       schema,
@@ -151,12 +173,19 @@ memexCommand
   .command('query <question>')
   .description('Query the knowledge base with a natural language question')
   .option('-a, --artifact <path>', 'Knowledge base artifact path', 'knowledge.memex.json')
-  .option('-e, --embedder <type>', 'Embedder: onnx (default) or local', 'onnx')
+  .option('-e, --embedder <type>', 'Expected embedder (onnx or hash); refuses if the knowledge base was compiled with another')
   .option('-k, --top-k <n>', 'Number of top matches', '5')
   .action(async (question, options) => {
-    const kb = loadArtifact(resolve(options.artifact));
-    const embedder = await createEmbedder(options.embedder);
-    const vectorIndex = createVectorIndex(options.embedder);
+    const artifactPath = resolve(options.artifact);
+    const kb = loadArtifact(artifactPath);
+    let embedder: Embedder;
+    try {
+      embedder = await knowledgeBaseEmbedder(kb, artifactPath, options.embedder);
+    } catch (err) {
+      console.error((err as Error).message);
+      process.exit(1);
+    }
+    const vectorIndex = createVectorIndex();
 
     // Re-populate vector index from stored selectors
     for (const [id, sel] of kb.claimSelectors) {
@@ -180,6 +209,16 @@ memexCommand
       console.log('Matched Claims:');
       for (const { claim, score } of result.matchedClaims.slice(0, 5)) {
         console.log(`  [${(score * 100).toFixed(1)}%] ${claim.text.slice(0, 100)}${claim.text.length > 100 ? '...' : ''}`);
+      }
+      console.log('');
+    }
+
+    if (result.disputes && result.disputes.length > 0) {
+      console.log('Disputed — the sources disagree:');
+      for (const d of result.disputes) {
+        const a = kb.claims.get(d.claimA);
+        const b = kb.claims.get(d.claimB);
+        console.log(`  [${d.severity}] "${a?.text ?? d.claimA}" (${a?.sourceId ?? '?'}) vs "${b?.text ?? d.claimB}" (${b?.sourceId ?? '?'})`);
       }
       console.log('');
     }

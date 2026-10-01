@@ -1,0 +1,12 @@
+# Golden dispatch traces: code hosting and issue trackers (github, gitlab, linear, git, rtk, sentry, atlassian).
+# Run: npm run test:traces   (compiles examples/*-manifest.json with the default ONNX embedder, then smallchat replay)
+# Default policy, no LLM verifier: below HIGH (0.85) nothing runs on its own, so most natural phrasings need disambiguation.
+{"name": "bare name shared by three providers is never routed to one of them", "intent": "create_issue", "expect": {"outcome": "needs-disambiguation", "candidates": ["github/create_issue", "gitlab/create_issue", "linear/create_issue"]}}
+{"intent": "create a github issue", "expect": {"outcome": "needs-disambiguation", "candidates": ["github/create_issue"]}}
+{"intent": "create an issue in linear", "expect": {"outcome": "needs-disambiguation", "candidates": ["linear/create_issue"]}}
+{"intent": "list pull requests on github", "expect": {"outcome": "needs-disambiguation", "candidates": ["github/list_pull_requests"]}}
+{"intent": "open an issue on gitlab", "expect": {"outcome": "unresolved"}}
+{"name": "an alias match is EXACT", "intent": "show git status", "expect": {"toolId": "rtk/rtk_git_status", "tier": "exact"}}
+{"intent": "show the git log", "expect": {"toolId": "rtk/rtk_git_log", "tier": "high"}}
+{"intent": "list sentry issues", "expect": {"outcome": "needs-disambiguation", "candidates": ["sentry/list_issues"]}}
+{"intent": "create a jira issue", "expect": {"outcome": "needs-disambiguation", "candidates": ["atlassian/jira_create_issue"]}}

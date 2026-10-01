@@ -1,0 +1,37 @@
+{
+  "01M1E6JK80P9Y3CMA9HBZEND9H": {
+    "type": "TB",
+    "status": "overridden",
+    "current": false
+  },
+  "01M1E6JK81TR57BA191BG8Y0Q3": {
+    "type": "UV",
+    "status": "open",
+    "current": true
+  },
+  "01M1E6JK82QWPK6VS437JKMJPZ": {
+    "type": "UV",
+    "status": "verified",
+    "current": false
+  },
+  "01M1E6JK84NECBQZ8GX9C7H1KA": {
+    "type": "TB",
+    "status": "active",
+    "current": true
+  },
+  "01M1E6JK8605J7H4P2BYWD97SN": {
+    "type": "TB",
+    "status": "struck",
+    "current": false
+  },
+  "01M1E6JK88R7VZWYJAK9B2B4WY": {
+    "type": "UV",
+    "status": "refuted",
+    "current": false
+  },
+  "01M1E6JK8BVGAAP733SN0VCW9W": {
+    "type": "TB",
+    "status": "active",
+    "current": true
+  }
+}

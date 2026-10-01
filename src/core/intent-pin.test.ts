@@ -50,11 +50,20 @@ describe('IntentPinRegistry', () => {
         aliases: ['remove record permanently'],
       });
 
-      // canonicalize("remove record permanently") => "remove:record:permanently"
-      const match = registry.checkExact('remove:record:permanently');
+      const match = registry.checkExact('Remove  record permanently');
       expect(match).not.toBeNull();
       expect(match!.verdict).toBe('accept');
       expect(match!.canonical).toBe('db.delete_record');
+    });
+
+    it('does not accept a phrase that merely canonicalizes to an alias (negation, qualifiers)', () => {
+      const registry = new IntentPinRegistry();
+      registry.pin({ canonical: 'bank.transfer_funds', policy: 'exact', aliases: ['transfer funds'] });
+
+      expect(registry.checkExact('do not transfer funds')).toBeNull();
+      expect(registry.checkExact('transfer:funds')).toBeNull();
+      expect(registry.checkExact('transfer the funds')).toBeNull();
+      expect(registry.checkExact('ｔｒａｎｓｆｅｒ funds')).not.toBeNull(); // NFKC folds full-width letters
     });
 
     it('cleans up aliases on unpin', () => {
@@ -66,7 +75,7 @@ describe('IntentPinRegistry', () => {
       });
       registry.unpin('db.delete_record');
 
-      const match = registry.checkExact('remove:record:permanently');
+      const match = registry.checkExact('remove record permanently');
       expect(match).toBeNull();
     });
   });
@@ -105,9 +114,10 @@ describe('IntentPinRegistry', () => {
         aliases: ['remove record permanently'],
       });
 
-      const match = registry.checkSimilarity('db.delete_record', 0.90, 'remove:record:permanently');
+      const match = registry.checkSimilarity('db.delete_record', 0.90, 'remove record permanently');
       expect(match).not.toBeNull();
       expect(match!.verdict).toBe('accept');
+      expect(registry.checkSimilarity('db.delete_record', 0.99, 'never remove record permanently')!.verdict).toBe('reject');
     });
 
     it('rejects elevated-pinned candidate below threshold', () => {

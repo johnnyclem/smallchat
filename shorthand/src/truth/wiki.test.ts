@@ -9,10 +9,13 @@ import {
   wikiLineToEntry,
 } from './wiki.js';
 import type { TruthTbEntry, TruthUvEntry, WikiEntryLine } from './types.js';
-import { assertAccountableAuthor, isAnonymousIdentity, ulid } from './types.js';
+import { ulid } from './types.js';
+import { assertAccountableAuthor, isAnonymousIdentity } from './identity.js';
+import { chainTruthLines } from './format.js';
 
 // ---------------------------------------------------------------------------
-// Fixtures — shaped exactly like stenographer's export_wiki_entries output
+// Fixtures — version 1 lines, shaped like stenographer 0.x's export (the
+// v2 stream is covered by wiki-v2.test.ts and conformance.test.ts)
 // ---------------------------------------------------------------------------
 
 const tbLine: WikiEntryLine = {
@@ -85,7 +88,7 @@ describe('wiki JSONL round trip', () => {
     const { entries, errors } = parseWikiLines(['not json', '', ...lines, '{"type":"RULING","id":"x","status":"active"}']);
     expect(entries).toHaveLength(2);
     expect(errors).toHaveLength(2);
-    expect(errors[1].error).toContain('unsupported entry type');
+    expect(errors[1].error).toContain('a version 1 line is a TB or UV');
   });
 });
 
@@ -95,7 +98,9 @@ describe('wiki JSONL round trip', () => {
 
 describe('consumption rules', () => {
   it('classifies each lifecycle state per §7', () => {
-    const tb = wikiLineToEntry(tbLine) as TruthTbEntry;
+    // A v1 TB carries no hash: it is truth only when the host opts in
+    expect(classifyEntry(wikiLineToEntry(tbLine))).toBe('history');
+    const tb = wikiLineToEntry(tbLine, { admitV1Tbs: true }) as TruthTbEntry;
     const uv = wikiLineToEntry(uvLine) as TruthUvEntry;
 
     expect(classifyEntry(tb)).toBe('ground-truth');
@@ -107,7 +112,7 @@ describe('consumption rules', () => {
   });
 
   it('pairs contested TBs with their live contesting UVs', () => {
-    const tb = { ...(wikiLineToEntry(tbLine) as TruthTbEntry), status: 'contested' as const };
+    const tb = { ...(wikiLineToEntry(tbLine, { admitV1Tbs: true }) as TruthTbEntry), status: 'contested' as const };
     const contestingUv: TruthUvEntry = {
       ...(wikiLineToEntry(uvLine) as TruthUvEntry),
       id: '01JAAAAAAAAAAAAAAAAAAAAAA3',
@@ -197,7 +202,7 @@ describe('tombstoned literals', () => {
     const { entries, errors } = parseWikiLines([JSON.stringify(bad), JSON.stringify(tbLine)]);
     expect(entries.map((e) => e.id)).toEqual([tbLine.id]);
     expect(errors).toHaveLength(1);
-    expect(errors[0].error).toContain('entry BAD: invalid literals');
+    expect(errors[0]).toMatchObject({ id: 'BAD', error: expect.stringMatching(/^literals\.0: .*distinctive identifier/) });
   });
 
   it('applies stenographer\'s write-time rule', () => {
@@ -210,5 +215,66 @@ describe('tombstoned literals', () => {
     expect(literalValidationError({ dead: 'x', subject: '' })).toMatch(/subject/);
     expect(literalValidationError({ dead: 'legacyThing', current: 5 })).toMatch(/current/);
     expect(literalValidationError('30')).toMatch(/object/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fail closed (carried from short-hand; smallchat's fork coerced unknown or
+// missing statuses to 'active' — SAT-09)
+// ---------------------------------------------------------------------------
+
+describe('fail-closed status handling', () => {
+  it('never treats an unknown TB status as ground truth, and keeps it verbatim', () => {
+    const { entries, errors } = parseWikiLines([JSON.stringify({ ...tbLine, status: 'retracted' })], { admitV1Tbs: true });
+    expect(errors).toEqual([]);
+    const tb = entries[0] as TruthTbEntry;
+    expect(tb.status).toBe('retracted');
+    expect(classifyEntry(tb)).toBe('history');
+    expect(selectCurrentTruth(entries).groundTruth).toEqual([]);
+    expect(JSON.parse(serializeWikiEntries(entries)[0]).status).toBe('retracted');
+  });
+
+  it('never treats an unknown UV status as an open flag', () => {
+    const { entries } = parseWikiLines([JSON.stringify({ ...uvLine, status: 'pending-review' })]);
+    expect(classifyEntry(entries[0])).toBe('history');
+    expect(selectCurrentTruth(entries).unverified).toEqual([]);
+  });
+
+  it('classifies a struck TB as history', () => {
+    const { entries } = parseWikiLines([JSON.stringify({ ...tbLine, status: 'struck' })]);
+    expect(classifyEntry(entries[0])).toBe('history');
+  });
+
+  it('keeps a line with no status as history (status null) instead of defaulting it to active', () => {
+    const { status: _status, ...noStatus } = tbLine;
+    const { entries, errors } = parseWikiLines([JSON.stringify(noStatus), JSON.stringify(uvLine)], { admitV1Tbs: true });
+    expect(errors).toEqual([]);
+    expect(entries.map((e) => [e.id, e.status])).toEqual([[tbLine.id, null], [uvLine.id, 'open']]);
+    expect(classifyEntry(entries[0])).toBe('history');
+    expect(serializeWikiEntries(entries)[0]).toBe(JSON.stringify(noStatus));
+  });
+
+  it('rejects a TB without a claim and a UV without an assertion', () => {
+    const { claim: _claim, ...noClaim } = tbLine;
+    const { assertion: _assertion, ...noAssertion } = uvLine;
+    const { entries, errors } = parseWikiLines([JSON.stringify(noClaim), JSON.stringify(noAssertion)]);
+    expect(entries).toEqual([]);
+    expect(errors.map((e) => e.error)).toEqual(['claim: must be a non-empty string', 'assertion: must be a non-empty string']);
+  });
+
+  it('rejects a line that is not a JSON object', () => {
+    const { errors } = parseWikiLines(['[1,2]', '"x"']);
+    expect(errors.map((e) => e.error)).toEqual(['a line is a JSON object', 'a line is a JSON object']);
+  });
+});
+
+describe('lossless round trip of fields short-hand does not interpret', () => {
+  it('preserves unknown top-level keys verbatim, beside the v2 chain fields', () => {
+    const { status: _s, ...body } = tbLine;
+    const [line] = chainTruthLines([{ ...body, status: 'active', 'x-other': { a: 1 }, reviewers: ['sam'] }]);
+    const { entries, errors } = parseWikiLines([line]);
+    expect(errors).toEqual([]);
+    expect(entries[0].extra).toEqual({ schemaVersion: 2, seq: 1, prevHash: null, hash: JSON.parse(line).hash, 'x-other': { a: 1 }, reviewers: ['sam'] });
+    expect(serializeWikiEntries(entries)).toEqual([line]);
   });
 });

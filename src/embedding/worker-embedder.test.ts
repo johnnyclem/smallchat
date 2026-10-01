@@ -14,16 +14,24 @@ describe('WorkerEmbedder (unit)', () => {
 });
 
 describe('WorkerVectorIndex (unit)', () => {
-  it('throws on synchronous search()', () => {
-    const bridge = { request: async () => ({}) } as any;
+  // SC-INF-17: search() and size() are asynchronous, so the index can back a ToolRuntime
+  it('search() returns the worker\'s results as a promise', async () => {
+    const calls: Array<[string, unknown]> = [];
+    const bridge = {
+      request: async (type: string, payload: unknown) => {
+        calls.push([type, payload]);
+        return { results: [{ id: 'a', distance: 0.1 }] };
+      },
+    } as any;
     const idx = new WorkerVectorIndex(bridge);
-    expect(() => idx.search(new Float32Array(384), 1, 0.5)).toThrow('not available synchronously');
+    await expect(idx.search(new Float32Array(384), 1, 0.5)).resolves.toEqual([{ id: 'a', distance: 0.1 }]);
+    expect(calls[0][0]).toBe('vectorSearch');
   });
 
-  it('throws on synchronous size()', () => {
-    const bridge = { request: async () => ({}) } as any;
+  it('size() returns the worker\'s count as a promise', async () => {
+    const bridge = { request: async () => ({ size: 3 }) } as any;
     const idx = new WorkerVectorIndex(bridge);
-    expect(() => idx.size()).toThrow('not available synchronously');
+    await expect(idx.size()).resolves.toBe(3);
   });
 });
 

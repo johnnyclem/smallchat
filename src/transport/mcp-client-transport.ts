@@ -1,346 +1,255 @@
 /**
- * MCP Client Transport — connects to external MCP servers via Stdio or SSE.
+ * MCP Client Transports — ITransport over the official MCP SDK client.
  *
- * Implements ITransport for MCP protocol communication:
- *   - Stdio: Spawns a child process, communicates via JSON-RPC over stdin/stdout
- *   - SSE: Connects to an HTTP SSE endpoint for streaming MCP communication
+ *   - McpStdioTransport: spawns the server (optionally in a container
+ *     sandbox) and speaks MCP over its stdin/stdout. Its stderr is drained
+ *     into a bounded tail (stderrTail()), so a chatty server never blocks.
+ *   - McpHttpTransport: reaches a remote server over Streamable HTTP, the
+ *     legacy HTTP+SSE transport, or 'auto' (Streamable HTTP, falling back
+ *     to SSE).
+ *   - McpSseTransport: the 0.x name of McpHttpTransport (deprecated).
+ *
+ * Connections are made through connectMcp(), so the initialize handshake,
+ * protocol version negotiation, sessions and headers are the SDK's. They
+ * open lazily on the first call. A failed start, or a connection that
+ * closes, is never cached: the next call connects again, after a backoff
+ * that doubles on consecutive failures (restartBackoffMs, at most 30 s).
+ * A call that times out or is aborted is cancelled upstream
+ * (notifications/cancelled) and the connection stays usable.
  */
 
-import type { ChildProcess } from 'node:child_process';
+import { CallToolResultSchema, McpError, type CallToolResult, type Tool } from '@modelcontextprotocol/sdk/types.js';
 import type {
   ITransport,
   TransportInput,
   TransportOutput,
   McpStdioTransportConfig,
+  McpHttpTransportConfig,
   McpSseTransportConfig,
   TransportKind,
 } from './types.js';
-import { spawnMcpProcess } from './container-sandbox.js';
-import {
-  buildInitializeRequest,
-  buildInitializedNotification,
-  buildToolCallRequest,
-  buildToolsListRequest,
-  encodeStdioMessage,
-  parseStdioMessages,
-  parseJsonRpcResponse,
-  type JsonRpcResponse,
-  type McpToolCallResult,
-  type McpToolsListResult,
-} from './mcp-protocol.js';
-import { errorToOutput, ToolExecutionError } from './errors.js';
-import { withTimeout } from './timeout.js';
+import { connectMcp, listAllTools, isMcpTimeout, type McpConnectSpec, type McpConnection } from './mcp-connect.js';
+import { errorToOutput, jsonRpcErrorToError, ToolExecutionError, TransportTimeoutError } from './errors.js';
 
 let mcpTransportCounter = 0;
+
+const DEFAULT_CALL_TIMEOUT_MS = 30_000;
+const DEFAULT_INIT_TIMEOUT_MS = 10_000;
+const DEFAULT_RESTART_BACKOFF_MS = 1_000;
+const MAX_RESTART_BACKOFF_MS = 30_000;
+
+/** Shared connection management for the SDK-backed MCP transports. */
+abstract class SdkClientTransport implements ITransport {
+  abstract readonly id: string;
+  abstract readonly type: TransportKind;
+
+  private connection: Promise<McpConnection> | null = null;
+  private live: McpConnection | null = null;
+  private failures = 0;
+  private retryAt = 0;
+  private lastFailure = '';
+
+  protected constructor(
+    private readonly timeouts: { initTimeoutMs?: number; timeoutMs?: number; restartBackoffMs?: number },
+  ) {}
+
+  /** Where to connect; called for every (re)connection. */
+  protected abstract spec(): McpConnectSpec;
+
+  async execute(input: TransportInput): Promise<TransportOutput> {
+    const timeoutMs = input.timeoutMs ?? this.timeouts.timeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
+    try {
+      const { client } = await this.connect();
+      const result = await client.callTool(
+        { name: input.toolName, arguments: input.args },
+        CallToolResultSchema,
+        { timeout: timeoutMs, ...(input.signal ? { signal: input.signal } : {}) },
+      ) as CallToolResult;
+      return {
+        content: result.content,
+        isError: result.isError === true,
+        ...(result.structuredContent !== undefined ? { metadata: { structuredContent: result.structuredContent } } : {}),
+      };
+    } catch (err) {
+      return callErrorToOutput(err, timeoutMs, input.signal);
+    }
+  }
+
+  async *executeStream(input: TransportInput): AsyncGenerator<TransportOutput> {
+    yield await this.execute(input);
+  }
+
+  /** Every tool the server lists (all tools/list pages). */
+  async listTools(): Promise<{ tools: Tool[] }> {
+    const { client } = await this.connect();
+    const tools = await listAllTools(client, { timeoutMs: this.timeouts.timeoutMs ?? DEFAULT_CALL_TIMEOUT_MS });
+    return { tools };
+  }
+
+  /** Close the connection (and stop a stdio server). A later call reconnects. */
+  async dispose(): Promise<void> {
+    const pending = this.connection;
+    this.connection = null;
+    this.live = null;
+    if (pending) {
+      try {
+        await (await pending).close();
+      } catch {
+        // never connected, or already closed
+      }
+    }
+  }
+
+  protected current(): McpConnection | null {
+    return this.live;
+  }
+
+  /** Called with every new connection. */
+  protected connected(_connection: McpConnection): void {}
+
+  private connect(): Promise<McpConnection> {
+    if (this.connection) return this.connection;
+    const wait = this.retryAt - Date.now();
+    if (wait > 0) {
+      return Promise.reject(new ToolExecutionError(
+        `MCP server unavailable (next attempt in ${wait}ms): ${this.lastFailure}`,
+        { code: 'TRANSPORT_ERROR', retryable: true },
+      ));
+    }
+    const pending = connectMcp(this.spec(), {
+      timeoutMs: this.timeouts.initTimeoutMs ?? DEFAULT_INIT_TIMEOUT_MS,
+    }).then(
+      (connection) => {
+        this.failures = 0;
+        this.retryAt = 0;
+        this.live = connection;
+        this.connected(connection);
+        connection.client.onclose = () => {
+          // The server exited or the session ended: reconnect on the next call.
+          if (this.live === connection) {
+            this.live = null;
+            this.connection = null;
+          }
+        };
+        return connection;
+      },
+      (err: Error) => {
+        this.failures++;
+        const backoff = this.timeouts.restartBackoffMs ?? DEFAULT_RESTART_BACKOFF_MS;
+        this.retryAt = Date.now() + Math.min(backoff * 2 ** (this.failures - 1), MAX_RESTART_BACKOFF_MS);
+        this.lastFailure = err.message;
+        if (this.connection === pending) this.connection = null;
+        throw new ToolExecutionError(err.message, { code: 'TRANSPORT_ERROR', retryable: true, cause: err });
+      },
+    );
+    this.connection = pending;
+    return pending;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // MCP Stdio Transport
 // ---------------------------------------------------------------------------
 
-export class McpStdioTransport implements ITransport {
+export class McpStdioTransport extends SdkClientTransport {
   readonly id: string;
   readonly type: TransportKind = 'mcp-stdio';
 
   private config: McpStdioTransportConfig;
-  private process: ChildProcess | null = null;
-  private buffer = '';
-  private pendingRequests: Map<number, {
-    resolve: (value: JsonRpcResponse) => void;
-    reject: (reason: unknown) => void;
-  }> = new Map();
-  private initialized = false;
-  private initPromise: Promise<void> | null = null;
+  private lastTail: McpConnection['stderrTail'] = null;
 
   constructor(config: McpStdioTransportConfig) {
+    super({ initTimeoutMs: config.initTimeoutMs, timeoutMs: config.timeoutMs, restartBackoffMs: config.restartBackoffMs });
     this.id = `mcp-stdio-${++mcpTransportCounter}`;
     this.config = config;
   }
 
-  async execute(input: TransportInput): Promise<TransportOutput> {
-    try {
-      await this.ensureInitialized();
-
-      const request = buildToolCallRequest(input.toolName, input.args);
-      const timeoutMs = input.timeoutMs ?? 30_000;
-
-      const response = await withTimeout(
-        () => this.sendRequest(request.id, request),
-        timeoutMs,
-        input.signal,
-      );
-
-      const result = parseJsonRpcResponse<McpToolCallResult>(response);
-
-      return {
-        content: result.content,
-        isError: result.isError ?? false,
-      };
-    } catch (err) {
-      return errorToOutput(err);
-    }
+  /** The end of the server's stderr (current or last process), for diagnostics. */
+  stderrTail(): string {
+    return (this.current()?.stderrTail ?? this.lastTail)?.text() ?? '';
   }
 
-  /** List available tools from the MCP server */
-  async listTools(): Promise<McpToolsListResult> {
-    await this.ensureInitialized();
-    const request = buildToolsListRequest();
-    const response = await this.sendRequest(request.id, request);
-    return parseJsonRpcResponse<McpToolsListResult>(response);
+  /** The running server's process id, or null. */
+  get pid(): number | null {
+    return this.current()?.pid ?? null;
   }
 
-  async dispose(): Promise<void> {
-    if (this.process) {
-      this.process.stdin?.end();
-      this.process.kill('SIGTERM');
-
-      // Give it a moment to exit gracefully
-      await new Promise<void>((resolve) => {
-        const timer = setTimeout(() => {
-          this.process?.kill('SIGKILL');
-          resolve();
-        }, 3000);
-
-        this.process?.on('exit', () => {
-          clearTimeout(timer);
-          resolve();
-        });
-      });
-
-      this.process = null;
-    }
-
-    // Reject all pending requests
-    for (const [, pending] of this.pendingRequests) {
-      pending.reject(new Error('Transport disposed'));
-    }
-    this.pendingRequests.clear();
-    this.initialized = false;
-    this.initPromise = null;
-  }
-
-  // ---------------------------------------------------------------------------
-  // Internal
-  // ---------------------------------------------------------------------------
-
-  private async ensureInitialized(): Promise<void> {
-    if (this.initialized) return;
-    if (this.initPromise) return this.initPromise;
-
-    this.initPromise = this.initialize();
-    await this.initPromise;
-  }
-
-  private async initialize(): Promise<void> {
-    // Spawn the MCP server process (optionally inside a container sandbox)
-    this.process = spawnMcpProcess({
+  protected spec(): McpConnectSpec {
+    return {
+      transport: 'stdio',
       command: this.config.command,
       args: this.config.args,
       env: this.config.env,
       cwd: this.config.cwd,
       containerSandbox: this.config.containerSandbox,
-    });
-
-    // Handle stdout data
-    this.process.stdout?.on('data', (data: Buffer) => {
-      this.buffer += data.toString();
-      this.processBuffer();
-    });
-
-    // Handle process errors
-    this.process.on('error', (err) => {
-      for (const [, pending] of this.pendingRequests) {
-        pending.reject(err);
-      }
-      this.pendingRequests.clear();
-    });
-
-    this.process.on('exit', (code) => {
-      if (code !== 0) {
-        for (const [, pending] of this.pendingRequests) {
-          pending.reject(new Error(`MCP server exited with code ${code}`));
-        }
-        this.pendingRequests.clear();
-      }
-    });
-
-    // Send initialize request
-    const initRequest = buildInitializeRequest();
-    const timeoutMs = this.config.initTimeoutMs ?? 10_000;
-
-    await withTimeout(
-      async () => {
-        const response = await this.sendRequest(initRequest.id, initRequest);
-        parseJsonRpcResponse(response); // Validate response
-      },
-      timeoutMs,
-    );
-
-    // Send initialized notification
-    const notification = buildInitializedNotification();
-    this.process.stdin?.write(encodeStdioMessage(notification));
-
-    this.initialized = true;
+      inheritEnv: this.config.inheritEnv,
+      forwardProxyEnv: this.config.forwardProxyEnv,
+    };
   }
 
-  private sendRequest(id: number, request: { jsonrpc: '2.0'; id: number; method: string; params?: Record<string, unknown> }): Promise<JsonRpcResponse> {
-    return new Promise((resolve, reject) => {
-      if (!this.process?.stdin?.writable) {
-        reject(new ToolExecutionError('MCP server stdin not writable', { code: 'TRANSPORT_ERROR' }));
-        return;
-      }
-
-      this.pendingRequests.set(id, { resolve, reject });
-      this.process.stdin.write(encodeStdioMessage(request));
-    });
-  }
-
-  private processBuffer(): void {
-    const { messages, remaining } = parseStdioMessages(this.buffer);
-    this.buffer = remaining;
-
-    for (const message of messages) {
-      if ('id' in message && message.id !== undefined) {
-        const pending = this.pendingRequests.get(message.id as number);
-        if (pending) {
-          this.pendingRequests.delete(message.id as number);
-          pending.resolve(message as JsonRpcResponse);
-        }
-      }
-      // Notifications are silently ignored for now
-    }
+  protected override connected(connection: McpConnection): void {
+    this.lastTail = connection.stderrTail;
   }
 }
 
 // ---------------------------------------------------------------------------
-// MCP SSE Transport
+// MCP HTTP Transport (Streamable HTTP, legacy SSE)
 // ---------------------------------------------------------------------------
 
-export class McpSseTransport implements ITransport {
+export class McpHttpTransport extends SdkClientTransport {
   readonly id: string;
-  readonly type: TransportKind = 'mcp-sse';
+  readonly type: TransportKind = 'mcp-http';
 
-  private config: McpSseTransportConfig;
+  private config: McpHttpTransportConfig;
 
-  constructor(config: McpSseTransportConfig) {
-    this.id = `mcp-sse-${++mcpTransportCounter}`;
+  constructor(config: McpHttpTransportConfig, idPrefix = 'mcp-http') {
+    super({ initTimeoutMs: config.initTimeoutMs, timeoutMs: config.timeoutMs, restartBackoffMs: config.restartBackoffMs });
+    this.id = `${idPrefix}-${++mcpTransportCounter}`;
     this.config = config;
   }
 
-  async execute(input: TransportInput): Promise<TransportOutput> {
-    try {
-      const request = buildToolCallRequest(input.toolName, input.args);
-
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-        ...this.config.headers,
-      };
-
-      if (this.config.auth) {
-        await this.config.auth.apply(headers);
-      }
-
-      const response = await fetch(this.config.url, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(request),
-        signal: input.signal,
-      });
-
-      if (!response.ok) {
-        return {
-          content: null,
-          isError: true,
-          metadata: {
-            error: `MCP SSE request failed: ${response.status} ${response.statusText}`,
-            statusCode: response.status,
-          },
-        };
-      }
-
-      const rpcResponse = (await response.json()) as JsonRpcResponse;
-      const result = parseJsonRpcResponse<McpToolCallResult>(rpcResponse);
-
-      return {
-        content: result.content,
-        isError: result.isError ?? false,
-      };
-    } catch (err) {
-      return errorToOutput(err);
-    }
-  }
-
-  async *executeStream(input: TransportInput): AsyncGenerator<TransportOutput> {
-    try {
-      const request = buildToolCallRequest(input.toolName, input.args);
-
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-        'Accept': 'text/event-stream',
-        ...this.config.headers,
-      };
-
-      if (this.config.auth) {
-        await this.config.auth.apply(headers);
-      }
-
-      const response = await fetch(this.config.url, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(request),
-        signal: input.signal,
-      });
-
-      if (!response.ok || !response.body) {
-        yield {
-          content: null,
-          isError: true,
-          metadata: { error: `MCP SSE stream failed: ${response.status}`, statusCode: response.status },
-        };
-        return;
-      }
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() ?? '';
-
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          const data = line.slice(6).trim();
-          if (!data || data === '[DONE]') continue;
-
-          try {
-            const event = JSON.parse(data);
-            if (event.result) {
-              yield {
-                content: event.result.content ?? event.result,
-                isError: event.result.isError ?? false,
-              };
-            } else if (event.params?.content !== undefined) {
-              yield {
-                content: event.params.content,
-                isError: false,
-                metadata: { streaming: true },
-              };
-            }
-          } catch {
-            // Skip malformed events
+  protected spec(): McpConnectSpec {
+    const auth = this.config.auth;
+    return {
+      transport: this.config.transport ?? 'auto',
+      url: this.config.url,
+      ...(this.config.headers ? { headers: this.config.headers } : {}),
+      // Apply the auth strategy to every request, so refreshed tokens are used.
+      ...(auth
+        ? {
+            fetch: async (url: string | URL, init?: RequestInit) => {
+              const headers: Record<string, string> = {};
+              new Headers(init?.headers).forEach((value, key) => { headers[key] = value; });
+              await auth.apply(headers);
+              return fetch(url, { ...init, headers });
+            },
           }
-        }
-      }
-    } catch (err) {
-      yield errorToOutput(err);
-    }
+        : {}),
+    };
   }
+}
 
-  async dispose(): Promise<void> {
-    // SSE transport is stateless — nothing to dispose
+/**
+ * @deprecated Use McpHttpTransport. Kept so 0.x code compiles; it now
+ * speaks real MCP (handshake, sessions, Streamable HTTP with SSE fallback).
+ */
+export class McpSseTransport extends McpHttpTransport {
+  override readonly type: TransportKind = 'mcp-sse';
+
+  constructor(config: McpSseTransportConfig) {
+    super(config, 'mcp-sse');
   }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function callErrorToOutput(err: unknown, timeoutMs: number, signal?: AbortSignal): TransportOutput {
+  if (isMcpTimeout(err)) return errorToOutput(new TransportTimeoutError(timeoutMs));
+  if (signal?.aborted) {
+    return errorToOutput(new ToolExecutionError('Request aborted', { code: 'ABORTED', cause: err instanceof Error ? err : undefined }));
+  }
+  if (err instanceof McpError) return errorToOutput(jsonRpcErrorToError(err.code, err.message));
+  return errorToOutput(err);
 }

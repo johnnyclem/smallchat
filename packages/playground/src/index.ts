@@ -1,44 +1,82 @@
-import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { readFileSync, existsSync } from 'node:fs';
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-import type { Embedder, VectorIndex } from '@smallchat/core';
-import { LocalEmbedder } from '@smallchat/core';
-import { MemoryVectorIndex } from '@smallchat/core';
-import { SelectorTable } from '@smallchat/core';
+import { loadRuntime } from '@smallchat/core';
 
 /**
- * Playground web server — serves a single-page UI for testing
- * smallchat tool resolution in real time.
+ * Playground web server — serves a single-page UI for testing smallchat
+ * tool resolution in real time, through the same `runtime.resolve()` that
+ * dispatch uses: outcome, tier, chosen tool id, candidates and proof digest.
+ * It resolves only; nothing is executed.
  */
 
 interface PlaygroundConfig {
   port: number;
   toolkitPath: string;
+  /** Interface to listen on (default 127.0.0.1). */
+  host?: string;
+  /** Hostnames accepted in the Host header (default: the loopback names, plus `host` when it is a specific address). */
+  allowedHosts?: string[];
 }
 
-export async function startPlayground(config: PlaygroundConfig): Promise<void> {
-  const { port, toolkitPath } = config;
+const MAX_BODY_BYTES = 64 * 1024;
+const LOOPBACK_HOSTNAMES = ['localhost', '127.0.0.1', '[::1]'];
 
-  if (!existsSync(toolkitPath)) {
-    console.error(`Toolkit file not found: ${toolkitPath}`);
-    console.error('Run "smallchat compile" first to generate a toolkit artifact.');
-    process.exit(1);
+export interface PlaygroundServerOptions {
+  /** Hostnames accepted in the Host header (default: the loopback names). */
+  allowedHosts?: string[];
+}
+
+/** The hostname of a Host header value (port stripped, IPv6 bracketed), or null. */
+function hostnameOf(hostHeader: string | undefined): string | null {
+  if (!hostHeader) return null;
+  try {
+    return new URL(`http://${hostHeader}`).hostname.toLowerCase() || null;
+  } catch {
+    return null;
   }
+}
 
-  const data = JSON.parse(readFileSync(toolkitPath, 'utf-8'));
-
-  // Set up embedder and vector index
-  const embedder = new LocalEmbedder();
-  const vectorIndex = new MemoryVectorIndex();
-  const selectorTable = new SelectorTable(vectorIndex, embedder);
-
-  // Load selectors
-  for (const [, sel] of Object.entries(data.selectors)) {
-    const s = sel as { canonical: string; vector: number[] };
-    await selectorTable.intern(new Float32Array(s.vector), s.canonical);
+/**
+ * Why a request is refused before any route runs, as `serve --http` does
+ * (SC-SURF-09): a Host that is not an allowed name (DNS rebinding), an
+ * Origin other than the playground's own (cross-site requests), or a POST
+ * body that is not JSON.
+ */
+function refusal(req: IncomingMessage, allowedHosts: readonly string[]): { status: number; error: string } | null {
+  const hostname = hostnameOf(req.headers.host);
+  if (hostname === null || !allowedHosts.includes(hostname)) return { status: 403, error: 'Host not allowed' };
+  const origin = req.headers.origin;
+  if (origin !== undefined && origin !== `http://${req.headers.host}`) return { status: 403, error: 'Origin not allowed' };
+  if (req.method === 'POST') {
+    const mediaType = (req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase();
+    if (mediaType !== 'application/json') return { status: 415, error: 'Content-Type must be application/json' };
   }
+  return null;
+}
+
+/**
+ * Build the playground server for a compiled artifact (not listening yet).
+ * The artifact's embedder fingerprint decides which embedder resolves
+ * intents; loading refuses a pre-1.0 artifact or an unavailable embedder.
+ * Requests must name an allowed Host, come from the playground's own origin
+ * (or carry no Origin) and POST JSON.
+ */
+export async function createPlaygroundServer(
+  toolkitPath: string,
+  options: PlaygroundServerOptions = {},
+): Promise<{ server: Server; close: () => Promise<void> }> {
+  const { runtime, artifact } = await loadRuntime(toolkitPath);
+  const allowedHosts = (options.allowedHosts ?? LOOPBACK_HOSTNAMES).map((h) => h.toLowerCase());
 
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
+    const refused = refusal(req, allowedHosts);
+    if (refused) {
+      res.writeHead(refused.status, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: refused.error }));
+      return;
+    }
+
     if (req.method === 'GET' && (req.url === '/' || req.url === '/index.html')) {
       res.writeHead(200, { 'Content-Type': 'text/html' });
       res.end(PLAYGROUND_HTML);
@@ -46,7 +84,6 @@ export async function startPlayground(config: PlaygroundConfig): Promise<void> {
     }
 
     if (req.method === 'POST' && req.url === '/api/resolve') {
-      const MAX_BODY_BYTES = 64 * 1024;
       let body = '';
       let received = 0;
       let tooLarge = false;
@@ -63,35 +100,29 @@ export async function startPlayground(config: PlaygroundConfig): Promise<void> {
 
       try {
         const { intent } = JSON.parse(body) as { intent: string };
-        const selector = await selectorTable.resolve(intent);
-        const matches = await vectorIndex.search(selector.vector, 10, 0.3);
-
-        const results = matches.map((m) => {
-          let provider = 'unknown';
-          let toolName = m.id;
-          for (const [pid, table] of Object.entries(data.dispatchTables)) {
-            const methods = table as Record<string, { toolName: string }>;
-            if (m.id in methods) {
-              provider = pid;
-              toolName = methods[m.id].toolName;
-              break;
-            }
-          }
-          return {
-            selector: m.id,
-            distance: m.distance,
-            confidence: ((1 - m.distance) * 100).toFixed(1),
-            provider,
-            toolName,
-          };
-        });
+        if (typeof intent !== 'string' || intent.trim() === '') throw new Error('"intent" must be a non-empty string');
+        const started = performance.now();
+        const resolution = await runtime.resolve(intent);
+        const elapsedMs = performance.now() - started;
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
           intent,
-          resolvedSelector: selector.canonical,
-          matches: results,
-          timestamp: Date.now(),
+          outcome: resolution.outcome,
+          tier: resolution.tier,
+          chosen: resolution.chosen ?? null,
+          confidence: resolution.confidence ?? null,
+          reason: resolution.reason ?? null,
+          candidates: resolution.candidates.map((c) => ({
+            toolId: c.toolId,
+            selector: c.selector,
+            score: c.score,
+            tier: c.tier,
+            source: c.source,
+            description: artifact.tools[c.toolId]?.description ?? '',
+          })),
+          proofDigest: resolution.proof.proofDigest,
+          elapsedMs,
         }));
       } catch (err) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -101,15 +132,14 @@ export async function startPlayground(config: PlaygroundConfig): Promise<void> {
     }
 
     if (req.method === 'GET' && req.url === '/api/tools') {
-      const tools: Array<{ provider: string; tool: string; selector: string }> = [];
-      for (const [pid, table] of Object.entries(data.dispatchTables)) {
-        const methods = table as Record<string, { toolName: string }>;
-        for (const [sel, m] of Object.entries(methods)) {
-          tools.push({ provider: pid, tool: m.toolName, selector: sel });
-        }
-      }
+      const tools = Object.entries(artifact.tools).map(([toolId, tool]) => ({
+        toolId,
+        provider: tool.providerId,
+        tool: tool.name,
+        description: tool.description,
+      }));
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ tools, stats: data.stats }));
+      res.end(JSON.stringify({ tools, stats: artifact.stats }));
       return;
     }
 
@@ -117,9 +147,31 @@ export async function startPlayground(config: PlaygroundConfig): Promise<void> {
     res.end('Not found');
   });
 
-  server.listen(port, () => {
-    console.log(`smallchat playground running at http://localhost:${port}`);
-    console.log(`Loaded ${Object.keys(data.selectors).length} selectors\n`);
+  const close = () => new Promise<void>((done) => {
+    if (!server.listening) { done(); return; }
+    server.close(() => done());
+  });
+  return { server, close };
+}
+
+export async function startPlayground(config: PlaygroundConfig): Promise<void> {
+  const { port, toolkitPath, host = '127.0.0.1' } = config;
+
+  if (!existsSync(toolkitPath)) {
+    console.error(`Toolkit file not found: ${toolkitPath}`);
+    console.error('Run "smallchat compile" first to generate a toolkit artifact.');
+    process.exit(1);
+  }
+
+  const wildcard = host === '0.0.0.0' || host === '::' || host === '[::]';
+  if (wildcard && !config.allowedHosts) {
+    console.error(`Listening on ${host} needs allowedHosts: the Host names clients use to reach the playground.`);
+    process.exit(1);
+  }
+  const allowedHosts = config.allowedHosts ?? [...LOOPBACK_HOSTNAMES, ...(hostnameOf(host) ? [hostnameOf(host)!] : [])];
+  const { server } = await createPlaygroundServer(toolkitPath, { allowedHosts });
+  server.listen(port, host, () => {
+    console.log(`smallchat playground running at http://${host}:${port}`);
   });
 }
 
@@ -159,7 +211,7 @@ const PLAYGROUND_HTML = `<!DOCTYPE html>
 </head>
 <body>
   <h1>smallchat playground</h1>
-  <p class="subtitle">Type a natural language intent and see the resolution chain in real time.</p>
+  <p class="subtitle">Type a natural language intent and see how the runtime resolves it. Nothing is executed.</p>
   <div class="stats" id="stats"></div>
   <div class="input-row">
     <input id="intent" type="text" placeholder="Describe what you want to do..." autofocus />
@@ -188,7 +240,7 @@ const PLAYGROUND_HTML = `<!DOCTYPE html>
     fetch('/api/tools').then(r => r.json()).then(data => {
       statsDiv.innerHTML = [
         '<span>Tools: <span class="stat-value">' + esc(data.stats.toolCount) + '</span></span>',
-        '<span>Selectors: <span class="stat-value">' + esc(data.stats.uniqueSelectorCount) + '</span></span>',
+        '<span>Selectors: <span class="stat-value">' + esc(data.stats.selectorCount) + '</span></span>',
         '<span>Providers: <span class="stat-value">' + esc(data.stats.providerCount) + '</span></span>',
       ].join('');
     });
@@ -211,27 +263,29 @@ const PLAYGROUND_HTML = `<!DOCTYPE html>
         return;
       }
 
-      let html = '<div class="result-header">Resolved selector: <span class="selector">' + esc(data.resolvedSelector) + '</span></div>';
+      let html = '<div class="result-header">Outcome: <span class="selector">' + esc(data.outcome) + '</span> (tier ' + esc(data.tier) + ')';
+      if (data.chosen) html += ' &rarr; <span class="tool-name">' + esc(data.chosen) + '</span>';
+      html += '</div>';
+      if (data.reason) html += '<div class="meta">' + esc(data.reason) + '</div>';
       html += '<div class="chain">';
 
-      if (data.matches.length === 0) {
-        html += '<div class="chain-step">No matches found.</div>';
+      if (data.candidates.length === 0) {
+        html += '<div class="chain-step">No candidates.</div>';
       }
 
-      for (const match of data.matches) {
-        const conf = parseFloat(match.confidence);
-        const cls = conf > 80 ? 'high' : conf > 50 ? 'medium' : 'low';
+      for (const c of data.candidates) {
+        const tier = String(c.tier).toLowerCase();
+        const cls = tier === 'exact' || tier === 'high' ? 'high' : tier === 'medium' ? 'medium' : 'low';
         html += '<div class="chain-step">';
-        html += '<span class="confidence ' + cls + '">' + esc(match.confidence) + '%</span>';
+        html += '<span class="confidence ' + cls + '">' + esc((c.score * 100).toFixed(1)) + '%</span>';
         html += '<span class="arrow">&rarr;</span>';
-        html += '<span class="tool-name">' + esc(match.toolName) + '</span>';
-        html += '<span class="provider">(' + esc(match.provider) + ')</span>';
-        html += '<span class="selector">' + esc(match.selector) + '</span>';
+        html += '<span class="tool-name">' + esc(c.toolId) + '</span>';
+        html += '<span class="provider">' + esc(tier) + ' via ' + esc(c.selector) + '</span>';
         html += '</div>';
       }
 
       html += '</div>';
-      html += '<div class="meta">Resolved in ' + (Date.now() - data.timestamp) + 'ms</div>';
+      html += '<div class="meta">Resolved in ' + esc(data.elapsedMs.toFixed(1)) + 'ms; proof ' + esc(String(data.proofDigest).slice(0, 12)) + '; nothing was executed</div>';
 
       resultsDiv.innerHTML = html;
     }

@@ -1,6 +1,6 @@
 {
   "name": "@smallchat/core",
-  "version": "0.5.0",
+  "version": "1.0.0",
   "description": "Semantic tool inference: resolve intent to the right tool, deterministically — message-passing dispatch inspired by the Smalltalk/Objective-C runtime",
   "type": "module",
   "main": "dist/index.js",
@@ -23,25 +23,49 @@
       "types": "./dist/compiler/compiler.d.ts",
       "import": "./dist/compiler/compiler.js"
     },
+    "./artifact": {
+      "types": "./dist/artifact/index.d.ts",
+      "import": "./dist/artifact/index.js"
+    },
     "./mcp": {
       "types": "./dist/mcp/index.d.ts",
       "import": "./dist/mcp/index.js"
     },
     "./embedding": {
-      "types": "./dist/embedding/local-embedder.d.ts",
-      "import": "./dist/embedding/local-embedder.js"
+      "types": "./dist/embedding/hash-embedder.d.ts",
+      "import": "./dist/embedding/hash-embedder.js"
     },
     "./channel": {
       "types": "./dist/channel/index.d.ts",
       "import": "./dist/channel/index.js"
     },
+    "./app": {
+      "types": "./dist/app/index.d.ts",
+      "import": "./dist/app/index.js"
+    },
+    "./compaction": {
+      "types": "./dist/compaction/index.d.ts",
+      "import": "./dist/compaction/index.js"
+    },
+    "./crdt": {
+      "types": "./dist/crdt/index.d.ts",
+      "import": "./dist/crdt/index.js"
+    },
     "./importance": {
       "types": "./dist/importance/index.d.ts",
       "import": "./dist/importance/index.js"
     },
-    "./app": {
-      "types": "./dist/app/index.d.ts",
-      "import": "./dist/app/index.js"
+    "./truth": {
+      "types": "./dist/truth/index.d.ts",
+      "import": "./dist/truth/index.js"
+    },
+    "./memex": {
+      "types": "./dist/memex/index.d.ts",
+      "import": "./dist/memex/index.js"
+    },
+    "./dream": {
+      "types": "./dist/dream/index.d.ts",
+      "import": "./dist/dream/index.js"
     }
   },
   "bin": {
@@ -50,6 +74,7 @@
   "files": [
     "dist",
     "models",
+    "spec",
     "README.md",
     "LICENSE",
     "CHANGELOG.md"
@@ -64,11 +89,16 @@
     "packages/vscode-extension"
   ],
   "scripts": {
-    "build": "tsc",
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "build": "npm run clean && tsc",
     "build:packages": "npm run build --workspaces --if-present",
     "build:all": "npm run build && npm run build:packages",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:traces": "node scripts/replay-example-traces.mjs",
+    "test:pack": "node scripts/pack-smoke.mjs",
+    "sync:shorthand": "node scripts/sync-shorthand.mjs",
+    "check:shorthand": "node scripts/sync-shorthand.mjs --check",
     "lint": "tsc --noEmit",
     "dev": "tsc --watch",
     "docs:api": "typedoc --entryPoints src/index.ts --out docs/api --plugin typedoc-plugin-markdown",
@@ -98,7 +128,9 @@
   },
   "dependencies": {
     "@modelcontextprotocol/ext-apps": "^1.7.1",
-    "@shorthand/core": "file:./shorthand",
+    "@modelcontextprotocol/sdk": "^1.31.0",
+    "@shorthand/core": "^1.0.0",
+    "ajv": "^8.20.0",
     "better-sqlite3": "^13.0.3",
     "commander": "^15.0.0",
     "onnxruntime-node": "^1.20.0",

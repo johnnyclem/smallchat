@@ -102,7 +102,7 @@ The `compile` command reads your manifests, generates semantic embeddings for ea
 <TabItem value="typescript" label="TypeScript">
 
 ```bash
-npx @smallchat/core compile --source ./tools --output tools.json
+npx -y @smallchat/core compile --source ./tools --output tools.json
 ```
 
 </TabItem>
@@ -131,7 +131,7 @@ Before integrating into your application, verify that intents resolve to the too
 <TabItem value="typescript" label="TypeScript">
 
 ```bash
-npx @smallchat/core resolve tools.json "search for code"
+npx -y @smallchat/core resolve tools.json "search for code"
 ```
 
 </TabItem>
@@ -156,10 +156,10 @@ Try variations to check robustness:
 <TabItem value="typescript" label="TypeScript">
 
 ```bash
-npx @smallchat/core resolve tools.json "find code in a repo"
+npx -y @smallchat/core resolve tools.json "find code in a repo"
 # Matched: github.search_code (confidence: 0.91)
 
-npx @smallchat/core resolve tools.json "open a bug report"
+npx -y @smallchat/core resolve tools.json "open a bug report"
 # Matched: github.create_issue (confidence: 0.87)
 ```
 
@@ -179,13 +179,17 @@ swift run smallchat resolve tools.toolkit.json "open a bug report"
 
 ## 5. Start the MCP server
 
-smallchat includes a built-in MCP 2025-11-25 compliant server. Point any MCP client at it:
+smallchat serves a compiled toolkit as one MCP server (built on the official MCP SDK). Every tool is listed as `<provider>__<tool>`, and each call is forwarded by exact name to the upstream server that owns it. Point any MCP client at it:
 
 <Tabs groupId="language">
 <TabItem value="typescript" label="TypeScript">
 
 ```bash
-npx @smallchat/core serve --source ./tools --port 3001
+# stdio, what MCP hosts launch
+npx -y @smallchat/core serve --source tools.json
+
+# or Streamable HTTP at http://127.0.0.1:3001/mcp (bearer token in ~/.smallchat/serve-token)
+npx -y @smallchat/core serve --source tools.json --http
 ```
 
 </TabItem>
@@ -198,11 +202,11 @@ swift run smallchat serve --source ./tools --port 3001
 </TabItem>
 </Tabs>
 
-Output:
+With `--http` the output ends with:
 
 ```
-smallchat server running on http://localhost:3001 ✓
-MCP discovery: http://localhost:3001/.well-known/mcp.json
+smallchat MCP server (Streamable HTTP) at http://127.0.0.1:3001/mcp
+  generated bearer token in /home/you/.smallchat/serve-token; send "Authorization: Bearer <token>"
 ```
 
 ## 6. Use the API
@@ -213,36 +217,32 @@ For programmatic use in your application:
 <TabItem value="typescript" label="TypeScript">
 
 ```typescript
-import {
-  ToolRuntime,
-  ToolCompiler,
-  LocalEmbedder,
-  MemoryVectorIndex,
-} from '@smallchat/core';
-import type { RuntimeOptions } from '@smallchat/core';
+import { loadRuntime } from '@smallchat/core';
 
-// Configure the runtime
-const options: RuntimeOptions = {
-  selectorThreshold: 0.95,  // deduplication threshold for similar selectors
-  cacheSize: 1024,           // LRU cache entries
-  minConfidence: 0.85,       // minimum match confidence
-};
+// Load a compiled artifact. It records the embedder its vectors came from;
+// loadRuntime builds that embedder (or refuses a different one).
+const { runtime, upstreams } = await loadRuntime('./tools.toolkit.json');
 
-const embedder = new LocalEmbedder();
-const vectorIndex = new MemoryVectorIndex();
-const runtime = new ToolRuntime({ ...options, embedder, vectorIndex });
+// Propose one tool for an intent; nothing runs.
+const resolution = await runtime.resolve('search for code');
+console.log(resolution.outcome, resolution.chosen, resolution.tier);
 
-// Load a compiled artifact
-await runtime.load('./tools.json');
+// Run exactly that tool. Arguments are validated against its inputSchema.
+if (resolution.outcome === 'resolved') {
+  const result = await runtime.dispatchById(resolution.chosen!, {
+    query: 'typescript generics',
+    language: 'typescript',
+  });
+  console.log(result.content);
+}
 
-// Single-shot dispatch
-const result = await runtime.dispatch('search for code', {
-  query: 'typescript generics',
-  language: 'typescript',
-});
-console.log(result.output);
+// Or resolve and run in one call. A match the dispatch policy does not
+// allow (below HIGH without an LLM verifier, a destructive tool below
+// EXACT, ...) runs nothing and returns isError with metadata.outcome.
+const result = await runtime.dispatch('search for code', { query: 'typescript generics' });
+if (result.isError) console.log(result.metadata?.outcome, result.content);
 
-// Streaming dispatch — tokens arrive as they are generated
+// Streaming dispatch
 for await (const event of runtime.dispatchStream('file that new issue', {
   title: 'Add dark mode',
   repo: 'myorg/myapp',
@@ -252,16 +252,18 @@ for await (const event of runtime.dispatchStream('file that new issue', {
       console.log(`Resolving: ${event.intent}`);
       break;
     case 'tool-start':
-      console.log(`Calling: ${event.tool}`);
+      console.log(`Calling: ${event.toolId}`);
       break;
     case 'chunk':
-      process.stdout.write(event.content);
+      console.log(event.content);
       break;
     case 'done':
-      console.log('\nComplete.');
+      console.log(event.result.isError ? `Nothing ran: ${event.result.metadata?.outcome}` : 'Complete.');
       break;
   }
 }
+
+await upstreams.close(); // stops stdio upstream MCP servers
 ```
 
 </TabItem>
@@ -270,21 +272,16 @@ for await (const event of runtime.dispatchStream('file that new issue', {
 ```swift
 import SmallChat
 
-// Configure the runtime
-let runtime = ToolRuntime(
-    vectorIndex: MemoryVectorIndex(),
-    embedder: LocalEmbedder()
-)
-
-// Load a compiled artifact
-try await runtime.load("./tools.json")
+// Load a toolkit (a compiled artifact or a manifest directory)
+let toolkit = try await MCPToolkit.load(source: "./tools.toolkit.json")
+let runtime = toolkit.runtime
 
 // Single-shot dispatch
 let result = try await runtime.dispatch("search for code", args: [
     "query": "typescript generics",
     "language": "typescript",
 ])
-print(result.output)
+print(result.content)
 
 // Streaming dispatch — tokens arrive as they are generated
 for try await event in runtime.dispatchStream("file that new issue", args: [

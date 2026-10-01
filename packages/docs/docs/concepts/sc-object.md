@@ -36,17 +36,17 @@ Plain JavaScript values are automatically wrapped into SCObject instances before
 <TabItem value="typescript" label="TypeScript">
 
 ```typescript
-import { wrapValue, unwrapValue, SCArray, SCDictionary, SCData } from '@smallchat/core';
+import { wrapValue, unwrapValue, SCData } from '@smallchat/core';
 
-// Wrapping
-wrapValue('hello')               // → SCData { value: 'hello' }
-wrapValue(42)                    // → SCData { value: 42 }
-wrapValue([1, 2, 3])             // → SCArray { items: [SCData(1), SCData(2), SCData(3)] }
-wrapValue({ a: 1 })              // → SCDictionary { entries: { a: SCData(1) } }
+// Wrapping: primitives stay as they are; objects and arrays are wrapped
+wrapValue('hello')                 // → 'hello'
+wrapValue(42)                      // → 42
+wrapValue({ a: 1 })                // → SCData { value: { a: 1 } }
+wrapValue([1, 2])                  // → SCArray [SCData { value: { value: 1 } }, SCData { value: { value: 2 } }]
 
 // Unwrapping
-unwrapValue(new SCData('hello')) // → 'hello'
-unwrapValue(new SCArray([...]))  // → [...]
+unwrapValue(new SCData({ a: 1 }))  // → { a: 1 }
+unwrapValue(wrapValue([1, 2]))     // → [{ value: 1 }, { value: 2 }]
 ```
 
 </TabItem>
@@ -106,9 +106,9 @@ try await runtime.dispatch("search for code", args)
 <TabItem value="typescript" label="TypeScript">
 
 ```typescript
-import { SCObject, SCArray, SCData, isSubclass } from '@smallchat/core';
+import { SCArray, SCData, isSubclass } from '@smallchat/core';
 
-const val = wrapValue([1, 2, 3]);
+const val = new SCArray([new SCData({ n: 1 })]);
 
 console.log(val.isKindOfClass('SCArray'));    // true
 console.log(val.isKindOfClass('SCObject'));   // true (superclass)
@@ -143,7 +143,7 @@ print(isSubclass("SCData", of: "SCArray"))    // false
 
 ## `SCSelector`
 
-`SCSelector` wraps a canonical selector string. Dispatch returns `SCSelector` instances when resolving intents, and you can pass them directly to avoid re-resolution:
+`SCSelector` wraps a compiled `ToolSelector` so it can travel as a typed value, for example as an argument an overload declares as `SCType.object('SCSelector')`. Resolution does not return selectors (it returns tool ids); a tool receives the unwrapped `ToolSelector`:
 
 <Tabs groupId="language">
 <TabItem value="typescript" label="TypeScript">
@@ -151,8 +151,8 @@ print(isSubclass("SCData", of: "SCArray"))    // false
 ```typescript
 import { SCSelector } from '@smallchat/core';
 
-const sel = runtime.intern('search for code');
-// sel is a ToolSelector (string identifier)
+const sel = runtime.selectorTable.get('github.search_code')!;
+// sel is a compiled ToolSelector (intents are never interned)
 
 const scSel = new SCSelector(sel);
 // Can be passed as an argument to tools that accept selectors
@@ -176,7 +176,7 @@ let scSel = SCSelector(sel)
 
 ## `SCToolReference`
 
-`SCToolReference` holds a reference to another tool by class and selector. Useful for tool chaining — passing the output of one tool as the input specification for another:
+`SCToolReference` holds a reference to another tool's implementation (its `ToolIMP`). Useful for tool chaining — passing one tool as part of the input specification for another:
 
 <Tabs groupId="language">
 <TabItem value="typescript" label="TypeScript">
@@ -184,13 +184,16 @@ let scSel = SCSelector(sel)
 ```typescript
 import { SCToolReference } from '@smallchat/core';
 
-const ref = new SCToolReference('github', 'search_code');
-
-// A hypothetical "compose" tool that chains two tools
-await runtime.dispatch('compose tools', {
-  first: ref,
-  then: new SCToolReference('slack', 'send_message'),
-});
+// A reference wraps a registered tool's implementation (its ToolIMP)
+const search = runtime.getTool('github/search_code');
+const send = runtime.getTool('slack/send_message');
+if (search && send) {
+  const ref = new SCToolReference(search.imp);
+  console.log(ref.description()); // <SCToolReference id=… tool="search_code" provider="github">
+  // e.g. as a typed parameter of a "compose" tool's overload: SCType.object('SCToolReference')
+  const chain = [ref, new SCToolReference(send.imp)];
+  void chain;
+}
 ```
 
 </TabItem>
@@ -219,20 +222,25 @@ Register custom SCObject subclasses for domain-specific typed parameters:
 <TabItem value="typescript" label="TypeScript">
 
 ```typescript
-import { registerClass, getClassHierarchy } from '@smallchat/core';
+import { SCObject, registerClass, getClassHierarchy } from '@smallchat/core';
 
-class SCFileReference extends SCData {
-  className = 'SCFileReference';
-  constructor(public path: string) {
-    super(path);
+registerClass('SCFileReference', 'SCObject');
+
+class SCFileReference extends SCObject {
+  override readonly isa = 'SCFileReference';
+  constructor(readonly path: string) {
+    super();
+  }
+  override unwrap(): string {
+    return this.path; // what a tool receives
   }
 }
 
-registerClass('SCFileReference', 'SCData');
+new SCFileReference('/tmp/report.csv').isKindOfClass('SCObject'); // true
 
 // Inspect hierarchy
 console.log(getClassHierarchy('SCFileReference'));
-// ['SCFileReference', 'SCData', 'SCObject']
+// ['SCFileReference', 'SCObject']
 ```
 
 </TabItem>

@@ -1,0 +1,35 @@
+{
+  "id": "notes",
+  "name": "Notes",
+  "transportType": "mcp",
+  "launch": { "transport": "stdio", "command": "notes-mcp", "args": ["--stdio"], "env": ["NOTES_TOKEN"] },
+  "tools": [
+    {
+      "name": "create_note",
+      "title": "Create note",
+      "description": "Create a new note with a title and body",
+      "inputSchema": {
+        "type": "object",
+        "properties": { "title": { "type": "string" }, "body": { "type": "string" } },
+        "required": ["title"]
+      },
+      "outputSchema": { "type": "object", "properties": { "id": { "type": "string" } } },
+      "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": false },
+      "providerId": "notes",
+      "transportType": "mcp",
+      "compilerHints": { "aliases": ["jot something down"] }
+    },
+    {
+      "name": "delete_note",
+      "description": "Permanently delete a note by id",
+      "inputSchema": {
+        "type": "object",
+        "properties": { "id": { "type": "string" } },
+        "required": ["id"]
+      },
+      "annotations": { "destructiveHint": true, "idempotentHint": true },
+      "providerId": "notes",
+      "transportType": "mcp"
+    }
+  ]
+}

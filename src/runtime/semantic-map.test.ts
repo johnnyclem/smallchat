@@ -135,3 +135,42 @@ describe('SemanticMap', () => {
     expect(map.lookupSimilar(vec(1, 0))).toBeNull();
   });
 });
+
+// SC-INF-03: the map keys on the normalized full text, never canonicalize()
+describe('SemanticMap identity (SC-INF-03)', () => {
+  it('exact lookups match the same text up to case and whitespace, and nothing else', () => {
+    const map = new SemanticMap();
+    map.reinforce('delete the logs', vec(1, 0), 'ops.delete_logs');
+    expect(map.lookupExact('  Delete the LOGS ')).not.toBeNull();
+    expect(map.lookupExact('do not delete the logs')).toBeNull();
+    expect(map.lookupExact('delete logs')).toBeNull();
+  });
+
+  it('serializes as version 2 and imports version 1 entries as similar-only', () => {
+    const map = new SemanticMap();
+    map.reinforce('删除所有文件', vec(1, 0), 'fs.delete_all');
+    const json = map.toJSON();
+    expect(json.version).toBe(2);
+    expect(json.preferences[0].intentKey).toBe('删除所有文件');
+    expect(SemanticMap.fromJSON(json).lookupExact('删除所有文件')?.selectorId).toBe('fs.delete_all');
+
+    const legacy = SemanticMap.fromJSON({
+      version: 1,
+      preferences: [{ intentCanonical: 'delete:logs', vector: [1, 0, 0, 0], selectorId: 'ops.delete_logs', reinforcements: 2, firstSeen: 1, lastSeen: 2 }],
+    });
+    expect(legacy.lookupExact('delete:logs')).toBeNull();
+    expect(legacy.lookupSimilar(vec(1, 0))?.preference.selectorId).toBe('ops.delete_logs');
+    expect(legacy.toJSON().preferences[0].exact).toBe(false);
+  });
+
+  it('breaks similarity ties by selector id, not insertion order', () => {
+    const a = new SemanticMap();
+    a.reinforce('x', vec(1, 0), 'tool_b');
+    a.reinforce('y', vec(1, 0), 'tool_a');
+    const b = new SemanticMap();
+    b.reinforce('y', vec(1, 0), 'tool_a');
+    b.reinforce('x', vec(1, 0), 'tool_b');
+    expect(a.lookupSimilar(vec(1, 0))!.preference.selectorId).toBe('tool_a');
+    expect(b.lookupSimilar(vec(1, 0))!.preference.selectorId).toBe('tool_a');
+  });
+});

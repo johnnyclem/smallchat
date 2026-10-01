@@ -8,7 +8,7 @@ import TabItem from '@theme/TabItem';
 
 # ToolClass & ToolProxy
 
-`ToolClass` is the provider abstraction — analogous to a class in Objective-C. It groups related tools under a single dispatch table, supports superclass chains for inheritance-based fallback, and declares protocol conformance.
+`ToolClass` is the provider abstraction — analogous to a class in Objective-C. It groups related tools under a single dispatch table, can name a superclass whose selectors it inherits, and declares protocol conformance. `loadRuntime()` builds one class per provider from a compiled artifact; you build them yourself only to register tools in code.
 
 ## Provider grouping
 
@@ -23,17 +23,22 @@ Each compiled provider manifest becomes one `ToolClass`. The class holds:
 <TabItem value="typescript" label="TypeScript">
 
 ```typescript
-import { ToolClass } from '@smallchat/core';
+import { ToolClass, ToolProxy, registerLocalHandler } from '@smallchat/core';
 
-const githubClass = new ToolClass('github', {
-  superclass: baseApiClass,   // optional
-  protocols: ['searchable', 'writable'],
-});
+// A tool's implementation is a ToolIMP; ToolProxy is the one smallchat uses.
+// A 'local' proxy runs the handler registered under its tool name.
+registerLocalHandler('search_code', async (args) => ({ content: `results for ${String(args.query)}` }));
+const searchCode = new ToolProxy('github', 'search_code', 'local', async () => ({
+  name: 'search_code',
+  description: 'Search for code across GitHub repositories',
+  inputSchema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] },
+  arguments: [],
+}));
 
-githubClass.addMethod(selector, async (args) => {
-  // implementation
-  return { output: '...' };
-});
+const githubClass = new ToolClass('github');
+githubClass.superclass = baseApiClass;          // optional
+githubClass.addMethod(searchSelector, searchCode); // searchSelector: a ToolSelector in runtime.selectorTable
+runtime.registerClass(githubClass);
 ```
 
 </TabItem>
@@ -61,12 +66,15 @@ You can extend a class's dispatch table at runtime:
 <TabItem value="typescript" label="TypeScript">
 
 ```typescript
-// Add a new method to an existing class
-const runtime = new ToolRuntime({ ... });
-await runtime.load('./tools.json');
+import { loadRuntime } from '@smallchat/core';
 
-const cls = runtime.getClass('github');
-cls.addMethod(newSelector, newImpl);
+// Add a new method to an existing class
+const { runtime } = await loadRuntime('./tools.toolkit.json');
+
+const cls = runtime.context.getClasses().find(c => c.name === 'github')!;
+cls.addMethod(runtime.selectorTable.register(newVector, 'github.audit_log'), newImpl);
+// Re-registering a class under its name re-indexes it (and flushes the cache)
+runtime.registerClass(cls);
 ```
 
 </TabItem>
@@ -83,7 +91,7 @@ cls.addMethod(newSelector, implementation: newImpl)
 
 ## Superclass chains
 
-If a tool is not found in the primary dispatch table, dispatch walks up the superclass chain — exactly as `objc_msgSend` does. This enables provider hierarchies:
+A class answers for its superclass's selectors too: `resolveSelector` walks up the chain, as `objc_msgSend` does. Dispatch ranks an inherited selector like any other candidate; there is no fallback step that runs some other tool when nothing matches. This enables provider hierarchies:
 
 ```
 BaseAPIClass (generic HTTP tools)
@@ -91,15 +99,19 @@ BaseAPIClass (generic HTTP tools)
         └── GitHubEnterpriseClass (enterprise overrides)
 ```
 
-When `GitHubEnterpriseClass` does not have a tool for a given selector, dispatch falls back to `GitHubClass`, then to `BaseAPIClass`.
+When `GitHubEnterpriseClass` has no implementation of a selector, the one in `GitHubClass`, then `BaseAPIClass`, answers for it.
 
 <Tabs groupId="language">
 <TabItem value="typescript" label="TypeScript">
 
 ```typescript
+import { ToolClass } from '@smallchat/core';
+
 const baseClass = new ToolClass('base-api');
-const githubClass = new ToolClass('github', { superclass: baseClass });
-const enterpriseClass = new ToolClass('github-enterprise', { superclass: githubClass });
+const githubClass = new ToolClass('github');
+githubClass.superclass = baseClass;
+const enterpriseClass = new ToolClass('github-enterprise');
+enterpriseClass.superclass = githubClass;
 ```
 
 </TabItem>
@@ -116,9 +128,7 @@ let enterprise = ToolClass("github-enterprise", superclass: github)
 
 ## `ToolProxy` — lazy schema loading
 
-`ToolProxy` is the lazy-loading mechanism — analogous to `NSProxy`. It presents the same interface as `ToolClass` but defers schema loading and embedding until the first dispatch.
-
-Use `ToolProxy` when you have many providers but expect only a subset to be used in any given session. This reduces startup time and memory footprint:
+`ToolProxy` is the lazy implementation of one tool — analogous to `NSProxy`. It is a `ToolIMP` whose full schema is loaded on first use (`schemaLoader`) and whose calls go through a transport (`mcp`, `rest`, `local` or `grpc`). `loadRuntime()` creates one per tool in the artifact, with the schema the artifact recorded. Built by hand, a proxy can fetch its schema only when the tool is first used:
 
 <Tabs groupId="language">
 <TabItem value="typescript" label="TypeScript">
@@ -126,14 +136,15 @@ Use `ToolProxy` when you have many providers but expect only a subset to be used
 ```typescript
 import { ToolProxy } from '@smallchat/core';
 
-// Schema is not loaded yet
-const lazyGithub = new ToolProxy('github', async () => {
-  const manifest = await fetch('/manifests/github.json').then(r => r.json());
-  return manifest;
+// The schema is not loaded yet
+const listIssues = new ToolProxy('github', 'list_issues', 'mcp', async () => {
+  const res = await fetch('https://example.com/schemas/github/list_issues.json');
+  return res.json(); // { name, description, inputSchema, arguments }
 });
+githubClass.addMethod(listIssuesSelector, listIssues);
 
-// First dispatch triggers schema load and embedding
-const result = await runtime.dispatch('search for code', args);
+// The first call loads it, to validate the arguments before anything runs
+const result = await runtime.dispatchById('github/list_issues', { repo: 'octo/demo' });
 ```
 
 </TabItem>
@@ -166,15 +177,18 @@ import type { ToolProtocol } from '@smallchat/core';
 
 const searchable: ToolProtocol = {
   name: 'searchable',
-  requiredSelectors: ['search', 'find', 'lookup'],
+  embedding: await embedder.embed('search and find things'), // what the capability means
+  requiredSelectors: [searchSelector],
+  optionalSelectors: [],
 };
 
+githubClass.addProtocol(searchable);
 runtime.registerProtocol(searchable);
 runtime.registerClass(githubClass);
 
 // Check at runtime
-const cls = runtime.getClass('github');
-console.log(cls.conformsToProtocol('searchable')); // true
+const cls = runtime.context.getClasses().find(c => c.name === 'github')!;
+console.log(cls.conformsTo(searchable)); // true
 ```
 
 </TabItem>
@@ -195,7 +209,7 @@ print(cls.conformsToProtocol("searchable")) // true
 
 ## Categories
 
-Categories add methods to a `ToolClass` without subclassing — analogous to Objective-C categories:
+Categories add methods without subclassing — analogous to Objective-C categories. `runtime.loadCategory()` adds them to every registered class that conforms to the category's protocol, refuses one that would shadow a protected core selector, and flushes the resolution cache:
 
 <Tabs groupId="language">
 <TabItem value="typescript" label="TypeScript">
@@ -204,16 +218,9 @@ Categories add methods to a `ToolClass` without subclassing — analogous to Obj
 import type { ToolCategory } from '@smallchat/core';
 
 const loggingCategory: ToolCategory = {
-  targetClass: 'github',
-  methods: [
-    {
-      selector: 'log_api_call',
-      implementation: async (args) => {
-        console.log('[github]', args);
-        return { output: null };
-      },
-    },
-  ],
+  name: 'logging',
+  extendsProtocol: 'searchable',
+  methods: [{ selector: logApiCallSelector, imp: logApiCall }], // a ToolSelector and its ToolIMP
 };
 
 runtime.loadCategory(loggingCategory);
@@ -245,8 +252,8 @@ Check whether a `ToolClass` responds to a given selector, including the supercla
 <TabItem value="typescript" label="TypeScript">
 
 ```typescript
-const cls = runtime.getClass('github');
-const sel = runtime.intern('search for code');
+const cls = runtime.context.getClasses().find(c => c.name === 'github')!;
+const sel = runtime.selectorTable.get('github.search_code')!;
 console.log(cls.canHandle(sel)); // true
 ```
 

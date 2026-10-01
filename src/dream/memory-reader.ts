@@ -78,6 +78,7 @@ const POSITIVE_PATTERNS = [
   /\bbest\b/i,
   /\breliable\b/i,
   /\beffective\b/i,
+  /\bsafer\b/i,
 ];
 
 const NEGATIVE_PATTERNS = [
@@ -91,17 +92,55 @@ const NEGATIVE_PATTERNS = [
   /\bunreliable\b/i,
   /\bbuggy\b/i,
   /\bdeprecated\b/i,
-  /\binstead of\b/i,
-  /\breplaced by\b/i,
 ];
 
-function inferSentiment(context: string): 'positive' | 'negative' | 'neutral' {
-  const hasPositive = POSITIVE_PATTERNS.some(p => p.test(context));
-  const hasNegative = NEGATIVE_PATTERNS.some(p => p.test(context));
+type Sentiment = 'positive' | 'negative' | 'neutral';
+
+/**
+ * Comparisons name two tools with opposite sentiment: "use X instead of Y"
+ * is +X and −Y, "X was replaced by Y" is −X and +Y. 0.x scored any line
+ * containing "instead of" as negative for every tool on it (SAT-22).
+ */
+const PREFERRED_FIRST = /\b(?:instead of|rather than)\b/i;
+const PREFERRED_SECOND = /\b(?:replaced by|in favou?r of)\b/i;
+
+function keywordSentiment(text: string): Sentiment {
+  const hasPositive = POSITIVE_PATTERNS.some(p => p.test(text));
+  const hasNegative = NEGATIVE_PATTERNS.some(p => p.test(text));
 
   if (hasNegative && !hasPositive) return 'negative';
   if (hasPositive && !hasNegative) return 'positive';
-  if (hasPositive && hasNegative) return 'neutral'; // mixed signals
+  return 'neutral'; // no keywords, or mixed signals
+}
+
+/** Sentiment of one clause towards the tool it names at `at`. */
+function clauseSentiment(clause: string, at: number): Sentiment {
+  for (const [pattern, before, after] of [
+    [PREFERRED_FIRST, 'positive', 'negative'],
+    [PREFERRED_SECOND, 'negative', 'positive'],
+  ] as const) {
+    const m = pattern.exec(clause);
+    if (m) return at < m.index ? before : after;
+  }
+  return keywordSentiment(clause);
+}
+
+/**
+ * Sentiment towards `tool` on one line, read only from the clauses
+ * (split at `;`, `!`, `?` and sentence-ending periods) that name it:
+ * "Avoid raw shell reads; read_file is safer." says nothing bad about
+ * read_file. Neighbouring lines are context for the report, not evidence.
+ */
+function inferSentiment(line: string, pattern: RegExp): Sentiment {
+  const verdicts: Sentiment[] = [];
+  for (const clause of line.split(/[;!?]|\.(?=\s|$)/)) {
+    const m = pattern.exec(clause);
+    if (m) verdicts.push(clauseSentiment(clause, m.index));
+  }
+  const positive = verdicts.includes('positive');
+  const negative = verdicts.includes('negative');
+  if (positive && !negative) return 'positive';
+  if (negative && !positive) return 'negative';
   return 'neutral';
 }
 
@@ -141,7 +180,7 @@ export function extractToolMentions(
       ].filter(l => l.trim().length > 0);
 
       const context = contextLines.join(' ').trim();
-      const sentiment = inferSentiment(context);
+      const sentiment = inferSentiment(line, pattern);
 
       mentions.push({
         toolName: tool,

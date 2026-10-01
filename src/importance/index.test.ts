@@ -1,14 +1,12 @@
 /**
- * Feature: importance barrel re-exports @shorthand/core/importance
+ * Feature: @smallchat/core/importance re-exports @shorthand/core/importance
  *
- * src/importance/index.ts used to be a full duplicate implementation that
- * had already drifted from @shorthand/core/importance (see CHANGELOG.md and
- * docs/ecosystem/engineering-guide.md). It's now a thin re-export instead,
- * matching how compaction and CRDT already work. The underlying logic is
- * exercised by @shorthand/core's own test suite (shorthand/src/importance/
- * *.test.ts, run via `npm test --workspace=shorthand`); this file just
- * verifies the re-export wiring itself — that @smallchat/core/importance's
- * public surface still resolves and works end-to-end.
+ * src/importance/index.ts was once a full duplicate implementation that
+ * drifted from @shorthand/core/importance. It is a thin, deprecated
+ * re-export (`export *`) of the canonical package. The logic is tested by
+ * @shorthand/core's own suite (shorthand/ mirrors it; `npm test
+ * --workspace=shorthand`); this file checks that the subpath's public
+ * surface still resolves and works end-to-end.
  */
 
 import { describe, it, expect } from 'vitest';

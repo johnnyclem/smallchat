@@ -9,16 +9,16 @@ smallchat is a **message-passing tool compiler** for LLM-powered applications. I
 
 ## The dispatch model
 
-At the heart of smallchat is `toolkit_dispatch`. When the LLM produces an intent like `"search for code"`, dispatch:
+Resolution and execution are separate. When the LLM produces an intent like `"search for code"`, `runtime.resolve()`:
 
-1. **Embeds** the intent string into a vector
-2. **Searches** the SelectorTable using cosine similarity
-3. **Resolves** a canonical ToolSelector (or retrieves it from the ResolutionCache)
-4. **Walks** the ToolClass hierarchy to find the matching IMP
-5. **Checks** the OverloadTable for the best parameter signature match
-6. **Invokes** the IMP with the provided arguments
+1. **Checks** pinned phrases, learned preferences and the resolution cache for this exact intent text
+2. **Embeds** the intent on its own (it is never added to the SelectorTable)
+3. **Searches** the tool selectors by cosine similarity, quantized and tie-broken by tool id
+4. **Chooses** among overloads by the call's argument types
+5. **Ranks** the candidates into confidence tiers (EXACT / HIGH / MEDIUM / LOW)
+6. **Applies** intent pins, verification and the dispatch policy, and returns an outcome — `resolved` (one tool id), `needs-disambiguation` or `unresolved` — with a proof
 
-The entire hot path — after the first call — is a cache lookup plus a hash table walk. No embedding on repeat calls. No prompt stuffing. No guessing.
+Nothing has run yet. `runtime.dispatchById(toolId, args)` validates the arguments against the tool's JSON Schema and runs exactly that tool; `runtime.dispatch(intent, args)` does both, and runs a tool only when the policy allows it (below HIGH, only with an LLM verifier's approval). A repeated intent is served from the cache without embedding. No prompt stuffing, and no guessing: a call that ran nothing says so (`isError`, `metadata.outcome`).
 
 ## The compile → embed → dispatch pipeline
 
@@ -58,9 +58,9 @@ The compiler reads `ProviderManifest` JSON files. Each manifest declares a provi
 
 ### Embed
 
-Each tool description is embedded into a fixed-dimension vector using the configured `Embedder`. By default, `LocalEmbedder` runs entirely in-process with no external API calls.
+Each tool description is embedded into a fixed-dimension vector using the configured `Embedder`. By default this is the bundled ONNX model (all-MiniLM-L6-v2), run in-process with no external API calls; the artifact records the embedder's fingerprint and refuses to load with any other.
 
-Semantically similar descriptions — `"search for code"` and `"find code"` — land close together in the vector space and deduplicate to the same canonical selector (controlled by `selectorThreshold`, default 0.95).
+Every tool keeps its own selector. Two distinct tools that embed at ≥ 0.95 cosine similarity are a compile error (`--allow-duplicates` keeps both and records the pair) — the compiler never merges tools.
 
 ### Overload (optional)
 
@@ -68,7 +68,7 @@ When multiple tools share a selector above the `overloadThreshold`, the compiler
 
 ### Link
 
-The compiler assembles ToolClass objects (one per provider), builds dispatch tables (`selector → IMP`), and emits a compiled artifact JSON. This artifact is loaded at runtime with `runtime.load()`.
+The compiler assembles ToolClass objects (one per provider), builds dispatch tables (`selector → IMP`), and emits a compiled artifact (format 1.0, content-hashed). Load it with `loadRuntime('tools.toolkit.json')`.
 
 ## Streaming tiers
 
@@ -91,9 +91,9 @@ for await (const event of runtime.dispatchStream('summarize document', { url: '.
   if (event.type === 'chunk') ui.append(event.content);
 }
 
-// Tier 1 — token-level inference stream
-for await (const delta of runtime.inferenceStream('explain this code', { code: '...' })) {
-  if (delta.type === 'inference-delta') process.stdout.write(delta.token);
+// Tier 1 — token-level inference stream (yields token text)
+for await (const token of runtime.inferenceStream('explain this code', { code: '...' })) {
+  process.stdout.write(token);
 }
 ```
 
@@ -108,7 +108,7 @@ resolving  →  tool-start  →  chunk* / inference-delta*  →  done
 - `resolving` — dispatch has received the intent and is resolving
 - `tool-start` — the resolved tool name is known, execution begins
 - `chunk` / `inference-delta` — content as it arrives
-- `done` — stream complete
+- `done` — stream complete; for an intent that did not resolve to one tool, `done` comes right after `resolving` with an `isError` result and nothing runs
 
 An `error` event may appear at any point if dispatch or execution fails.
 
@@ -118,21 +118,21 @@ Arguments passed to tools are wrapped in the SCObject type hierarchy, which mirr
 
 ```
 SCObject
-├── SCSelector    — intent fingerprints
-├── SCData        — raw binary / string data
+├── SCSelector    — a compiled tool selector, passed as a value
+├── SCData        — a JSON object
 ├── SCToolReference — reference to another tool
 ├── SCArray       — ordered collection
-└── SCDictionary  — key-value collection
+└── SCDictionary  — key-value collection of SCObjects
 ```
 
-All plain JavaScript values are auto-wrapped by `wrapValue()` before dispatch and unwrapped by `unwrapValue()` after. You can bypass auto-wrapping by passing SCObject instances directly.
+Overload matching reads plain JSON as its wrapped form (`wrapValue()`: an object is `SCData`, an array `SCArray`), so a signature can ask for `SCData`. Arguments that are SCObject instances are unwrapped (`unwrapValue()`) before validation and execution: a tool always receives plain JSON.
 
 ```typescript
-import { SCArray, SCDictionary, wrapValue } from '@smallchat/core';
+import { SCData } from '@smallchat/core';
 
-const args = new SCDictionary({
-  query: wrapValue('typescript generics'),
-  language: wrapValue('typescript'),
+await runtime.dispatch('search code', {
+  query: 'typescript generics',
+  filters: new SCData({ language: 'typescript' }), // the tool receives { language: 'typescript' }
 });
 ```
 
@@ -147,22 +147,20 @@ A single selector can map to multiple implementations with different parameter s
 
 Arity (number of arguments) acts as a tiebreaker when type scores are equal.
 
-## Fallback chain
+## When no tool is chosen
 
-When no tool matches above the `minConfidence` threshold, dispatch walks a fallback chain:
-
-1. **Superclass traversal** — check parent ToolClass
-2. **Broadened search** — lower the cosine threshold (0.75 → 0.5)
-3. **LLM disambiguation** — (planned) ask the model to clarify
-
-If the chain exhausts without a match, an `UnrecognizedIntent` error is thrown.
+There is no fallback chain: smallchat never runs a weaker match on a guess.
+When resolution does not choose exactly one tool, the call runs nothing and
+returns an `isError` result whose `metadata.outcome` says why —
+`needs-disambiguation` (candidates exist, but the dispatch policy will not
+pick one on its own: below HIGH without an LLM verifier's approval, a
+destructive tool below EXACT, a pinned tool) or `unresolved` (nothing
+plausible matched). The result lists the candidates' tool ids; the caller
+chooses one and calls it with `dispatchById`.
 
 ```typescript
-try {
-  await runtime.dispatch('do something vague');
-} catch (e) {
-  if (e instanceof UnrecognizedIntent) {
-    console.log('No tool matched:', e.message);
-  }
+const result = await runtime.dispatch('do something vague', args);
+if (result.isError) {
+  console.log(result.metadata?.outcome, result.content); // { error, candidates, options }
 }
 ```

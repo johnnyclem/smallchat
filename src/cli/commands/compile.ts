@@ -1,22 +1,28 @@
 import { Command } from 'commander';
-import { readFileSync, readdirSync, writeFileSync, statSync, existsSync, watch } from 'node:fs';
+import { readFileSync, readdirSync, writeFileSync, statSync, existsSync, realpathSync, watch } from 'node:fs';
 import { join, resolve, dirname, relative, isAbsolute } from 'node:path';
 import type { Embedder, VectorIndex, ProviderManifest } from '../../core/types.js';
 import type { SmallChatManifest } from '../../core/manifest.js';
 import { safeJsonParse, PrototypePollutionError } from '../../core/safe-json.js';
-import { ToolCompiler } from '../../compiler/compiler.js';
-import { LocalEmbedder } from '../../embedding/local-embedder.js';
+import { ToolCompiler, DuplicateToolError, SelectorConflictError } from '../../compiler/compiler.js';
 import { MemoryVectorIndex } from '../../embedding/memory-vector-index.js';
-import { ONNXEmbedder } from '../../embedding/onnx-embedder.js';
 import { SqliteVectorIndex } from '../../embedding/sqlite-vector-index.js';
+import { buildArtifact } from '../../artifact/format.js';
+import { writeArtifact } from '../../artifact/io.js';
+import {
+  createEmbedder,
+  describeFingerprint,
+  EmbedderUnavailableError,
+  fingerprintOf,
+  parseEmbedderKind,
+  type BuiltinEmbedderKind,
+} from '../../artifact/embedder.js';
 import {
   isMcpConfigFile,
   isMcpServerProject,
   introspectMcpConfigFile,
   introspectLocalMcpServer,
 } from '../../mcp/client.js';
-import { SqliteArtifactStore } from '../../mcp/sqlite-artifact.js';
-import type { SerializedArtifact } from '../../mcp/artifact.js';
 
 // ---------------------------------------------------------------------------
 // Source type detection
@@ -24,7 +30,7 @@ import type { SerializedArtifact } from '../../mcp/artifact.js';
 
 type SourceType = 'directory' | 'mcp-config' | 'auto-detect';
 
-function detectSourceType(sourcePath: string | undefined): { type: SourceType; path: string } {
+export function detectSourceType(sourcePath: string | undefined): { type: SourceType; path: string } {
   // No source given → auto-detect from cwd
   if (!sourcePath) {
     return { type: 'auto-detect', path: process.cwd() };
@@ -61,9 +67,31 @@ function detectSourceType(sourcePath: string | undefined): { type: SourceType; p
 // Manifest resolution
 // ---------------------------------------------------------------------------
 
+/**
+ * Manifest files already loaded in one compile run, by real path. A file
+ * reached twice — through --source (or auto-detection) and again through
+ * smallchat.json "manifests" or "dependencies", as in every `smallchat init`
+ * project — is compiled once.
+ */
+type LoadedFiles = Set<string>;
+
+/** Record `file` as loaded; false when it already was. */
+function firstLoad(file: string, loaded: LoadedFiles): boolean {
+  let key: string;
+  try {
+    key = realpathSync(file);
+  } catch {
+    key = resolve(file);
+  }
+  if (loaded.has(key)) return false;
+  loaded.add(key);
+  return true;
+}
+
 async function resolveManifests(
   source: { type: SourceType; path: string },
-  options?: { timeoutMs?: number },
+  options: { timeoutMs?: number } = {},
+  loaded: LoadedFiles = new Set(),
 ): Promise<ProviderManifest[]> {
   switch (source.type) {
     case 'mcp-config': {
@@ -79,7 +107,7 @@ async function resolveManifests(
         const files = findManifestFiles(source.path);
         if (files.length > 0) {
           console.log(`Found ${files.length} manifest file(s) in ${source.path}`);
-          return loadManifestFiles(files);
+          return loadManifestFiles(files, loaded);
         }
 
         console.error('No MCP server project detected and no manifest files found.');
@@ -98,14 +126,15 @@ async function resolveManifests(
     case 'directory': {
       console.log(`Parsing manifests from ${source.path}...`);
       const files = findManifestFiles(source.path);
-      return loadManifestFiles(files);
+      return loadManifestFiles(files, loaded);
     }
   }
 }
 
-function loadManifestFiles(files: string[]): ProviderManifest[] {
+function loadManifestFiles(files: string[], loaded: LoadedFiles): ProviderManifest[] {
   const manifests: ProviderManifest[] = [];
   for (const file of files) {
+    if (!firstLoad(file, loaded)) continue;
     try {
       const content = readFileSync(file, 'utf-8');
       const manifest = safeJsonParse(content) as ProviderManifest;
@@ -136,22 +165,8 @@ function isWithin(baseDir: string, resolved: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Embedder / index factories
+// Index factory
 // ---------------------------------------------------------------------------
-
-async function createEmbedder(type: string): Promise<Embedder> {
-  if (type === 'onnx') {
-    try {
-      return new ONNXEmbedder();
-    } catch (e) {
-      console.warn(`  Warning: ONNX embedder failed to load: ${(e as Error).message}`);
-      console.warn('  Falling back to local (hash-based) embedder.');
-      console.warn('  Run "smallchat doctor" to diagnose. Ensure models/ directory exists.');
-      return new LocalEmbedder();
-    }
-  }
-  return new LocalEmbedder();
-}
 
 function createVectorIndex(type: string, dbPath: string): VectorIndex {
   if (type === 'sqlite') {
@@ -168,7 +183,7 @@ function createVectorIndex(type: string, dbPath: string): VectorIndex {
  * Attempt to find and load a smallchat.json manifest.
  * Searches upward from the given directory.
  */
-function findSmallChatManifest(startDir: string): { manifest: SmallChatManifest; path: string } | null {
+export function findSmallChatManifest(startDir: string): { manifest: SmallChatManifest; path: string } | null {
   let dir = startDir;
   const root = resolve('/');
 
@@ -201,6 +216,7 @@ function findSmallChatManifest(startDir: string): { manifest: SmallChatManifest;
 function resolvePackageDependencies(
   manifest: SmallChatManifest,
   manifestDir: string,
+  loaded: LoadedFiles = new Set(),
 ): ProviderManifest[] {
   const manifests: ProviderManifest[] = [];
 
@@ -214,8 +230,8 @@ function resolvePackageDependencies(
       }
       if (existsSync(resolved)) {
         if (statSync(resolved).isDirectory()) {
-          manifests.push(...loadManifestFiles(findManifestFiles(resolved)));
-        } else if (resolved.endsWith('.json')) {
+          manifests.push(...loadManifestFiles(findManifestFiles(resolved), loaded));
+        } else if (resolved.endsWith('.json') && firstLoad(resolved, loaded)) {
           try {
             const content = readFileSync(resolved, 'utf-8');
             const m = safeJsonParse(content) as ProviderManifest;
@@ -243,7 +259,7 @@ function resolvePackageDependencies(
           console.warn(`  Warning: skipping dependency "${_name}" — path "${specifier}" escapes the smallchat.json directory`);
           continue;
         }
-        if (existsSync(resolved) && resolved.endsWith('.json')) {
+        if (existsSync(resolved) && resolved.endsWith('.json') && firstLoad(resolved, loaded)) {
           try {
             const content = readFileSync(resolved, 'utf-8');
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -284,6 +300,27 @@ function resolvePackageDependencies(
   return manifests;
 }
 
+/**
+ * Every manifest one compile run sees: the source's (a directory, an MCP
+ * config, or auto-detected from the source path), then the project's
+ * smallchat.json "manifests" and local "dependencies". Each manifest file
+ * is loaded once, however many of those reach it.
+ */
+export async function collectManifests(
+  source: { type: SourceType; path: string },
+  project: { manifest: SmallChatManifest; path: string } | null,
+  options: { timeoutMs?: number } = {},
+): Promise<ProviderManifest[]> {
+  const loaded: LoadedFiles = new Set();
+  const manifests = await resolveManifests(source, options, loaded);
+  if (!project) return manifests;
+  const depManifests = resolvePackageDependencies(project.manifest, dirname(project.path), loaded);
+  if (depManifests.length > 0) {
+    console.log(`\nResolved ${depManifests.length} manifest(s) from smallchat.json dependencies`);
+  }
+  return [...manifests, ...depManifests];
+}
+
 // ---------------------------------------------------------------------------
 // Core compile
 // ---------------------------------------------------------------------------
@@ -293,37 +330,56 @@ type OutputFormat = 'json' | 'sqlite';
 async function runCompile(
   manifests: ProviderManifest[],
   outputPath: string,
-  embedderType: string,
+  embedderKind: BuiltinEmbedderKind,
   dbPath: string,
   sourceType?: SourceType,
   format: OutputFormat = 'json',
   projectManifest?: SmallChatManifest,
+  allowDuplicates = false,
 ): Promise<boolean> {
   if (manifests.length === 0) {
     console.error('No valid manifests found.');
     return false;
   }
 
-  const embedder = await createEmbedder(embedderType);
+  let embedder: Embedder;
+  try {
+    embedder = await createEmbedder(embedderKind);
+  } catch (e) {
+    if (!(e instanceof EmbedderUnavailableError)) throw e;
+    console.error(`\n${e.message}`);
+    console.error('  Run "smallchat doctor" to diagnose, or compile with --embedder hash');
+    console.error('  (hash-based placeholder vectors; dev/test only).');
+    return false;
+  }
+  const fingerprint = fingerprintOf(embedder);
   const vectorIndex = createVectorIndex(
-    embedderType === 'onnx' ? 'sqlite' : 'memory',
+    embedderKind === 'onnx' ? 'sqlite' : 'memory',
     dbPath,
   );
-  const compiler = new ToolCompiler(embedder, vectorIndex);
-
-  const modelLabel = embedderType === 'onnx'
-    ? 'all-MiniLM-L6-v2 (ONNX, 384-dim)'
-    : 'hash-based (v0.0.1 placeholder)';
+  const compiler = new ToolCompiler(embedder, vectorIndex, {
+    allowDuplicates,
+    duplicateThreshold: projectManifest?.compiler?.duplicateThreshold ?? projectManifest?.compiler?.deduplicationThreshold,
+  });
 
   console.log(`\nEmbedding ${manifests.reduce((sum, m) => sum + m.tools.length, 0)} tools...`);
-  console.log(`  Model: ${modelLabel}`);
+  console.log(`  Embedder: ${describeFingerprint(fingerprint)}`);
 
-  const result = await compiler.compile(manifests, projectManifest);
+  let result;
+  try {
+    result = await compiler.compile(manifests, projectManifest);
+  } catch (e) {
+    if (!(e instanceof DuplicateToolError || e instanceof SelectorConflictError)) throw e;
+    console.error(`\nError: ${e.message}`);
+    return false;
+  }
 
-  console.log(`  Selectors generated: ${result.toolCount}`);
-  console.log(`  After dedup (threshold 0.95): ${result.uniqueSelectorCount} unique selectors`);
-  if (result.mergedCount > 0) {
-    console.log(`  ${result.mergedCount} tools merged as semantically equivalent`);
+  console.log(`  Tools: ${result.toolCount} (${result.uniqueSelectorCount} selectors, none shared)`);
+  if (result.duplicates.length > 0) {
+    console.log(`  ${result.duplicates.length} near-duplicate tool pair(s) kept (--allow-duplicates):`);
+    for (const d of result.duplicates) {
+      console.log(`    ⚠ ${d.toolA} <-> ${d.toolB} (cosine: ${d.similarity.toFixed(3)})`);
+    }
   }
 
   console.log('\nLinking...');
@@ -337,22 +393,17 @@ async function runCompile(
     }
   }
 
-  const output = serializeResult(result, embedderType, manifests);
+  const artifact = buildArtifact(result, manifests, fingerprint);
+  const artifactPath = format === 'sqlite' && !outputPath.endsWith('.db')
+    ? `${outputPath.replace(/\.json$/, '')}.db`
+    : outputPath;
+  await writeArtifact(artifactPath, artifact);
+  console.log(`\nOutput${format === 'sqlite' ? ' (SQLite)' : ''}: ${artifactPath}`);
 
-  if (format === 'sqlite') {
-    const sqlitePath = outputPath.replace(/\.json$/, '.db');
-    const store = new SqliteArtifactStore(sqlitePath);
-    store.save(output as unknown as SerializedArtifact);
-    store.close();
-    console.log(`\nOutput (SQLite): ${sqlitePath}`);
-  } else {
-    writeFileSync(outputPath, JSON.stringify(output, null, 2));
-    console.log(`\nOutput: ${outputPath}`);
-  }
-
-  console.log(`  - ${result.uniqueSelectorCount} selectors`);
-  console.log(`  - ${result.toolCount} tools`);
-  console.log(`  - ${result.dispatchTables.size} providers`);
+  console.log(`  - format ${artifact.formatVersion}, content hash ${artifact.contentHash.slice(0, 16)}…`);
+  console.log(`  - ${artifact.stats.selectorCount} selectors`);
+  console.log(`  - ${artifact.stats.toolCount} tools`);
+  console.log(`  - ${artifact.stats.providerCount} providers`);
 
   // Save discovered manifests as shareable files when introspected
   if (sourceType === 'mcp-config' || sourceType === 'auto-detect') {
@@ -388,7 +439,8 @@ export const compileCommand = new Command('compile')
   .option('-s, --source [path]', 'Source: directory of manifests, MCP config file, or omit to auto-detect')
   .option('-o, --output <path>', 'Output file path', 'tools.toolkit.json')
   .option('-w, --watch', 'Watch source and recompile on changes')
-  .option('-e, --embedder <type>', 'Embedder to use: onnx (default) or local', 'onnx')
+  .option('-e, --embedder <type>', 'Embedder: onnx (default) or hash (dev/test placeholder; "local" is accepted as an alias)')
+  .option('--allow-duplicates', 'Keep near-duplicate tools (cosine >= 0.95) as a warning instead of a compile error')
   .option('-f, --format <type>', 'Output format: json (default) or sqlite', 'json')
   .option('--db-path <path>', 'Path to sqlite-vec database', 'smallchat.db')
   .option('--timeout <ms>', 'Timeout for MCP server introspection (ms)', '30000')
@@ -405,7 +457,7 @@ export const compileCommand = new Command('compile')
       const manifestDir = dirname(projectResult.path);
       console.log(`Found smallchat.json: ${projectResult.path}`);
 
-      if (projectManifest.compiler?.embedder && !options.embedder) {
+      if (projectManifest.compiler?.embedder && options.embedder === undefined) {
         options.embedder = projectManifest.compiler.embedder;
       }
       if (projectManifest.output?.path && options.output === 'tools.toolkit.json') {
@@ -420,23 +472,21 @@ export const compileCommand = new Command('compile')
     }
 
     const outputPath = resolve(options.output);
-    const embedderType = options.embedder;
+    let embedderKind: BuiltinEmbedderKind;
+    try {
+      embedderKind = parseEmbedderKind(options.embedder);
+    } catch (e) {
+      console.error((e as Error).message);
+      process.exit(1);
+    }
+    const allowDuplicates = options.allowDuplicates === true || projectManifest?.compiler?.allowDuplicates === true;
     const dbPath = resolve(options.dbPath);
     const format = (options.format === 'sqlite' ? 'sqlite' : 'json') as OutputFormat;
 
-    // Resolve manifests from source + smallchat.json dependencies
-    let manifests = await resolveManifests(source, { timeoutMs });
+    // Resolve manifests from source + smallchat.json dependencies (each file once)
+    const manifests = await collectManifests(source, projectResult, { timeoutMs });
 
-    if (projectResult && projectManifest) {
-      const manifestDir = dirname(projectResult.path);
-      const depManifests = resolvePackageDependencies(projectManifest, manifestDir);
-      if (depManifests.length > 0) {
-        console.log(`\nResolved ${depManifests.length} manifest(s) from smallchat.json dependencies`);
-        manifests = [...manifests, ...depManifests];
-      }
-    }
-
-    const ok = await runCompile(manifests, outputPath, embedderType, dbPath, source.type, format, projectManifest);
+    const ok = await runCompile(manifests, outputPath, embedderKind, dbPath, source.type, format, projectManifest, allowDuplicates);
 
     if (!options.watch) {
       if (!ok) process.exit(1);
@@ -458,12 +508,8 @@ export const compileCommand = new Command('compile')
       if (debounceTimer) clearTimeout(debounceTimer);
       debounceTimer = setTimeout(async () => {
         console.log(`\n--- Recompiling (${filename} changed) ---\n`);
-        let newManifests = await resolveManifests(source, { timeoutMs });
-        if (projectResult && projectManifest) {
-          const manifestDir = dirname(projectResult.path);
-          newManifests = [...newManifests, ...resolvePackageDependencies(projectManifest, manifestDir)];
-        }
-        await runCompile(newManifests, outputPath, embedderType, dbPath, source.type, format, projectManifest);
+        const newManifests = await collectManifests(source, projectResult, { timeoutMs });
+        await runCompile(newManifests, outputPath, embedderKind, dbPath, source.type, format, projectManifest, allowDuplicates);
         console.log(`\nWatching ${watchPath} for changes...`);
       }, 200);
     });
@@ -473,6 +519,7 @@ export const compileCommand = new Command('compile')
 // Helpers
 // ---------------------------------------------------------------------------
 
+/** Manifest JSON files under `dir`, skipping node_modules and dot-directories. */
 function findManifestFiles(dir: string): string[] {
   const files: string[] = [];
   try {
@@ -481,7 +528,7 @@ function findManifestFiles(dir: string): string[] {
       const stat = statSync(fullPath);
       if (stat.isFile() && entry.endsWith('.json')) {
         files.push(fullPath);
-      } else if (stat.isDirectory()) {
+      } else if (stat.isDirectory() && entry !== 'node_modules' && !entry.startsWith('.')) {
         files.push(...findManifestFiles(fullPath));
       }
     }
@@ -489,91 +536,6 @@ function findManifestFiles(dir: string): string[] {
     // Directory might not exist
   }
   return files;
-}
-
-function serializeResult(
-  result: import('../../core/types.js').CompilationResult,
-  embedderType?: string,
-  manifests?: import('../../core/types.js').ProviderManifest[],
-): object {
-  const selectors: Record<string, object> = {};
-  for (const [key, sel] of result.selectors) {
-    selectors[key] = {
-      canonical: sel.canonical,
-      parts: sel.parts,
-      arity: sel.arity,
-      vector: Array.from(sel.vector),
-    };
-  }
-
-  // Build hint indexes from manifests
-  const toolHintIndex = new Map<string, Record<string, unknown>>();
-  const providerHints: Record<string, object> = {};
-  if (manifests) {
-    for (const m of manifests) {
-      if (m.compilerHints) {
-        providerHints[m.id] = m.compilerHints;
-      }
-      for (const tool of m.tools) {
-        if (tool.compilerHints) {
-          toolHintIndex.set(tool.name, tool.compilerHints as unknown as Record<string, unknown>);
-        }
-      }
-    }
-  }
-
-  const dispatchTables: Record<string, Record<string, object>> = {};
-  for (const [providerId, table] of result.dispatchTables) {
-    const methods: Record<string, object> = {};
-    for (const [canonical, imp] of table) {
-      methods[canonical] = {
-        providerId: imp.providerId,
-        toolName: imp.toolName,
-        transportType: imp.transportType,
-        ...(toolHintIndex.has(imp.toolName) ? { compilerHints: toolHintIndex.get(imp.toolName) } : {}),
-      };
-    }
-    dispatchTables[providerId] = methods;
-  }
-
-  // Build channel metadata from manifests
-  const channels: Record<string, object> = {};
-  if (manifests) {
-    for (const m of manifests) {
-      if (m.channel?.isChannel) {
-        channels[m.id] = {
-          isChannel: true,
-          twoWay: m.channel.twoWay,
-          permissionRelay: m.channel.permissionRelay,
-          replyToolName: m.channel.replyToolName,
-          instructions: m.channel.instructions,
-        };
-      }
-    }
-  }
-
-  return {
-    version: '0.5.0',
-    timestamp: new Date().toISOString(),
-    embedding: {
-      model: embedderType === 'onnx' ? 'all-MiniLM-L6-v2' : 'hash-based',
-      dimensions: embedderType === 'onnx' ? 384 : 384,
-      embedderType: embedderType ?? 'local',
-    },
-    stats: {
-      toolCount: result.toolCount,
-      uniqueSelectorCount: result.uniqueSelectorCount,
-      mergedCount: result.mergedCount,
-      providerCount: result.dispatchTables.size,
-      collisionCount: result.collisions.length,
-      channelCount: Object.keys(channels).length,
-    },
-    selectors,
-    dispatchTables,
-    collisions: result.collisions,
-    ...(Object.keys(channels).length > 0 ? { channels } : {}),
-    ...(Object.keys(providerHints).length > 0 ? { providerHints } : {}),
-  };
 }
 
 function generateHeader(result: import('../../core/types.js').CompilationResult): string {

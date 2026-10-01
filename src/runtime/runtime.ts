@@ -3,15 +3,24 @@ import { ResolutionCache, computeSchemaFingerprint } from '../core/resolution-ca
 import { SelectorTable } from '../core/selector-table.js';
 import { ToolClass } from '../core/tool-class.js';
 import { OverloadTable } from '../core/overload-table.js';
-import { DispatchContext, toolkit_dispatch, smallchat_dispatchStream } from './dispatch.js';
-import type { DispatchConfig } from './dispatch.js';
+import { DispatchContext, toolkit_dispatch, smallchat_dispatchStream, smallchat_dispatchStreamById, dispatchById, resolveIntent } from './dispatch.js';
+import type { DispatchConfig, DispatchByIdOptions, DispatchOptions, RegisteredTool, Resolution, ResolveOptions } from './dispatch.js';
 import type { SCMethodSignature } from '../core/sc-types.js';
 import { DispatchBuilder } from './dispatch-builder.js';
 import { SelectorNamespace } from '../core/selector-namespace.js';
 import type { LLMClient } from '../core/llm-client.js';
-import type { DispatchObserver } from './observer.js';
+import type { DispatchObserver, DispatchFeedback } from './observer.js';
 import type { SemanticMap, SemanticMapOptions, LearnedPreference } from './semantic-map.js';
-import type { ConfidenceTier, ResolutionProof, TierThresholds } from '../core/confidence.js';
+import type { TierThresholds } from '../core/confidence.js';
+import { IntentPinRegistry } from '../core/intent-pin.js';
+import type { IntentPin } from '../core/intent-pin.js';
+import type { ArgumentCoercion } from '../core/argument-validator.js';
+import type { ManifestPolicyConfig } from '../core/manifest.js';
+import { DEFAULT_THRESHOLDS } from '../core/confidence.js';
+import { DecisionLog } from './decision-log.js';
+import type { DecisionLogOptions } from './decision-log.js';
+import { explainResolution } from './explain.js';
+import type { Explanation } from './explain.js';
 
 /**
  * ToolRuntime — the top-level runtime that manages everything.
@@ -43,15 +52,12 @@ export class ToolRuntime {
       options?.cacheSize ?? 1024,
       options?.minConfidence ?? 0.85,
       versionContext,
-      options?.rateLimiter,
     );
 
     this.selectorTable = new SelectorTable(
       vectorIndex,
       embedder,
       options?.selectorThreshold ?? 0.95,
-      this.cache.rateLimiter,
-      options?.maxIntentEntries,
     );
 
     this.selectorNamespace = options?.selectorNamespace ?? new SelectorNamespace();
@@ -64,7 +70,22 @@ export class ToolRuntime {
       semanticMap: options?.semanticMap,
       semanticMapOptions: options?.semanticMapOptions,
       requireLLMForSubHighDispatch: options?.requireLLMForSubHighDispatch,
+      treatUnannotatedAsDestructive: options?.treatUnannotatedAsDestructive,
+      argumentCoercion: options?.argumentCoercion,
+      artifactHash: options?.artifactHash,
+      rateLimiter: options?.rateLimiter,
+      maxDecompositionDepth: options?.maxDecompositionDepth,
+      maxSubDispatches: options?.maxSubDispatches,
+      decisionLog: openDecisionLog(options?.decisionLog),
     };
+
+    let intentPins: IntentPinRegistry | undefined;
+    if (options?.intentPins instanceof IntentPinRegistry) {
+      intentPins = options.intentPins;
+    } else if (options?.intentPins) {
+      intentPins = new IntentPinRegistry();
+      for (const pin of options.intentPins) intentPins.pin(pin);
+    }
 
     this.context = new DispatchContext(
       this.selectorTable,
@@ -72,9 +93,14 @@ export class ToolRuntime {
       vectorIndex,
       embedder,
       this.selectorNamespace,
-      undefined, // intentPins
+      intentPins,
       dispatchConfig,
     );
+  }
+
+  /** The intent pins guarding sensitive selectors (add pins at any time) */
+  get intentPins(): IntentPinRegistry {
+    return this.context.intentPins;
   }
 
   // ---------------------------------------------------------------------------
@@ -100,14 +126,41 @@ export class ToolRuntime {
     return this.context.strict;
   }
 
+  /** The decision log every resolution and dispatch is appended to, or null (RuntimeOptions.decisionLog) */
+  get decisionLog(): DecisionLog | null {
+    return this.context.decisionLog;
+  }
+
   /**
-   * Register a tool class (provider).
+   * Register a tool class (provider). Registering a class with the name of
+   * one already registered replaces it (hot reload). Cached resolutions are
+   * flushed.
    *
    * Throws SelectorShadowingError if the class contains selectors that
    * would shadow protected core selectors.
    */
   registerClass(toolClass: ToolClass): void {
     this.context.registerClass(toolClass);
+  }
+
+  /**
+   * Remove a provider by name; its tools are no longer dispatchable and
+   * cached resolutions are flushed. Returns false when no class has that
+   * name.
+   */
+  unregisterClass(name: string): boolean {
+    return this.context.unregisterClass(name);
+  }
+
+  /**
+   * Explicit feedback about an intent → tool decision. `correct: false`
+   * records a negative example: resolution will not choose `toolId` for
+   * this intent text again (for `principal` only, when given). `correct:
+   * true` clears it. This is the only source of negative examples unless
+   * observerOptions.implicitCorrections is set.
+   */
+  feedback(input: DispatchFeedback): void {
+    this.context.feedback(input);
   }
 
   /**
@@ -186,7 +239,12 @@ export class ToolRuntime {
 
   /**
    * Swizzle: replace the IMP for a selector in a specific provider.
-   * Returns the original IMP.
+   * Every other selector of that class that dispatched to the same
+   * original IMP (its aliases) is swizzled with it, so the tool has one
+   * implementation. Returns the original IMP.
+   *
+   * Takes effect for the next dispatch: cached resolutions are flushed and
+   * the dispatch index is rebuilt.
    *
    * Use cases: testing/mocking, environment-specific routing,
    * capability upgrades mid-session.
@@ -202,9 +260,14 @@ export class ToolRuntime {
 
     const original = toolClass.dispatchTable.get(selector.canonical) ?? null;
     toolClass.dispatchTable.set(selector.canonical, newImp);
+    if (original) {
+      for (const [canonical, imp] of toolClass.dispatchTable) {
+        if (imp === original) toolClass.dispatchTable.set(canonical, newImp);
+      }
+    }
 
-    // Flush cache entries for this selector — critical!
-    this.cache.flushSelector(selector);
+    // Cache entries are keyed by intent, not by tool selector: flush them all.
+    this.cache.flush();
     // Rebuild the dispatch index — the swizzled IMP changes tool summaries
     this.context.reindex();
 
@@ -212,24 +275,84 @@ export class ToolRuntime {
   }
 
   /**
+   * Resolve an intent to at most one tool, without executing anything.
+   *
+   * Returns the outcome ('resolved' | 'needs-disambiguation' |
+   * 'unresolved'), the chosen tool id when resolved, the ranked
+   * candidates, and a proof with a stable `proofDigest`. By default
+   * (`learn: false`) it changes nothing in the runtime — no caching; only
+   * an opted-in rate limiter counts the embedding. Run the chosen tool
+   * with `dispatchById(resolution.chosen, args)`.
+   */
+  resolve(intent: string, options?: ResolveOptions): Promise<Resolution> {
+    return resolveIntent(this.context, intent, options);
+  }
+
+  /**
+   * Resolve an intent (as resolve(), learning off) and explain the
+   * decision: every candidate with its tier, annotations and the dispatch
+   * policy's verdict on running it without the caller choosing, plus the
+   * proof. Nothing executes. See runtime/explain.ts.
+   */
+  async explain(intent: string, options?: Omit<ResolveOptions, 'learn'>): Promise<Explanation> {
+    const resolution = await resolveIntent(this.context, intent, { ...options, learn: false });
+    return explainResolution(this.context, resolution);
+  }
+
+  /**
+   * Execute exactly the tool with this canonical id (`<providerId>/<toolName>`):
+   * O(1) lookup, no embedding, no semantic resolution. Arguments are
+   * validated against the tool's inputSchema first. An unknown id or
+   * invalid arguments return an isError result; nothing runs.
+   */
+  dispatchById(
+    toolId: string,
+    args: Record<string, unknown> = {},
+    options?: DispatchByIdOptions,
+  ): Promise<ToolResult> {
+    return dispatchById(this.context, toolId, args, options);
+  }
+
+  /** Streaming variant of dispatchById. */
+  dispatchStreamById(
+    toolId: string,
+    args: Record<string, unknown> = {},
+    options?: DispatchByIdOptions,
+  ): AsyncGenerator<DispatchEvent> {
+    return smallchat_dispatchStreamById(this.context, toolId, args, options);
+  }
+
+  /** The registered tool with this canonical id, if any. */
+  getTool(toolId: string): RegisteredTool | undefined {
+    return this.context.getTool(toolId);
+  }
+
+  /** Every registered canonical tool id, sorted. */
+  toolIds(): string[] {
+    return this.context.toolIds();
+  }
+
+  /**
    * Fluent dispatch — returns a DispatchBuilder for chaining .withArgs().exec()/.stream().
    *
-   * @example
-   *   // Fluent (new):
-   *   const result = await runtime.dispatch("fetch url").withArgs({ url }).exec();
-   *   // for await (const tok of runtime.dispatch("summarise").withArgs({ url }).inferStream()) ...
+   * `dispatch(intent, args)` is resolve → policy → execute: the chosen tool
+   * runs only when resolution settles on exactly one tool that the
+   * dispatch policy allows; otherwise the result is an isError result
+   * (outcome 'needs-disambiguation' or 'unresolved') listing candidates.
    *
-   *   // Direct (legacy):
+   * @example
+   *   const result = await runtime.dispatch("fetch url").withArgs({ url }).exec();
    *   const result = await runtime.dispatch("fetch url", { url });
    */
   dispatch(intent: string): DispatchBuilder;
-  dispatch(intent: string, args: Record<string, unknown>): Promise<ToolResult>;
+  dispatch(intent: string, args: Record<string, unknown>, options?: DispatchOptions): Promise<ToolResult>;
   dispatch(
     intent: string,
     args?: Record<string, unknown>,
+    options?: DispatchOptions,
   ): DispatchBuilder | Promise<ToolResult> {
     if (args !== undefined) {
-      return toolkit_dispatch(this.context, intent, args);
+      return toolkit_dispatch(this.context, intent, args, options);
     }
     return new DispatchBuilder(this.context, intent);
   }
@@ -241,43 +364,52 @@ export class ToolRuntime {
    * the options and the user picks one. Pass the original intent and the chosen
    * option back here. This does two things at once:
    *
-   *   1. Executes the chosen selector — the dispatch the user actually wanted.
-   *   2. Reinforces the semantic map — so the exact intent resolves instantly
-   *      next time, and *similar* intents get a confidence boost toward the same
-   *      selector. Deferring to the user costs one click; it never costs two.
+   *   1. Executes exactly the chosen tool (by id) — the user named it.
+   *   2. Reinforces the semantic map — so the exact intent resolves to the
+   *      same tool next time, and *similar* intents get a confidence boost
+   *      toward it. The preference records the chosen tool id, not only the
+   *      selector: a selector with overload variants (or declared by several
+   *      classes) is learned as the variant the user picked. Nothing is
+   *      learned when the chosen selector does not dispatch to the chosen
+   *      tool. (A learned preference never authorizes a pinned or
+   *      destructive tool on its own; see runtime/policy.ts.)
    *
-   * `choice` is either a canonical selector id (as carried on
-   * `ToolRefinementNeeded.options[n].selectorId`) or the option object itself.
-   * When only a narrowed intent is available (some LLM-suggested rewrites carry
-   * no selector id), the narrowed intent is dispatched without reinforcement —
-   * there is no single selector to bind the preference to.
+   * `choice` is a canonical selector id (as carried on
+   * `ToolRefinementNeeded.options[n].selectorId`) or the option object itself
+   * (whose `toolId` or `selectorId` is used). When only a narrowed intent is
+   * available (some LLM-suggested rewrites carry neither), the narrowed intent
+   * is dispatched as an intent, without reinforcement.
    */
   async resolveRefinement(
     originalIntent: string,
-    choice: string | { selectorId?: string; intent?: string },
+    choice: string | { selectorId?: string; toolId?: string; intent?: string },
     args?: Record<string, unknown>,
   ): Promise<ToolResult> {
     const selectorId = typeof choice === 'string' ? choice : choice.selectorId;
     const narrowedIntent = typeof choice === 'string' ? undefined : choice.intent;
+    const owner = selectorId ? this.context.toolForSelector(selectorId) : null;
+    const toolId = (typeof choice === 'string' ? undefined : choice.toolId) ?? owner?.toolId;
 
-    if (selectorId) {
-      // Learn first, then dispatch — the exact fast-path now resolves the
-      // original intent straight to the selector the user chose.
-      await this.context.reinforceRefinement(originalIntent, selectorId);
-      return toolkit_dispatch(this.context, originalIntent, args);
+    if (toolId) {
+      if (selectorId && this.context.selectorReachesTool(selectorId, toolId)) {
+        await this.context.reinforceRefinement(originalIntent, selectorId, toolId);
+      }
+      return dispatchById(this.context, toolId, args ?? {});
     }
 
-    // No selector to bind to — dispatch the narrowed rewrite as-is.
+    // No tool to bind to — dispatch the narrowed rewrite as an intent.
     return toolkit_dispatch(this.context, narrowedIntent ?? originalIntent, args);
   }
 
   /**
    * Directly reinforce a learned dispatch preference without executing it.
    * Lower-level than `resolveRefinement`; use when the host has already run the
-   * tool and only wants to record the mapping.
+   * tool and only wants to record the mapping. Pass `toolId` when the selector
+   * dispatches to more than one tool (overloads, several classes); without it
+   * the preference stands for the selector's default tool.
    */
-  reinforceRefinement(originalIntent: string, selectorId: string): Promise<LearnedPreference> {
-    return this.context.reinforceRefinement(originalIntent, selectorId);
+  reinforceRefinement(originalIntent: string, selectorId: string, toolId?: string): Promise<LearnedPreference> {
+    return this.context.reinforceRefinement(originalIntent, selectorId, toolId);
   }
 
   /**
@@ -359,8 +491,8 @@ export class ToolRuntime {
    * When the resolved IMP supports progressive inference, the flow becomes:
    *   resolving → tool-start → inference-delta* → chunk → done
    */
-  dispatchStream(intent: string, args?: Record<string, unknown>): AsyncGenerator<DispatchEvent> {
-    return smallchat_dispatchStream(this.context, intent, args);
+  dispatchStream(intent: string, args?: Record<string, unknown>, options?: DispatchOptions): AsyncGenerator<DispatchEvent> {
+    return smallchat_dispatchStream(this.context, intent, args, options);
   }
 
   /**
@@ -379,9 +511,10 @@ export class ToolRuntime {
   async *inferenceStream(
     intent: string,
     args?: Record<string, unknown>,
+    options?: DispatchOptions,
   ): AsyncGenerator<string> {
     let sawDelta = false;
-    for await (const event of this.dispatchStream(intent, args)) {
+    for await (const event of this.dispatchStream(intent, args, options)) {
       if (event.type === 'inference-delta') {
         sawDelta = true;
         yield event.delta.text;
@@ -464,7 +597,11 @@ export interface RuntimeOptions {
   modelVersion?: string;
   /** Selector namespace for core selector protection. A new empty one is created if not provided. */
   selectorNamespace?: SelectorNamespace;
-  /** Semantic rate limiter options — prevents vector flooding DoS */
+  /**
+   * Opt-in semantic rate limiting of novel intents (vector-flooding DoS
+   * protection), kept per principal (DispatchOptions.principal). Off when
+   * unset. A throttled intent resolves to outcome 'throttled'.
+   */
   rateLimiter?: import('../core/semantic-rate-limiter.js').SemanticRateLimiterOptions;
   /** 0.4.0: Pluggable LLM client for verification, decomposition, refinement */
   llmClient?: LLMClient;
@@ -472,24 +609,62 @@ export interface RuntimeOptions {
   strict?: boolean;
   /** 0.4.0: Custom confidence tier thresholds */
   thresholds?: TierThresholds;
-  /** 0.4.0: Observer options for dispatch learning */
+  /** Observer options (implicit correction detection is off by default) */
   observerOptions?: import('./observer.js').ObserverOptions;
   /** Pillar 4b: pre-built semantic map (e.g. restored from persistence via SemanticMap.fromJSON) */
   semanticMap?: SemanticMap;
   /** Pillar 4b: options for the semantic map, when one is not supplied */
   semanticMapOptions?: SemanticMapOptions;
+  /** LOW-tier decomposition depth bound (default 2). See DispatchConfig. */
+  maxDecompositionDepth?: number;
+  /** Cap on sub-intents dispatched for one top-level dispatch (default 16). */
+  maxSubDispatches?: number;
   /**
-   * Cap on how many runtime-resolved intent selectors the SelectorTable
-   * retains (LRU eviction). Distinct from compiled tool selectors, which
-   * are never evicted. Defaults to 500; raise it for long-lived processes
-   * that see high intent diversity, or lower it to bound memory more
-   * aggressively in memory-constrained deployments.
-   */
-  maxIntentEntries?: number;
-  /**
-   * When true, and no LLMClient is configured, MEDIUM/LOW confidence
-   * resolutions defer to the refinement protocol instead of auto-dispatching
-   * the best vector match. See DispatchConfig for details. Defaults to false.
+   * Below HIGH confidence, run a resolved tool only when an LLM verifier
+   * (llmClient.microCheck) approved it; otherwise the outcome is
+   * needs-disambiguation. Default true (0.x default was false).
    */
   requireLLMForSubHighDispatch?: boolean;
+  /**
+   * Intent pins guarding sensitive selectors: a registry, or pins to load
+   * into a new one. See core/intent-pin.ts.
+   */
+  intentPins?: IntentPinRegistry | IntentPin[];
+  /**
+   * Treat tools without any MCP annotations as destructive (they then run
+   * only by exact id, a pinned phrase, or EXACT similarity). Default false.
+   */
+  treatUnannotatedAsDestructive?: boolean;
+  /** Type coercion before argument validation: 'none' (default) or 'primitives'. */
+  argumentCoercion?: ArgumentCoercion;
+  /** contentHash of the artifact the tools came from (recorded in proofs) */
+  artifactHash?: string;
+  /**
+   * Durable decision log: a file path, options, or an open DecisionLog.
+   * Every resolve(), dispatch and dispatch by id appends one hash-chained
+   * JSONL line before anything executes (runtime/decision-log.ts). Off when
+   * unset.
+   */
+  decisionLog?: string | DecisionLogOptions | DecisionLog;
+}
+
+function openDecisionLog(option: RuntimeOptions['decisionLog']): DecisionLog | undefined {
+  if (option === undefined) return undefined;
+  if (option instanceof DecisionLog) return option;
+  return new DecisionLog(typeof option === 'string' ? { path: option } : option);
+}
+
+/**
+ * RuntimeOptions for a smallchat.json "policy" block. Unset fields are left
+ * out, so the runtime defaults apply to them.
+ */
+export function runtimeOptionsFromPolicy(policy: ManifestPolicyConfig): RuntimeOptions {
+  const options: RuntimeOptions = {};
+  if (policy.requireLLMForSubHighDispatch !== undefined) options.requireLLMForSubHighDispatch = policy.requireLLMForSubHighDispatch;
+  if (policy.strict !== undefined) options.strict = policy.strict;
+  if (policy.treatUnannotatedAsDestructive !== undefined) options.treatUnannotatedAsDestructive = policy.treatUnannotatedAsDestructive;
+  if (policy.argumentCoercion !== undefined) options.argumentCoercion = policy.argumentCoercion;
+  if (policy.thresholds) options.thresholds = { ...DEFAULT_THRESHOLDS, ...policy.thresholds };
+  if (policy.pins) options.intentPins = policy.pins;
+  return options;
 }

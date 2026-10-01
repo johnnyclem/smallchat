@@ -1,12 +1,11 @@
-import type { ToolSelector } from './types.js';
-import { canonicalize } from './selector-table.js';
-
 /**
  * IntentPinPolicy — how a pinned selector must be matched.
  *
- * - 'exact': Only an exact canonical string match dispatches to this tool.
- *   Cosine similarity is bypassed entirely. This is the strongest guard
- *   against semantic collision attacks.
+ * - 'exact': Only a pinned phrase dispatches to this tool: the pin's
+ *   canonical or one of its aliases, compared as whole phrases after
+ *   normalizePinPhrase (so "do not transfer funds" never matches the alias
+ *   "transfer funds"). Cosine similarity is never enough. This is the
+ *   strongest guard against semantic collision attacks.
  *
  * - 'elevated': Requires a significantly higher cosine similarity score
  *   (default 0.98) than the standard dispatch threshold (0.75).
@@ -24,8 +23,18 @@ export interface IntentPin {
   policy: IntentPinPolicy;
   /** Custom threshold override for 'elevated' policy (default 0.98) */
   threshold?: number;
-  /** Optional list of exact alias strings that also resolve to this selector */
+  /** Optional list of exact phrases that also resolve to this selector */
   aliases?: string[];
+}
+
+/**
+ * The form pinned phrases are compared in: Unicode NFKC, lower case,
+ * trimmed, internal whitespace collapsed to one space. Nothing else is
+ * removed — no stopwords, no punctuation — so negations and qualifiers
+ * keep two phrases apart.
+ */
+export function normalizePinPhrase(text: string): string {
+  return text.normalize('NFKC').toLowerCase().trim().replace(/\s+/gu, ' ');
 }
 
 /**
@@ -61,31 +70,29 @@ const DEFAULT_ELEVATED_THRESHOLD = 0.98;
 export class IntentPinRegistry {
   /** Pinned selectors keyed by canonical name */
   private pins: Map<string, IntentPin> = new Map();
-  /** Reverse map: alias canonical → pin canonical */
-  private aliasIndex: Map<string, string> = new Map();
+  /** Normalized pinned phrase (canonical or alias) → pin canonical */
+  private phraseIndex: Map<string, string> = new Map();
 
   /** Pin a selector with a given policy */
   pin(entry: IntentPin): void {
+    if (this.pins.has(entry.canonical)) this.unpin(entry.canonical);
     this.pins.set(entry.canonical, entry);
-
-    // Index aliases
-    if (entry.aliases) {
-      for (const alias of entry.aliases) {
-        const aliasCanonical = canonicalize(alias);
-        this.aliasIndex.set(aliasCanonical, entry.canonical);
-      }
+    for (const phrase of [entry.canonical, ...(entry.aliases ?? [])]) {
+      this.phraseIndex.set(normalizePinPhrase(phrase), entry.canonical);
     }
   }
 
   /** Remove a pin */
   unpin(canonical: string): void {
-    const existing = this.pins.get(canonical);
-    if (existing?.aliases) {
-      for (const alias of existing.aliases) {
-        this.aliasIndex.delete(canonicalize(alias));
-      }
+    for (const [phrase, target] of this.phraseIndex) {
+      if (target === canonical) this.phraseIndex.delete(phrase);
     }
     this.pins.delete(canonical);
+  }
+
+  /** Whether `intent` is one of the pinned phrases of the pin on `canonical`. */
+  matchesPinnedPhrase(canonical: string, intent: string): boolean {
+    return this.phraseIndex.get(normalizePinPhrase(intent)) === canonical;
   }
 
   /** Check if a selector canonical name is pinned */
@@ -109,48 +116,19 @@ export class IntentPinRegistry {
   }
 
   /**
-   * Check an intent against all pinned selectors.
+   * Is the intent, as a whole phrase, one of the pinned phrases (a pin's
+   * canonical or alias, compared with normalizePinPhrase)? Returns the
+   * accepted pin, or null when the intent is not a pinned phrase.
    *
-   * For 'exact' policy: the intent's canonical form must exactly match
-   * the pinned canonical (or one of its aliases).
-   *
-   * For 'elevated' policy: the cosine similarity between the intent
-   * embedding and the pinned selector's embedding must exceed the
-   * elevated threshold.
-   *
-   * Returns null if the intent doesn't interact with any pinned selector
-   * (i.e., it's free to proceed through normal dispatch).
-   *
-   * Returns an IntentPinMatch if the intent matched (or was blocked by)
-   * a pinned selector.
+   * Pass the raw intent text. The 0.x behaviour of comparing
+   * canonicalize()d forms is gone: canonicalize drops words such as "not",
+   * which let "do not transfer funds" match the alias "transfer funds".
    */
-  checkExact(
-    intentCanonical: string,
-  ): IntentPinMatch | null {
-    // Direct canonical match against a pinned selector
-    const directPin = this.pins.get(intentCanonical);
-    if (directPin) {
-      return {
-        canonical: directPin.canonical,
-        verdict: 'accept',
-        policy: directPin.policy,
-      };
-    }
-
-    // Check alias index
-    const aliasTarget = this.aliasIndex.get(intentCanonical);
-    if (aliasTarget) {
-      const pin = this.pins.get(aliasTarget);
-      if (pin) {
-        return {
-          canonical: pin.canonical,
-          verdict: 'accept',
-          policy: pin.policy,
-        };
-      }
-    }
-
-    return null;
+  checkExact(intent: string): IntentPinMatch | null {
+    const target = this.phraseIndex.get(normalizePinPhrase(intent));
+    const pin = target === undefined ? undefined : this.pins.get(target);
+    if (!pin) return null;
+    return { canonical: pin.canonical, verdict: 'accept', policy: pin.policy };
   }
 
   /**
@@ -162,24 +140,22 @@ export class IntentPinRegistry {
    * pin's policy.
    *
    * @param candidateCanonical - The canonical name of the matched candidate
-   * @param similarity - The cosine similarity score (1 - distance)
-   * @param intentCanonical - The canonical form of the incoming intent
+   * @param similarity - The cosine similarity score (1 - distance), from
+   *   the intent's own embedding
+   * @param intent - The incoming intent text (raw; normalized here)
    * @returns IntentPinMatch if the candidate is pinned, null otherwise
    */
   checkSimilarity(
     candidateCanonical: string,
     similarity: number,
-    intentCanonical: string,
+    intent: string,
   ): IntentPinMatch | null {
     const pin = this.pins.get(candidateCanonical);
     if (!pin) return null;
 
     if (pin.policy === 'exact') {
-      // Exact policy: only accept if canonical strings match exactly
-      // (or via alias)
-      const isExactMatch =
-        intentCanonical === candidateCanonical ||
-        this.aliasIndex.get(intentCanonical) === candidateCanonical;
+      // Exact policy: only a pinned phrase is accepted, whatever the score.
+      const isExactMatch = this.matchesPinnedPhrase(candidateCanonical, intent);
 
       return {
         canonical: pin.canonical,

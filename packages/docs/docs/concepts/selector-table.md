@@ -3,178 +3,77 @@ title: Selector Table
 sidebar_label: Selector Table
 ---
 
-import Tabs from '@theme/Tabs';
-import TabItem from '@theme/TabItem';
-
 # Selector Table
 
-The `SelectorTable` is the semantic interning layer — analogous to `sel_registerName` in the Objective-C runtime. It ensures that semantically equivalent intent strings resolve to the same canonical `ToolSelector`, deduplicated by vector similarity.
+The `SelectorTable` holds the compiled **tool selectors** — the dispatch keys
+of every tool — and their vectors. It is the analogue of the table behind
+`sel_registerName` in the Objective-C runtime, with one difference: a
+selector is a semantic fingerprint (an embedding), and intents are matched
+against selectors by cosine similarity.
 
-## How semantic interning works
+This page describes `@smallchat/core` 1.0 (TypeScript).
 
-When the compiler processes a tool description like `"Search for code across GitHub repositories"`, it:
+## Tool selectors only
 
-1. Embeds the string into a vector using the configured `Embedder`
-2. Checks whether any existing selector has cosine similarity ≥ `selectorThreshold` (default 0.95)
-3. If yes, returns the existing selector (deduplication)
-4. If no, registers a new `ToolSelector` and stores its embedding
+- The compiler registers one selector per tool, under its exact canonical
+  name (`<providerId>.<toolName>`, or a `pinSelector`), plus one per alias
+  (`<canonical>~alias~<phrase>`). Two distinct tools never share a selector:
+  tools whose embeddings are ≥ 0.95 cosine-similar are a compile error
+  (`DuplicateToolError`) unless compiled with `--allow-duplicates`, and an
+  alias phrase can belong to only one tool.
+- A runtime intent is **never interned**. `resolve()` / `dispatch()` embed
+  the intent on its own (`intentSelector()`, keyed by `intentKey()`: the full
+  text, NFC-normalized, trimmed, whitespace-collapsed, lower-cased) and search
+  the tool selectors. Intents therefore never appear in `all()`, never shadow
+  a tool in "did you mean?" suggestions, and never change how a later intent
+  ranks.
 
-At runtime, when an intent arrives (`"search for code"`), `SelectorTable.resolve()` embeds the intent and performs a nearest-neighbor search over registered selectors. The top match above `minConfidence` wins.
+## Matching
 
-## The `sel_registerName` analogy
+`searchTools(vector, topK, threshold)` returns the nearest tool selectors.
+Similarities are quantized to 4 decimal places and equal scores are ordered
+by canonical tool id (`spec/ranking/`), so the same intent against the same
+artifact always produces the same candidate order. Resolution then turns
+candidates into an outcome with tiers and the dispatch policy (see
+[Dispatch](./dispatch)).
 
-In Objective-C, `sel_registerName("methodName:")` returns a global `SEL` token. Two strings that are byte-identical always yield the same `SEL`. smallchat generalises this: two strings that are **semantically** equivalent (cosine similarity ≥ threshold) yield the same `ToolSelector`.
+## Collision zones
 
-This means:
+Distinct tools that embed close together (≥ 0.89 by default, below the
+duplicate threshold) are reported in `CompilationResult.collisions` and in
+the artifact: an intent near both may resolve to `needs-disambiguation`.
+Give them more specific descriptions, a `selectorHint`, or call them by tool
+id.
 
-- `"search for code"` and `"find code"` → same selector → same tool
-- `"create an issue"` and `"open a bug report"` → same selector → `github.create_issue`
-- `"delete a file"` and `"remove a file"` → same selector → `filesystem.delete_file`
-
-Deduplication happens at compile time. The runtime only performs lookup.
-
-## Deduplication threshold
-
-The `selectorThreshold` controls how aggressively selectors are deduplicated:
-
-| Value | Behaviour |
-|---|---|
-| 0.99 | Only near-identical strings merge. `"search code"` and `"search for code"` stay separate. |
-| 0.95 (default) | Close paraphrases merge. Most production deployments use this. |
-| 0.85 | Aggressive merging. Different-domain intents may incorrectly collapse. |
-
-Set it in `RuntimeOptions`:
-
-<Tabs groupId="language">
-<TabItem value="typescript" label="TypeScript">
-
-```typescript
-const runtime = new ToolRuntime({
-  selectorThreshold: 0.95,
-  embedder,
-  vectorIndex,
-});
-```
-
-</TabItem>
-<TabItem value="swift" label="Swift">
-
-```swift
-let runtime = ToolRuntime(
-    selectorThreshold: 0.95,
-    embedder: embedder,
-    vectorIndex: vectorIndex
-)
-```
-
-</TabItem>
-</Tabs>
-
-## Collision detection
-
-When two tools from different providers produce the same canonical selector, the compiler emits a `SelectorCollision` warning:
-
-<Tabs groupId="language">
-<TabItem value="typescript" label="TypeScript">
-
-```typescript
-export interface SelectorCollision {
-  selector: string;
-  tools: string[];  // e.g. ['github.search_code', 'gitlab.search_code']
-}
-```
-
-</TabItem>
-<TabItem value="swift" label="Swift">
-
-```swift
-struct SelectorCollision {
-    var selector: String
-    var tools: [String]  // e.g. ["github.search_code", "gitlab.search_code"]
-}
-```
-
-</TabItem>
-</Tabs>
-
-Collisions are reported in `CompilationResult.collisions` and can be resolved by:
-
-1. Adjusting `selectorThreshold` upward
-2. Adding a more specific description to differentiate tools
-3. Using `OverloadTable` to handle both under one selector
-
-## API: `SelectorTable.intern()`
-
-<Tabs groupId="language">
-<TabItem value="typescript" label="TypeScript">
+## API
 
 ```typescript
 class SelectorTable {
-  // Register an intent string and return its canonical selector.
-  // If a similar selector already exists (cosine >= threshold), returns that.
-  intern(intent: string, embedding: number[]): ToolSelector;
-
-  // Look up the best-matching selector for an intent.
-  // Returns null if no match exceeds minConfidence.
-  resolve(intent: string, embedding: number[]): ToolSelector | null;
-
-  // Get all registered selectors.
+  /** Register a tool or alias selector under its exact canonical name. */
+  register(embedding: Float32Array, canonical: string): ToolSelector;
+  /** The selector with this canonical name. */
+  get(canonical: string): ToolSelector | undefined;
+  /** Nearest tool selectors at or above `threshold` (quantized). */
+  searchTools(vector: Float32Array, topK: number, threshold: number): Promise<SelectorMatch[]>;
+  /** Every tool selector. */
   all(): ToolSelector[];
-
-  // Check if a selector string is registered.
-  has(selector: string): boolean;
+  readonly size: number;
 }
 ```
 
-</TabItem>
-<TabItem value="swift" label="Swift">
+`intern(embedding, canonical)` (fold into an existing selector at ≥ the
+table threshold) remains for building tables by hand; the compiler and
+`loadRuntime` use `register()`.
 
-```swift
-class SelectorTable {
-    // Register an intent string and return its canonical selector.
-    // If a similar selector already exists (cosine >= threshold), returns that.
-    func intern(intent: String, embedding: [Double]) -> ToolSelector
-
-    // Look up the best-matching selector for an intent.
-    // Returns nil if no match exceeds minConfidence.
-    func resolve(intent: String, embedding: [Double]) -> ToolSelector?
-
-    // Get all registered selectors.
-    func all() -> [ToolSelector]
-
-    // Check if a selector string is registered.
-    func has(_ selector: String) -> Bool
-}
-```
-
-</TabItem>
-</Tabs>
-
-## `canonicalize()`
-
-The top-level `canonicalize()` helper normalises an intent string before embedding — lowercasing, stripping punctuation, collapsing whitespace:
-
-<Tabs groupId="language">
-<TabItem value="typescript" label="TypeScript">
+## `intentKey()` and `canonicalize()`
 
 ```typescript
-import { canonicalize } from '@smallchat/core';
+import { intentKey, canonicalize } from '@smallchat/core';
 
-canonicalize('Search for Code!') // → 'search for code'
-canonicalize('  find   code  ')  // → 'find code'
+intentKey('  Do NOT delete   the logs ') // → 'do not delete the logs' (identity)
+canonicalize('Do not delete the logs')    // → 'delete:logs' (display only)
 ```
 
-</TabItem>
-<TabItem value="swift" label="Swift">
-
-```swift
-import SmallChat
-
-canonicalize("Search for Code!") // → "search for code"
-canonicalize("  find   code  ")  // → "find code"
-```
-
-</TabItem>
-</Tabs>
-
-This improves deduplication quality when intent strings vary in casing or punctuation.
+`intentKey()` is the identity of an intent (the resolution cache, the
+semantic map's exact lookups and feedback use it). `canonicalize()` drops
+stopwords — "not" included — and is for display only.

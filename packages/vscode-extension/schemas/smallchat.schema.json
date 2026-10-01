@@ -38,12 +38,22 @@
       "properties": {
         "embedder": {
           "type": "string",
-          "enum": ["onnx", "local"],
-          "description": "Embedder type"
+          "enum": ["onnx", "hash", "local"],
+          "description": "Embedder: onnx (default) or hash (dev/test placeholder; \"local\" is the 0.x name of hash)"
+        },
+        "duplicateThreshold": {
+          "type": "number",
+          "description": "Cosine similarity at or above which two distinct tools are a compile error (0–1, default 0.95)",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "allowDuplicates": {
+          "type": "boolean",
+          "description": "Keep near-duplicate tools as a warning instead of a compile error"
         },
         "deduplicationThreshold": {
           "type": "number",
-          "description": "Deduplication threshold (0–1, default 0.95)",
+          "description": "Deprecated: renamed to duplicateThreshold",
           "minimum": 0,
           "maximum": 1
         },
@@ -97,6 +107,99 @@
       "additionalProperties": {
         "$ref": "manifest.schema.json#/definitions/compilerHint"
       }
+    },
+    "policy": {
+      "type": "object",
+      "description": "Dispatch policy for runtimes loaded by `smallchat serve` and `smallchat resolve`. Intent resolution (smallchat_resolve, runtime.dispatch) applies all of it; MCP tools/call names a tool exactly, so only argumentCoercion affects it.",
+      "properties": {
+        "requireLLMForSubHighDispatch": {
+          "type": "boolean",
+          "default": true,
+          "description": "Below HIGH confidence, run a resolved tool only when an LLM verifier approved it"
+        },
+        "strict": {
+          "type": "boolean",
+          "default": false,
+          "description": "Verify every dispatch below EXACT and raise the search floor to MEDIUM"
+        },
+        "treatUnannotatedAsDestructive": {
+          "type": "boolean",
+          "default": false,
+          "description": "Treat tools without MCP annotations as destructive (exact id, pinned phrase or EXACT similarity only)"
+        },
+        "thresholds": {
+          "type": "object",
+          "description": "Confidence tier thresholds",
+          "properties": {
+            "exact": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "high": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "medium": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "low": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        "pins": {
+          "type": "array",
+          "description": "Intent pins guarding sensitive selectors",
+          "items": {
+            "type": "object",
+            "required": [
+              "canonical",
+              "policy"
+            ],
+            "properties": {
+              "canonical": {
+                "type": "string"
+              },
+              "policy": {
+                "type": "string",
+                "enum": [
+                  "exact",
+                  "elevated"
+                ]
+              },
+              "threshold": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "aliases": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "argumentCoercion": {
+          "type": "string",
+          "enum": [
+            "none",
+            "primitives"
+          ],
+          "default": "none",
+          "description": "Coerce scalar argument types to the input schema before validation"
+        }
+      },
+      "additionalProperties": false
     }
   }
 }

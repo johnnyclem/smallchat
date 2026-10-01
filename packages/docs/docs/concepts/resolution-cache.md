@@ -12,7 +12,7 @@ The `ResolutionCache` is an LRU cache that stores resolved dispatches — analog
 
 ## LRU cache mechanics
 
-The cache maps a **cache key** (intent string + version context) to a `ResolvedTool`:
+The cache maps an intent's `intentKey` (its full text, normalized) to a `ResolvedTool`, tagged with the version context it was resolved under:
 
 <Tabs groupId="language">
 <TabItem value="typescript" label="TypeScript">
@@ -20,10 +20,13 @@ The cache maps a **cache key** (intent string + version context) to a `ResolvedT
 ```typescript
 interface ResolvedTool {
   selector: ToolSelector;
-  toolClass: string;
-  implementation: ToolIMP;
+  imp: ToolIMP;
   confidence: number;
-  resolvedAt: number;  // timestamp
+  resolvedAt: number;          // timestamp
+  hitCount: number;
+  providerVersion?: string;    // tags checked on every lookup
+  modelVersion?: string;
+  schemaFingerprint?: string;
 }
 ```
 
@@ -49,11 +52,9 @@ The default cache size is 1024 entries. When the cache is full, the least-recent
 <TabItem value="typescript" label="TypeScript">
 
 ```typescript
-const runtime = new ToolRuntime({
-  cacheSize: 2048,  // larger cache for high-traffic deployments
-  embedder,
-  vectorIndex,
-});
+// larger cache for high-traffic deployments
+const { runtime } = await loadRuntime('./tools.toolkit.json', { runtimeOptions: { cacheSize: 2048 } });
+// or: new ToolRuntime(vectorIndex, embedder, { cacheSize: 2048 })
 ```
 
 </TabItem>
@@ -79,9 +80,9 @@ Cache entries are tagged with a `CacheVersionContext` to prevent stale hits afte
 
 ```typescript
 interface CacheVersionContext {
-  providerVersion?: string;    // e.g. "1.2.0"
-  modelVersion?: string;       // e.g. "gpt-4o"
-  schemaFingerprint?: string;  // hash of the compiled artifact
+  providerVersions: Map<string, string>;    // provider id → version, e.g. "1.2.0"
+  modelVersion: string;                     // embedder, e.g. "onnx:all-MiniLM-L6-v2"
+  schemaFingerprints: Map<string, string>;  // provider id → hash of its tool schemas
 }
 ```
 
@@ -106,9 +107,9 @@ A cache entry is only valid if its version context matches the current runtime c
 
 ```typescript
 // Update version context — future dispatches will bypass stale entries
-runtime.setProviderVersion('1.2.0');
-runtime.setModelVersion('gpt-4o');
-runtime.updateSchemaFingerprint(newArtifact);
+runtime.setProviderVersion('github', '1.2.0');
+runtime.setModelVersion('onnx:all-MiniLM-L6-v2');
+runtime.updateSchemaFingerprint(githubClass); // recomputed from the class's loaded schemas
 ```
 
 </TabItem>
@@ -127,18 +128,20 @@ runtime.updateSchemaFingerprint(fingerprint)
 
 ## Schema fingerprint
 
-The `computeSchemaFingerprint()` helper generates a hash of a compiled artifact, suitable for use as the `schemaFingerprint` in `CacheVersionContext`:
+`computeSchemaFingerprint(schemas)` hashes a list of `{ name, inputSchema }` (sorted by name). `runtime.updateSchemaFingerprint(toolClass)` computes it from a class's loaded schemas; to record one yourself, set it on the cache:
 
 <Tabs groupId="language">
 <TabItem value="typescript" label="TypeScript">
 
 ```typescript
-import { computeSchemaFingerprint } from '@smallchat/core';
+import { computeSchemaFingerprint, readArtifact } from '@smallchat/core';
 
-const artifact = JSON.parse(fs.readFileSync('./tools.json', 'utf8'));
-const fingerprint = computeSchemaFingerprint(artifact);
+const artifact = await readArtifact('./tools.toolkit.json');
+const githubSchemas = Object.values(artifact.tools)
+  .filter((tool) => tool.providerId === 'github')
+  .map((tool) => ({ name: tool.name, inputSchema: tool.inputSchema }));
 
-runtime.updateSchemaFingerprint(fingerprint);
+runtime.cache.setSchemaFingerprint('github', computeSchemaFingerprint(githubSchemas));
 ```
 
 </TabItem>
@@ -161,23 +164,22 @@ Recompiling your tool manifests produces a new fingerprint and automatically inv
 
 ## Cache invalidation hooks
 
-Register invalidation hooks to flush specific cache entries when external state changes:
+Register a hook to hear about every invalidation (for example to refresh a UI or an LLM's context); `invalidateOn` returns a function that removes it:
 
 <Tabs groupId="language">
 <TabItem value="typescript" label="TypeScript">
 
 ```typescript
-import type { InvalidationHook, InvalidationEvent } from '@smallchat/core';
+import type { InvalidationHook } from '@smallchat/core';
 
-const hook: InvalidationHook = {
-  on: 'provider-update',
-  flush: (event: InvalidationEvent) => {
-    // return the cache keys to invalidate
-    return event.affectedProviders.map(p => `github.*`);
-  },
+// event: { type: 'flush' } | { type: 'provider', providerId } | { type: 'selector', selector }
+//      | { type: 'stale', reason, key } | { type: 'ui-resource', uri }
+const hook: InvalidationHook = (event) => {
+  if (event.type === 'provider') console.log(`cache entries for ${event.providerId} dropped`);
 };
 
-runtime.invalidateOn(hook);
+const stop = runtime.invalidateOn(hook);
+// later: stop();
 ```
 
 </TabItem>
@@ -202,10 +204,10 @@ Trigger invalidation explicitly:
 
 ```typescript
 // Flush all entries for the 'github' provider
-runtime.getCache().invalidateByProvider('github');
+runtime.cache.flushProvider('github');
 
 // Flush everything
-runtime.getCache().flush();
+runtime.cache.flush();
 ```
 
 </TabItem>
@@ -227,19 +229,26 @@ runtime.getCache().flush()
 The cache makes hot-reload safe. When you recompile your tool definitions:
 
 1. Write the new artifact to disk
-2. Call `runtime.reload('./tools.json')` — reloads and computes a new fingerprint
-3. The cache detects the changed fingerprint and invalidates stale entries
-4. Subsequent dispatches rebuild the cache from the new artifact
+2. Load it again with `loadRuntime()` and swap the runtime in, or replace
+   individual providers with `runtime.registerClass(cls)` (same name: the
+   old class is replaced and every cached resolution is flushed)
+3. After changing a provider's tool schemas in place, call
+   `runtime.updateSchemaFingerprint(cls)`; entries cached against the old
+   fingerprint expire on their next lookup
 
 <Tabs groupId="language">
 <TabItem value="typescript" label="TypeScript">
 
 ```typescript
-// In development — watch for changes and hot-reload
-import { watch } from 'fs';
+// In development — watch for changes and load the new artifact
+import { watch } from 'node:fs';
+import { loadRuntime } from '@smallchat/core';
 
+let { runtime, upstreams } = await loadRuntime('./tools.json');
 watch('./tools.json', async () => {
-  await runtime.reload('./tools.json');
+  const next = await loadRuntime('./tools.json');
+  await upstreams.close();
+  ({ runtime, upstreams } = next);
   console.log('Runtime reloaded.');
 });
 ```

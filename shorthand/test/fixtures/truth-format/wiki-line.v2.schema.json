@@ -1,0 +1,539 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/johnnyclem/stenographer/blob/master/spec/truth-format/wiki-line.v2.schema.json",
+  "title": "Stenographer truth format v2: one JSONL line",
+  "description": "One line of a truth stream: a TB, UV, ADDENDUM, RULING, PROPOSAL or TRANSITION line. The schema checks structure and is open where readers must be: unknown fields are allowed (and preserved), and status, kind and source values are open strings. The codec also checks what JSON Schema cannot: the hash, the chain across lines, identity rules (anonymous, generic and reserved identities compare case- and width-insensitively) and the link rules in README.md. A line that passes this schema can still be refused.",
+  "type": "object",
+  "properties": {
+    "schemaVersion": {
+      "const": 2
+    },
+    "seq": {
+      "$ref": "#/$defs/seq"
+    },
+    "id": {
+      "$ref": "#/$defs/id"
+    },
+    "type": {
+      "enum": [
+        "TB",
+        "UV",
+        "ADDENDUM",
+        "RULING",
+        "PROPOSAL",
+        "TRANSITION"
+      ]
+    },
+    "ts": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "author": {
+      "$ref": "#/$defs/identity"
+    },
+    "prevHash": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/hash"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "hash": {
+      "$ref": "#/$defs/hash"
+    },
+    "x-steno": {
+      "$ref": "#/$defs/xSteno"
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "seq",
+    "id",
+    "type",
+    "ts",
+    "author",
+    "prevHash",
+    "hash"
+  ],
+  "if": {
+    "type": "object",
+    "properties": {
+      "seq": {
+        "const": 1
+      }
+    },
+    "required": [
+      "seq"
+    ]
+  },
+  "then": {
+    "type": "object",
+    "properties": {
+      "prevHash": {
+        "type": "null"
+      }
+    }
+  },
+  "else": {
+    "type": "object",
+    "properties": {
+      "prevHash": {
+        "$ref": "#/$defs/hash"
+      }
+    }
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/tb"
+    },
+    {
+      "$ref": "#/$defs/uv"
+    },
+    {
+      "$ref": "#/$defs/addendum"
+    },
+    {
+      "$ref": "#/$defs/ruling"
+    },
+    {
+      "$ref": "#/$defs/proposal"
+    },
+    {
+      "$ref": "#/$defs/transition"
+    }
+  ],
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$"
+    },
+    "seq": {
+      "description": "Position in the writer's stream: 1, 2, 3, … with no gaps.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "timestamp": {
+      "description": "RFC 3339 date-time.",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$"
+    },
+    "hash": {
+      "description": "Lowercase hex SHA-256.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "identity": {
+      "description": "A person's handle or an agent identity, with no control characters. The codec also refuses anonymous and generic identities (system, assistant, agent, …) and the reserved 'migration' and 'detector:*' where they don't belong.",
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$"
+    },
+    "text": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "description": "An open string. Known: TB active, contested, overridden, struck; UV open, verified, refuted, struck. A reader treats a missing or unknown status as not current (fail closed) and preserves it.",
+      "type": "string",
+      "minLength": 1
+    },
+    "evidence": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "description": "An open string. Known: commit, file, test, claimed-command, wiki, message, and command (only on entries recorded before 1.0).",
+          "type": "string",
+          "minLength": 1
+        },
+        "ref": {
+          "$ref": "#/$defs/text"
+        },
+        "detail": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "ref"
+      ]
+    },
+    "evidenceList": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/evidence"
+      },
+      "minItems": 1
+    },
+    "literalValue": {
+      "description": "Non-empty, no surrounding whitespace.",
+      "type": "string",
+      "pattern": "^\\S([\\s\\S]*\\S)?$"
+    },
+    "literal": {
+      "description": "A dead literal an objection can cite. Without a subject, 'dead' must be a distinctive identifier: at least 4 characters, at least one ASCII letter.",
+      "type": "object",
+      "properties": {
+        "dead": {
+          "$ref": "#/$defs/literalValue"
+        },
+        "subject": {
+          "$ref": "#/$defs/literalValue"
+        },
+        "current": {
+          "$ref": "#/$defs/literalValue"
+        }
+      },
+      "required": [
+        "dead"
+      ],
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "subject": {
+              "$ref": "#/$defs/literalValue"
+            }
+          },
+          "required": [
+            "subject"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "dead": {
+              "type": "string",
+              "minLength": 4,
+              "pattern": "[A-Za-z]"
+            }
+          }
+        }
+      ]
+    },
+    "verifyBy": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "description": "An open string. Known: command, inspect, ask, observe.",
+          "type": "string",
+          "minLength": 1
+        },
+        "value": {
+          "$ref": "#/$defs/text"
+        },
+        "detail": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "value"
+      ]
+    },
+    "provenance": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "description": "An open string. Known: sourceMessageId, commitSha, filePath, manual, wiki, migration.",
+          "type": "string",
+          "minLength": 1
+        },
+        "ref": {
+          "type": "string"
+        },
+        "line": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind"
+      ]
+    },
+    "link": {
+      "type": "object",
+      "properties": {
+        "fromId": {
+          "$ref": "#/$defs/id"
+        },
+        "toId": {
+          "$ref": "#/$defs/id"
+        },
+        "type": {
+          "description": "An open string. Known: supersedes, contests, verifies, refutes, signs, overrides, strikes, dismisses.",
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "fromId",
+        "toId",
+        "type"
+      ]
+    },
+    "xSteno": {
+      "description": "Stenographer's namespace. Readers that only fold statuses can ignore it.",
+      "type": "object",
+      "properties": {
+        "origin": {
+          "$ref": "#/$defs/text"
+        },
+        "provenance": {
+          "$ref": "#/$defs/provenance"
+        },
+        "agentSessionId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "targetRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "links": {
+          "description": "The links the entry's own write created.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/link"
+          },
+          "uniqueItems": true
+        },
+        "ledgerHash": {
+          "description": "The entry's hash in its writer's ledger chain (stenographer verify).",
+          "$ref": "#/$defs/hash"
+        }
+      }
+    },
+    "tb": {
+      "title": "TB: an asserted tombstone",
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "TB"
+        },
+        "claim": {
+          "$ref": "#/$defs/text"
+        },
+        "evidence": {
+          "$ref": "#/$defs/evidenceList"
+        },
+        "signedBy": {
+          "description": "Null only on a backfilled TB (author 'migration'), which is never truth on its own.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/identity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "literals": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/literal"
+          },
+          "minItems": 1
+        },
+        "status": {
+          "$ref": "#/$defs/status"
+        }
+      },
+      "required": [
+        "type",
+        "claim",
+        "evidence",
+        "signedBy"
+      ]
+    },
+    "uv": {
+      "title": "UV: an unverified assertion",
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "UV"
+        },
+        "assertion": {
+          "$ref": "#/$defs/text"
+        },
+        "basis": {
+          "$ref": "#/$defs/text"
+        },
+        "verifyBy": {
+          "$ref": "#/$defs/verifyBy"
+        },
+        "contests": {
+          "description": "The TB this UV disputes. The contest is this line; no separate line carries it.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/status"
+        }
+      },
+      "required": [
+        "type",
+        "assertion",
+        "basis",
+        "verifyBy",
+        "contests"
+      ]
+    },
+    "addendum": {
+      "title": "ADDENDUM: evidence that verifies or refutes a UV, or overrides a TB",
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "ADDENDUM"
+        },
+        "evidence": {
+          "$ref": "#/$defs/evidenceList"
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "evidence",
+        "note"
+      ]
+    },
+    "ruling": {
+      "title": "RULING: a judgment with a written opinion (in a wiki stream, a strike)",
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "RULING"
+        },
+        "kind": {
+          "description": "An open string. Known: strike, promotion, contempt, objection, dismissal.",
+          "type": "string",
+          "minLength": 1
+        },
+        "opinion": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "target": {
+          "$ref": "#/$defs/id"
+        }
+      },
+      "required": [
+        "type",
+        "kind",
+        "opinion",
+        "target"
+      ]
+    },
+    "proposal": {
+      "title": "PROPOSAL: a drafted candidate, never truth until a person signs it",
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "PROPOSAL"
+        },
+        "kind": {
+          "description": "tb or uv.",
+          "type": "string",
+          "minLength": 1
+        },
+        "draft": {
+          "type": "object"
+        },
+        "targetRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "signal": {
+          "type": "object",
+          "properties": {
+            "source": {
+              "description": "compaction-candidate, agent, or detector:<name>.",
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "source"
+          ]
+        },
+        "agentSessionId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "kind",
+        "draft",
+        "targetRef",
+        "signal"
+      ]
+    },
+    "transition": {
+      "title": "TRANSITION: an entry's status changed",
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "TRANSITION"
+        },
+        "target": {
+          "$ref": "#/$defs/id"
+        },
+        "status": {
+          "$ref": "#/$defs/status"
+        },
+        "cause": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "description": "An open string. Known: contest, override, strike, verify, refute, dismiss, promote.",
+              "type": "string",
+              "minLength": 1
+            },
+            "ref": {
+              "description": "The entry that caused the change.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/id"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "ref"
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "target",
+        "status",
+        "cause"
+      ]
+    }
+  }
+}

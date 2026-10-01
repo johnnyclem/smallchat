@@ -5,16 +5,35 @@
  * message sequences into a coherent interleaved order is the same problem
  * as collaborative text editing. RGA handles this at message granularity.
  *
- * Each element is identified by a unique (agentId, counter) pair.
- * Insertions reference the element they follow (causal predecessor).
- * Concurrent insertions at the same position are ordered by timestamp
- * (higher timestamp = later in sequence), with agentId as tiebreaker.
+ * Each element is identified by a unique (agentId, counter) pair, which is
+ * also its Lamport timestamp. Insertions reference the element they follow
+ * (causal predecessor; null = the head of the sequence, a virtual root).
+ * A new element goes right after its predecessor, skipping every element
+ * with a greater timestamp: concurrent inserts at the same position —
+ * including the head — are ordered newest first, with agentId breaking
+ * equal counters, and each skipped element's successors (which all carry
+ * greater timestamps) stay attached to it. The sequence is therefore a
+ * function of the set of elements alone, not of the order they arrived in.
+ *
+ * The sequence is a linked list indexed by id, so integrating an element
+ * costs O(1) plus the elements it skips, and rehydrating a log is linear.
  *
  * Reference: Roh et al., "Replicated abstract data types" (2011)
  */
 
 import type { AgentId, LamportTimestamp, CRDT } from './types.js';
 import { LamportClock, compareLamport } from './clock.js';
+import {
+  CRDT_SCHEMA_VERSION,
+  canonicalJson,
+  checkClockField,
+  checkCounter,
+  checkLamport,
+  checkState,
+  checkString,
+  fail,
+  isRecord,
+} from './wire.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -30,6 +49,7 @@ export interface RGANodeId {
 export interface RGANode<V> {
   id: RGANodeId;
   value: V;
+  /** Lamport timestamp of the insert; always equal to `id`. */
   timestamp: LamportTimestamp;
   /** The node this was inserted after. null = head of sequence. */
   parent: RGANodeId | null;
@@ -39,21 +59,42 @@ export interface RGANode<V> {
 
 /** Serialized RGA state. */
 export interface RGAState<V> {
+  /** Wire-format version (absent on pre-1.0 states). */
+  schemaVersion?: typeof CRDT_SCHEMA_VERSION;
+  /** Lamport counter of the serializing replica, restored by `from`. */
+  clock?: number;
+  /** Every node, tombstones included, in sequence order. */
   nodes: RGANode<V>[];
 }
+
+const KIND = 'RGA';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function nodeIdEq(a: RGANodeId | null, b: RGANodeId | null): boolean {
-  if (a === null && b === null) return true;
-  if (a === null || b === null) return false;
-  return a.agentId === b.agentId && a.counter === b.counter;
-}
-
 function nodeIdKey(id: RGANodeId): string {
   return `${id.agentId}:${id.counter}`;
+}
+
+function copyNode<V>(node: RGANode<V>): RGANode<V> {
+  return {
+    id: { agentId: node.id.agentId, counter: node.id.counter },
+    value: node.value,
+    timestamp: { counter: node.timestamp.counter, agentId: node.timestamp.agentId },
+    parent: node.parent ? { agentId: node.parent.agentId, counter: node.parent.counter } : null,
+    deleted: node.deleted,
+  };
+}
+
+/** A position in the linked list: the head sentinel or a node's slot. */
+interface Link<V> {
+  next: Slot<V> | null;
+}
+
+interface Slot<V> extends Link<V> {
+  node: RGANode<V>;
+  prev: Link<V>;
 }
 
 // ---------------------------------------------------------------------------
@@ -61,9 +102,12 @@ function nodeIdKey(id: RGANodeId): string {
 // ---------------------------------------------------------------------------
 
 export class RGA<V> implements CRDT<V[], RGAState<V>> {
-  private nodes: Map<string, RGANode<V>> = new Map();
-  /** Ordered list of node keys representing the current sequence. */
-  private sequence: string[] = [];
+  /** Head sentinel: the virtual root every head insert follows. */
+  private readonly head: Link<V> = { next: null };
+  /** Last link in the list (the head when empty). */
+  private tail: Link<V> = this.head;
+  private slots: Map<string, Slot<V>> = new Map();
+  private visible = 0;
   private clock: LamportClock;
 
   constructor(agentId: AgentId) {
@@ -72,94 +116,117 @@ export class RGA<V> implements CRDT<V[], RGAState<V>> {
 
   /**
    * Insert a value after the given reference node (or at head if null).
+   * The reference node must be known to this replica (tombstoned is fine).
    * Returns the ID of the newly inserted node.
    */
   insertAfter(value: V, after: RGANodeId | null): RGANodeId {
+    if (after !== null && !this.slots.has(nodeIdKey(after))) {
+      throw new RangeError(`RGA.insertAfter: unknown node ${nodeIdKey(after)}`);
+    }
     const ts = this.clock.tick();
     const id: RGANodeId = { agentId: ts.agentId, counter: ts.counter };
-    const node: RGANode<V> = {
+    this.integrate({
       id,
       value,
       timestamp: ts,
-      parent: after,
+      parent: after ? { agentId: after.agentId, counter: after.counter } : null,
       deleted: false,
-    };
-
-    this.addNode(node);
-    return id;
+    });
+    return { ...id };
   }
 
   /** Append a value at the end of the sequence. */
   append(value: V): RGANodeId {
-    const lastKey = this.findLastVisibleKey();
-    const after = lastKey ? this.nodes.get(lastKey)!.id : null;
-    return this.insertAfter(value, after);
+    let link = this.tail;
+    while (link !== this.head && (link as Slot<V>).node.deleted) link = (link as Slot<V>).prev;
+    return this.insertAfter(value, link === this.head ? null : (link as Slot<V>).node.id);
   }
 
   /** Mark a node as deleted (tombstone). */
   delete(id: RGANodeId): boolean {
-    const key = nodeIdKey(id);
-    const node = this.nodes.get(key);
-    if (!node || node.deleted) return false;
-    node.deleted = true;
+    const slot = this.slots.get(nodeIdKey(id));
+    if (!slot || slot.node.deleted) return false;
+    slot.node.deleted = true;
+    this.visible--;
     return true;
   }
 
   /** Get the current ordered sequence (excluding tombstones). */
   value(): V[] {
-    return this.sequence
-      .map(key => this.nodes.get(key)!)
-      .filter(n => !n.deleted)
-      .map(n => n.value);
+    return this.visibleNodes().map((n) => n.value);
   }
 
   /** Get all node IDs in order (excluding tombstones). */
   nodeIds(): RGANodeId[] {
-    return this.sequence
-      .map(key => this.nodes.get(key)!)
-      .filter(n => !n.deleted)
-      .map(n => n.id);
+    return this.visibleNodes().map((n) => ({ ...n.id }));
   }
 
   /** Get the number of visible (non-deleted) elements. */
   get length(): number {
-    let count = 0;
-    for (const key of this.sequence) {
-      if (!this.nodes.get(key)!.deleted) count++;
-    }
-    return count;
+    return this.visible;
   }
 
   /** Serialize the full state (including tombstones for proper merge). */
   serialize(): RGAState<V> {
-    return {
-      nodes: this.sequence.map(key => this.nodes.get(key)!),
-    };
+    const nodes: RGANode<V>[] = [];
+    for (let slot = this.head.next; slot; slot = slot.next) nodes.push(copyNode(slot.node));
+    return { schemaVersion: CRDT_SCHEMA_VERSION, clock: this.clock.current(), nodes };
   }
 
   /**
    * Merge with a remote RGA replica. Integrates remote nodes into the
-   * local sequence respecting causal ordering. Returns true if changed.
+   * local sequence respecting causal ordering, and propagates tombstones.
+   *
+   * Throws TypeError, before changing anything, when the state is
+   * malformed: a node whose id differs from its timestamp, a node that is
+   * not causally after its predecessor, a predecessor that is in neither
+   * replica, or a node id that carries different content on the two sides
+   * (two writers sharing a replica id). Returns true if changed.
    */
   merge(remote: RGAState<V>): boolean {
-    let changed = false;
+    const incoming = parseRGAState<V>(remote);
 
-    for (const remoteNode of remote.nodes) {
-      const key = nodeIdKey(remoteNode.id);
-      const existing = this.nodes.get(key);
-
-      if (!existing) {
-        this.addNode(remoteNode);
-        this.clock.receive(remoteNode.timestamp);
-        changed = true;
-      } else if (!existing.deleted && remoteNode.deleted) {
-        // Remote has tombstoned this node
-        existing.deleted = true;
-        changed = true;
+    const fresh = new Map<string, RGANode<V>>();
+    const toDelete: Slot<V>[] = [];
+    for (const node of incoming.nodes) {
+      const key = nodeIdKey(node.id);
+      const known = this.slots.get(key)?.node ?? fresh.get(key);
+      if (!known) {
+        fresh.set(key, node);
+        continue;
+      }
+      assertSameNode(known, node);
+      if (node.deleted && !known.deleted) {
+        const slot = this.slots.get(key);
+        if (slot) toDelete.push(slot);
+        else known.deleted = true;
       }
     }
 
-    return changed;
+    for (const [key, node] of fresh) {
+      if (!node.parent) continue;
+      const parentKey = nodeIdKey(node.parent);
+      const parent = this.slots.get(parentKey)?.node ?? fresh.get(parentKey);
+      if (!parent) fail(KIND, `node ${key}`, `follows ${parentKey}, which is in neither replica`);
+      if (compareLamport(node.timestamp, parent.timestamp) <= 0) {
+        fail(KIND, `node ${key}`, `is not causally after its predecessor ${parentKey}`);
+      }
+    }
+
+    // Predecessors carry smaller timestamps, so ascending order integrates
+    // every predecessor before the nodes that follow it.
+    const ordered = [...fresh.values()].sort((a, b) => compareLamport(a.timestamp, b.timestamp));
+    for (const node of ordered) this.integrate(node);
+    for (const slot of new Set(toDelete)) {
+      if (!slot.node.deleted) {
+        slot.node.deleted = true;
+        this.visible--;
+      }
+    }
+    if (incoming.clock !== undefined) this.clock.observe(incoming.clock);
+    for (const node of incoming.nodes) this.clock.observe(node.timestamp.counter);
+
+    return ordered.length > 0 || toDelete.length > 0;
   }
 
   // -------------------------------------------------------------------------
@@ -167,99 +234,83 @@ export class RGA<V> implements CRDT<V[], RGAState<V>> {
   // -------------------------------------------------------------------------
 
   /**
-   * Add a node to the internal structure, finding its correct position
-   * in the sequence based on parent reference and timestamp ordering.
+   * Link a node whose predecessor is already integrated: right after the
+   * predecessor, past every node with a greater timestamp (concurrent
+   * siblings inserted later and, transitively, everything after them).
    */
-  private addNode(node: RGANode<V>): void {
-    const key = nodeIdKey(node.id);
-    if (this.nodes.has(key)) return;
-
-    this.nodes.set(key, { ...node });
-
-    // Find insertion position
-    const insertIdx = this.findInsertPosition(node);
-    this.sequence.splice(insertIdx, 0, key);
+  private integrate(node: RGANode<V>): void {
+    let prev: Link<V> = node.parent ? this.slots.get(nodeIdKey(node.parent))! : this.head;
+    while (prev.next && compareLamport(prev.next.node.timestamp, node.timestamp) > 0) {
+      prev = prev.next;
+    }
+    const slot: Slot<V> = { node, prev, next: prev.next };
+    if (prev.next) prev.next.prev = slot;
+    else this.tail = slot;
+    prev.next = slot;
+    this.slots.set(nodeIdKey(node.id), slot);
+    if (!node.deleted) this.visible++;
   }
 
-  /**
-   * Find the correct position to insert a node in the sequence.
-   * The node goes after its parent. Among siblings (nodes with the same
-   * parent), higher timestamps come first (left-to-right = newest first
-   * among concurrent inserts at the same position).
-   */
-  private findInsertPosition(node: RGANode<V>): number {
-    if (node.parent === null) {
-      // Insert at head — but after any existing head-inserts with higher timestamps
-      let idx = 0;
-      while (idx < this.sequence.length) {
-        const existing = this.nodes.get(this.sequence[idx])!;
-        if (!nodeIdEq(existing.parent, null)) break;
-        if (compareLamport(node.timestamp, existing.timestamp) > 0) break;
-        idx++;
-      }
-      return idx;
+  private visibleNodes(): RGANode<V>[] {
+    const nodes: RGANode<V>[] = [];
+    for (let slot = this.head.next; slot; slot = slot.next) {
+      if (!slot.node.deleted) nodes.push(slot.node);
     }
-
-    const parentKey = nodeIdKey(node.parent);
-    const parentIdx = this.sequence.indexOf(parentKey);
-
-    if (parentIdx === -1) {
-      // Parent not found — append to end (will be corrected on merge)
-      return this.sequence.length;
-    }
-
-    // Scan right from parent, past all descendants and concurrent siblings
-    let idx = parentIdx + 1;
-    while (idx < this.sequence.length) {
-      const existing = this.nodes.get(this.sequence[idx])!;
-      // Stop if we've left the parent's subtree
-      if (!nodeIdEq(existing.parent, node.parent) && !this.isDescendantOf(existing, node.parent)) {
-        // But also check: is this a sibling with lower timestamp?
-        if (nodeIdEq(existing.parent, node.parent)) {
-          if (compareLamport(node.timestamp, existing.timestamp) > 0) break;
-        } else {
-          break;
-        }
-      }
-      // Among siblings, higher timestamp comes first
-      if (nodeIdEq(existing.parent, node.parent) && compareLamport(node.timestamp, existing.timestamp) > 0) {
-        break;
-      }
-      idx++;
-    }
-
-    return idx;
+    return nodes;
   }
 
-  /** Check if a node is a descendant of a given ancestor. */
-  private isDescendantOf(node: RGANode<V>, ancestorId: RGANodeId | null): boolean {
-    if (ancestorId === null) return true; // everything descends from head
-    let current: RGANode<V> | undefined = node;
-    const visited = new Set<string>();
-    while (current?.parent) {
-      const parentKey = nodeIdKey(current.parent);
-      if (visited.has(parentKey)) return false; // cycle protection
-      visited.add(parentKey);
-      if (nodeIdEq(current.parent, ancestorId)) return true;
-      current = this.nodes.get(parentKey);
-    }
-    return false;
-  }
-
-  /** Find the key of the last visible (non-deleted) node. */
-  private findLastVisibleKey(): string | null {
-    for (let i = this.sequence.length - 1; i >= 0; i--) {
-      if (!this.nodes.get(this.sequence[i])!.deleted) {
-        return this.sequence[i];
-      }
-    }
-    return null;
-  }
-
-  /** Create from serialized state. */
+  /** Create from serialized state (restores the clock). */
   static from<V>(agentId: AgentId, state: RGAState<V>): RGA<V> {
     const rga = new RGA<V>(agentId);
     rga.merge(state);
     return rga;
   }
+}
+
+/** Two copies of one node id must agree on everything but the tombstone. */
+function assertSameNode<V>(a: RGANode<V>, b: RGANode<V>): void {
+  const sameParent =
+    a.parent === null || b.parent === null
+      ? a.parent === b.parent
+      : a.parent.agentId === b.parent.agentId && a.parent.counter === b.parent.counter;
+  const sameValue = a.value === b.value || canonicalJson(a.value) === canonicalJson(b.value);
+  if (!sameParent || !sameValue) {
+    fail(
+      KIND,
+      `node ${nodeIdKey(a.id)}`,
+      `differs between replicas: two writers share replica id "${a.id.agentId}" ` +
+        '(restore a replica with RGA.from before it writes again)',
+    );
+  }
+}
+
+/** Validate a peer's RGA state and return normalized node copies. */
+function parseRGAState<V>(state: unknown): { clock?: number; nodes: RGANode<V>[] } {
+  const s = checkState(KIND, state);
+  const clock = checkClockField(KIND, s);
+  if (!Array.isArray(s.nodes)) fail(KIND, 'nodes', 'must be an array');
+  const nodes = s.nodes.map((raw, i): RGANode<V> => {
+    const path = `nodes[${i}]`;
+    if (!isRecord(raw)) fail(KIND, path, 'must be an object');
+    if (!isRecord(raw.id)) fail(KIND, `${path}.id`, 'must be a node id');
+    const id: RGANodeId = {
+      agentId: checkString(KIND, `${path}.id.agentId`, raw.id.agentId),
+      counter: checkCounter(KIND, `${path}.id.counter`, raw.id.counter),
+    };
+    const timestamp = checkLamport(KIND, `${path}.timestamp`, raw.timestamp);
+    if (timestamp.agentId !== id.agentId || timestamp.counter !== id.counter) {
+      fail(KIND, `${path}.timestamp`, 'must equal the node id');
+    }
+    let parent: RGANodeId | null = null;
+    if (raw.parent !== null && raw.parent !== undefined) {
+      if (!isRecord(raw.parent)) fail(KIND, `${path}.parent`, 'must be a node id or null');
+      parent = {
+        agentId: checkString(KIND, `${path}.parent.agentId`, raw.parent.agentId),
+        counter: checkCounter(KIND, `${path}.parent.counter`, raw.parent.counter),
+      };
+    }
+    if (typeof raw.deleted !== 'boolean') fail(KIND, `${path}.deleted`, 'must be a boolean');
+    return { id, value: raw.value as V, timestamp, parent, deleted: raw.deleted };
+  });
+  return { clock, nodes };
 }

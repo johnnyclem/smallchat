@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { DispatchBuilder } from './dispatch-builder.js';
+import { DispatchBuilder, DispatchError } from './dispatch-builder.js';
 import type { DispatchContext } from './dispatch.js';
 
 // Mock the dispatch module
@@ -36,7 +36,7 @@ describe('Feature: Dispatch Builder Fluent API', () => {
       const builder = new DispatchBuilder(mockContext, 'search docs');
       const result = await builder.withArgs({ query: 'test' }).exec();
 
-      expect(toolkit_dispatch).toHaveBeenCalledWith(mockContext, 'search docs', { query: 'test' });
+      expect(toolkit_dispatch).toHaveBeenCalledWith(mockContext, 'search docs', { query: 'test' }, expect.objectContaining({ signal: expect.any(AbortSignal) }));
       expect(result.content).toBe('result');
     });
   });
@@ -63,7 +63,7 @@ describe('Feature: Dispatch Builder Fluent API', () => {
         .withArgs({ key: 'value' })
         .exec();
 
-      expect(toolkit_dispatch).toHaveBeenCalledWith(mockContext, 'intent', { key: 'value' });
+      expect(toolkit_dispatch).toHaveBeenCalledWith(mockContext, 'intent', { key: 'value' }, expect.objectContaining({ signal: expect.any(AbortSignal) }));
       expect(result.metadata?.requestId).toBe('abc');
     });
   });
@@ -122,6 +122,45 @@ describe('Feature: Dispatch Builder Fluent API', () => {
     });
   });
 
+  describe('Scenario: execContent never hands back an error payload as a value', () => {
+    it('Given a dispatch that ran nothing, When execContent is called, Then it throws a DispatchError with the outcome and candidates', async () => {
+      (toolkit_dispatch as ReturnType<typeof vi.fn>).mockResolvedValue({
+        content: {
+          error: 'No tool matched "say hello". Nothing was executed.',
+          outcome: 'needs-disambiguation',
+          intent: 'say hello',
+          candidates: [{ toolId: 'demo/greet', score: 0.72, tier: 'low' }],
+          options: ['demo/greet'],
+        },
+        isError: true,
+        metadata: { outcome: 'needs-disambiguation', tier: 'low' },
+      });
+
+      const error = await new DispatchBuilder(mockContext, 'say hello').execContent<string>().catch(e => e);
+
+      expect(error).toBeInstanceOf(DispatchError);
+      expect(error.message).toBe('No tool matched "say hello". Nothing was executed.');
+      expect(error.outcome).toBe('needs-disambiguation');
+      expect(error.candidates).toEqual(['demo/greet']);
+      expect(error.result.isError).toBe(true);
+    });
+
+    it('Given a tool that ran and failed, When execContent is called, Then it throws with outcome resolved', async () => {
+      (toolkit_dispatch as ReturnType<typeof vi.fn>).mockResolvedValue({
+        content: 'the disk is full',
+        isError: true,
+        metadata: { outcome: 'resolved', toolId: 'fs/write' },
+      });
+
+      const error = await new DispatchBuilder(mockContext, 'save it').execContent().catch(e => e);
+
+      expect(error).toBeInstanceOf(DispatchError);
+      expect(error.message).toBe('the disk is full');
+      expect(error.outcome).toBe('resolved');
+      expect(error.candidates).toEqual([]);
+    });
+  });
+
   describe('Scenario: Stream dispatch', () => {
     it('Given a stream intent, When stream is called, Then smallchat_dispatchStream is invoked', () => {
       const mockGen = (async function* () {
@@ -132,7 +171,7 @@ describe('Feature: Dispatch Builder Fluent API', () => {
       const builder = new DispatchBuilder(mockContext, 'stream-intent');
       const gen = builder.stream();
 
-      expect(smallchat_dispatchStream).toHaveBeenCalledWith(mockContext, 'stream-intent', {});
+      expect(smallchat_dispatchStream).toHaveBeenCalledWith(mockContext, 'stream-intent', {}, {});
       expect(gen).toBeDefined();
     });
   });

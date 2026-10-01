@@ -1,17 +1,20 @@
 /**
- * Truth Ledger Interop — compaction bridge
+ * Truth Ledger Interop — rendering and the snapshot compaction bridge
  *
- * Wires the truth ledger into short-hand's compaction levels at the JSONL
- * seam (Option B): at compaction time the current-truth selection is
- * ingested as high-priority input that survives every level, and
- * compaction may emit its candidate invariants back as PROPOSAL lines.
+ * Renders the current-truth selection with the suite's frozen markers
+ * (`[TB]`, `[TB ⚠ CONTESTED]`, `[UV — UNVERIFIED]`) and wires it into
+ * snapshot compaction: the selection rides every `CompactedSnapshot` as
+ * high-priority input that survives every level, and compaction may emit
+ * its candidate invariants back as PROPOSAL lines. (The LSM engine syncs
+ * the same selection via `CompactionEngine.syncTruthLedger`.)
  *
  * The contract this bridge enforces (§7):
  *   - Active TB      → ground truth: compacted, citable.
  *   - Contested TB   → carried WITH its contesting UVs; the dispute is
  *                      never resolved silently in either direction.
  *   - Open UV        → flagged `UNVERIFIED`; compaction never promotes a
- *                      UV into something that reads as proven.
+ *                      UV into something that reads as proven, and never
+ *                      drops one.
  *   - History        → excluded; a stale cached copy is displaced on the
  *                      next sync because the section is always rebuilt.
  *
@@ -20,85 +23,140 @@
  * compactor cannot sign its own output.
  */
 
-import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 import type {
-  CompactedState,
-  CompactionLevel,
-  Compactor,
+  CompactedSnapshot,
+  SnapshotLevel,
+  SnapshotCompactor,
   ConversationHistory,
-} from '../compaction/types.js';
-import { estimateTokens } from '../compaction/compactor.js';
+} from '../compaction/snapshot/types.js';
+import { estimateTokens } from '../utils.js';
+import { escapeUntrusted } from '../compaction/frame.js';
 import type {
   CompactedTruth,
-  InvariantProposalLine,
   TruthConfidence,
   TruthSelection,
   TruthTbEntry,
   TruthUvEntry,
+  UvProposalLine,
 } from './types.js';
-import { assertAccountableAuthor, ulid } from './types.js';
+import { TRUTH_SOURCE_PREFIX } from './types.js';
+import { assertAccountableAuthor } from './identity.js';
+import { uvProposal, type ProposeInvariantsOptions } from './proposal-export.js';
+
+export type { ProposeInvariantsOptions } from './proposal-export.js';
+// The proposals stream writer lives in proposals.ts; these two names have always been exported from here.
+export { appendProposalsFile, serializeProposals } from './proposals.js';
 
 // ---------------------------------------------------------------------------
 // Rendering — the truth section that rides the compacted summary
 // ---------------------------------------------------------------------------
 
+/** Heading of the rendered truth section. */
+export const TRUTH_SECTION_HEADING = '## Asserted Truth (ledger)';
+
+/** Ledger fields are untrusted text: one line, no forged markers. */
+function field(text: string): string {
+  return escapeUntrusted(String(text), { singleLine: true });
+}
+
+function signature(tb: TruthTbEntry): string {
+  return tb.signedBy ? `signed: ${field(tb.signedBy)}` : 'unsigned';
+}
+
 function renderTb(tb: TruthTbEntry): string {
-  const signer = tb.signedBy ?? tb.author;
-  return `- [TB] ${tb.claim} (signed: ${signer}, evidence: ${tb.evidence.length})`;
+  return `- [TB] ${field(tb.claim)} (${signature(tb)}, evidence: ${tb.evidence.length})`;
 }
 
 function renderUv(uv: TruthUvEntry): string {
-  return `- [UV — UNVERIFIED] ${uv.assertion} (basis: ${uv.basis}; verify by ${uv.verifyBy.kind}: ${uv.verifyBy.value})`;
+  const contests = uv.contests ? `; contests ${field(uv.contests)}` : '';
+  return `- [UV — UNVERIFIED] ${field(uv.assertion)} (basis: ${field(uv.basis)}; verify by ${field(uv.verifyBy.kind)}: ${field(uv.verifyBy.value)}${contests})`;
+}
+
+/** Ids of open UVs that ride a contested TB in this selection. */
+function attachedUvIds(selection: TruthSelection): Set<string> {
+  const ids = new Set<string>();
+  for (const { contestedBy } of selection.contested) {
+    for (const uv of contestedBy) ids.add(uv.id);
+  }
+  return ids;
+}
+
+/**
+ * One budgetable unit of the truth section: a ground-truth TB, a contested
+ * TB together with every UV disputing it (kept atomic — the dispute is
+ * never shown without the TB, nor the TB without its dispute), or a
+ * standalone open UV. `text` may span several lines; `sources` are ledger
+ * entry ids.
+ */
+export interface TruthItem {
+  kind: 'ground-truth' | 'contested' | 'unverified';
+  text: string;
+  sources: string[];
+}
+
+/**
+ * Render a truth selection as budgetable items, in priority order: ground
+ * truth, contested groups, open UVs. Each open UV appears exactly once:
+ * beside its TB when that TB is contested in the selection, standalone
+ * otherwise — including a UV contesting a TB the ledger has not (yet)
+ * re-emitted as contested. Ledger fields are escaped (`escapeUntrusted`),
+ * so a field can never forge a marker or a line.
+ */
+export function renderTruthItems(selection: TruthSelection): TruthItem[] {
+  const items: TruthItem[] = [];
+
+  for (const tb of selection.groundTruth) {
+    items.push({ kind: 'ground-truth', text: renderTb(tb), sources: [tb.id] });
+  }
+
+  for (const { tombstone, contestedBy } of selection.contested) {
+    const lines = [`- [TB ⚠ CONTESTED] ${field(tombstone.claim)} (${signature(tombstone)})`];
+    for (const uv of contestedBy) {
+      lines.push(`  - disputed by [UV — UNVERIFIED] ${field(uv.assertion)} (${field(uv.author)})`);
+    }
+    items.push({ kind: 'contested', text: lines.join('\n'), sources: [tombstone.id, ...contestedBy.map((uv) => uv.id)] });
+  }
+
+  const attached = attachedUvIds(selection);
+  for (const uv of selection.unverified) {
+    if (attached.has(uv.id)) continue;
+    items.push({ kind: 'unverified', text: renderUv(uv), sources: [uv.id] });
+  }
+
+  return items;
+}
+
+/** Render a truth selection as marked lines, without the heading (see `renderTruthItems`). */
+export function renderTruthLines(selection: TruthSelection): string[] {
+  return renderTruthItems(selection).flatMap((item) => item.text.split('\n'));
 }
 
 /**
  * Render a truth selection as the markdown section appended to compacted
- * summaries. Markers are load-bearing: `[TB]` may be relied on, `[TB ⚠
- * CONTESTED]` carries its dispute, `[UV — UNVERIFIED]` is the dragon
- * marker and must never be dropped by deeper compaction.
+ * summaries and placed first in context frames. Markers are load-bearing:
+ * `[TB]` may be relied on, `[TB ⚠ CONTESTED]` carries its dispute,
+ * `[UV — UNVERIFIED]` is the dragon marker and must never be dropped by
+ * deeper compaction.
  */
 export function renderTruthSection(selection: TruthSelection): string {
-  const lines: string[] = ['## Asserted Truth (ledger)'];
-
-  if (
-    selection.groundTruth.length === 0 &&
-    selection.contested.length === 0 &&
-    selection.unverified.length === 0
-  ) {
-    lines.push('(no current truth entries)');
-    return lines.join('\n');
-  }
-
-  for (const tb of selection.groundTruth) {
-    lines.push(renderTb(tb));
-  }
-
-  for (const { tombstone, contestedBy } of selection.contested) {
-    lines.push(`- [TB ⚠ CONTESTED] ${tombstone.claim} (signed: ${tombstone.signedBy ?? tombstone.author})`);
-    for (const uv of contestedBy) {
-      lines.push(`  - disputed by [UV — UNVERIFIED] ${uv.assertion} (${uv.author})`);
-    }
-  }
-
-  for (const uv of selection.unverified) {
-    // Contesting UVs already ride their TB above; open standalone UVs land here.
-    if (uv.contests) continue;
-    lines.push(renderUv(uv));
-  }
-
-  return lines.join('\n');
+  const lines = renderTruthLines(selection);
+  if (lines.length === 0) return `${TRUTH_SECTION_HEADING}\n(no current truth entries)`;
+  return [TRUTH_SECTION_HEADING, ...lines].join('\n');
 }
 
 /**
- * Attach a truth selection to a compacted state. The section is rebuilt
+ * Attach a truth selection to a compacted snapshot. The section is rebuilt
  * from scratch — any truth text a previous round carried is displaced,
- * which is how overridden TBs and refuted UVs leave the cache.
+ * which is how overridden TBs and refuted UVs leave the cache. The
+ * compacted conversation it sits beside is untrusted text: it goes through
+ * `escapeUntrusted`, so a message or tool output that reproduces a `[TB]`
+ * line or the truth heading can never pass for ledger truth (SH-04).
  */
-export function applyTruthToCompactedState(
-  state: CompactedState,
+export function applyTruthToSnapshot(
+  state: CompactedSnapshot,
   selection: TruthSelection,
   now: Date = new Date(),
-): CompactedState {
+): CompactedSnapshot {
   const truth: CompactedTruth = {
     syncedAt: now.toISOString(),
     groundTruth: selection.groundTruth,
@@ -111,13 +169,14 @@ export function applyTruthToCompactedState(
       selection.history.length,
   };
 
-  // Strip any truth section a previous round attached — it is always
+  // Strip the truth section a previous round appended — it is always
   // rebuilt from the current selection, never carried forward as text.
-  const marker = '## Asserted Truth (ledger)';
-  const markerIdx = state.summary.indexOf(marker);
-  const baseSummary = markerIdx >= 0 ? state.summary.slice(0, markerIdx).trimEnd() : state.summary;
+  // Only that exact trailing section goes: the heading can also appear
+  // inside conversation text (a pasted summary), and everything around it
+  // must survive.
+  const baseSummary = stripAppendedTruth(state);
 
-  const summary = `${baseSummary}\n\n${renderTruthSection(selection)}`;
+  const summary = `${escapeUntrusted(baseSummary)}\n\n${renderTruthSection(selection)}`;
 
   return {
     ...state,
@@ -127,19 +186,34 @@ export function applyTruthToCompactedState(
   };
 }
 
+function stripAppendedTruth(state: CompactedSnapshot): string {
+  if (!state.truth) return state.summary;
+  const previous = renderTruthSection({
+    groundTruth: state.truth.groundTruth,
+    contested: state.truth.contested,
+    unverified: state.truth.unverified,
+    history: [],
+  });
+  const suffix = `\n\n${previous}`;
+  return state.summary.endsWith(suffix) ? state.summary.slice(0, -suffix.length) : state.summary;
+}
+
+/** @deprecated Renamed to `applyTruthToSnapshot` (it takes a `CompactedSnapshot`). */
+export const applyTruthToCompactedState = applyTruthToSnapshot;
+
 // ---------------------------------------------------------------------------
-// TruthAwareCompactor — a Compactor decorator
+// TruthAwareCompactor — a SnapshotCompactor decorator
 // ---------------------------------------------------------------------------
 
 /**
- * Wraps any Compactor so every compacted state carries the current truth
+ * Wraps any SnapshotCompactor so every compacted snapshot carries the current truth
  * selection. The selection is re-applied on recompaction, so deeper levels
  * keep the full section (truth is the durable residue — it never compacts
  * away) and stale entries are displaced.
  */
-export class TruthAwareCompactor implements Compactor {
+export class TruthAwareCompactor implements SnapshotCompactor {
   constructor(
-    private readonly inner: Compactor,
+    private readonly inner: SnapshotCompactor,
     private selection: TruthSelection,
   ) {}
 
@@ -148,14 +222,14 @@ export class TruthAwareCompactor implements Compactor {
     this.selection = selection;
   }
 
-  async compact(history: ConversationHistory, level: CompactionLevel): Promise<CompactedState> {
+  async compact(history: ConversationHistory, level: SnapshotLevel): Promise<CompactedSnapshot> {
     const state = await this.inner.compact(history, level);
-    return applyTruthToCompactedState(state, this.selection);
+    return applyTruthToSnapshot(state, this.selection);
   }
 
-  async recompact(state: CompactedState, targetLevel: CompactionLevel): Promise<CompactedState> {
+  async recompact(state: CompactedSnapshot, targetLevel: SnapshotLevel): Promise<CompactedSnapshot> {
     const next = await this.inner.recompact(state, targetLevel);
-    return applyTruthToCompactedState(next, this.selection);
+    return applyTruthToSnapshot(next, this.selection);
   }
 }
 
@@ -184,28 +258,29 @@ export function truthToInvariantRecords(selection: TruthSelection): TruthInvaria
 
   for (const tb of selection.groundTruth) {
     records.push({
-      key: `truth:${tb.id}`,
-      value: `[TB] ${tb.claim}`,
+      key: `${TRUTH_SOURCE_PREFIX}${tb.id}`,
+      value: `[TB] ${field(tb.claim)}`,
       confidence: 'tb',
       contested: false,
     });
   }
 
   for (const { tombstone, contestedBy } of selection.contested) {
-    const disputes = contestedBy.map((uv) => uv.assertion).join(' | ');
+    const disputes = contestedBy.map((uv) => field(uv.assertion)).join(' | ');
     records.push({
-      key: `truth:${tombstone.id}`,
-      value: `[TB ⚠ CONTESTED] ${tombstone.claim}${disputes ? ` — disputed: ${disputes}` : ''}`,
+      key: `${TRUTH_SOURCE_PREFIX}${tombstone.id}`,
+      value: `[TB ⚠ CONTESTED] ${field(tombstone.claim)}${disputes ? ` — disputed: ${disputes}` : ''}`,
       confidence: 'tb',
       contested: true,
     });
   }
 
+  const attached = attachedUvIds(selection);
   for (const uv of selection.unverified) {
-    if (uv.contests) continue;
+    if (attached.has(uv.id)) continue;
     records.push({
-      key: `truth:${uv.id}`,
-      value: `[UV — UNVERIFIED] ${uv.assertion}`,
+      key: `${TRUTH_SOURCE_PREFIX}${uv.id}`,
+      value: `[UV — UNVERIFIED] ${field(uv.assertion)}`,
       confidence: 'uv',
       contested: false,
     });
@@ -218,15 +293,6 @@ export function truthToInvariantRecords(selection: TruthSelection): TruthInvaria
 // Proposal emission — compaction's only write path toward the ledger
 // ---------------------------------------------------------------------------
 
-export interface ProposeInvariantsOptions {
-  /** Accountable author — anonymous/generic identities throw. */
-  author: string;
-  /** Agent session lineage for downstream provenance-independence checks. */
-  agentSessionId?: string | null;
-  /** Clock injection for deterministic tests. */
-  now?: Date;
-}
-
 /**
  * Derive candidate invariants from a compacted state as PROPOSAL lines.
  * Entities that survived compaction with corrections settled, and
@@ -235,45 +301,35 @@ export interface ProposeInvariantsOptions {
  * so they are proposed, never asserted.
  */
 export function proposeInvariants(
-  state: CompactedState,
+  state: CompactedSnapshot,
   options: ProposeInvariantsOptions,
-): InvariantProposalLine[] {
+): UvProposalLine[] {
   assertAccountableAuthor(options.author);
-  const ts = (options.now ?? new Date()).toISOString();
-  const proposals: InvariantProposalLine[] = [];
+  const proposals: UvProposalLine[] = [];
+  const detail = `level ${state.level}, round ${state.roundNumber}, session ${state.sessionId}`;
 
-  const push = (
-    assertion: string,
-    basis: string,
-    targetRef: string,
-    verifyValue: string,
-  ): void => {
-    proposals.push({
-      type: 'PROPOSAL',
-      kind: 'uv',
-      id: ulid(),
-      ts,
-      author: options.author,
-      draft: {
-        assertion,
-        basis,
-        verifyBy: {
-          kind: 'inspect',
-          value: verifyValue,
-          detail: 'confirm the compacted value still holds in the source conversation',
+  const push = (assertion: string, basis: string, targetRef: string, sourceMessageId: string): void => {
+    proposals.push(
+      uvProposal(
+        {
+          assertion,
+          basis,
+          verifyBy: {
+            kind: 'inspect',
+            value: `message:${sourceMessageId}`,
+            detail: 'confirm the compacted value still holds in the source conversation',
+          },
         },
-      },
-      signal: {
-        source: 'shorthand-compaction',
-        detail: `level ${state.level}, round ${state.roundNumber}, session ${state.sessionId}`,
-      },
-      targetRef,
-      agentSessionId: options.agentSessionId ?? null,
-    });
+        { targetRef, detail },
+        options,
+      ),
+    );
   };
 
   for (const entity of state.entities) {
     if (entity.type !== 'configuration') continue;
+    // "chose postgres" names a value, not a fact about one: "postgres is postgres." says nothing (SAT-10)
+    if (sameText(String(entity.value), entity.name)) continue;
     const settled =
       entity.corrections.length > 0
         ? ` (settled after ${entity.corrections.length} correction${entity.corrections.length === 1 ? '' : 's'})`
@@ -282,7 +338,7 @@ export function proposeInvariants(
       `${entity.name} is ${String(entity.value)}.`,
       `Compacted from session ${state.sessionId}${settled}; last mentioned in message ${entity.lastMention}.`,
       `entity:${state.sessionId}:${entity.name}`,
-      `message:${entity.lastMention}`,
+      entity.lastMention,
     );
   }
 
@@ -292,44 +348,14 @@ export function proposeInvariants(
       `Decision holds: ${decision.description}.`,
       `Recorded at message ${decision.madeAt} in session ${state.sessionId}; ${decision.alternatives.length} alternative(s) rejected.`,
       `decision:${state.sessionId}:${decision.id}`,
-      `message:${decision.madeAt}`,
+      decision.madeAt,
     );
   }
 
   return proposals;
 }
 
-/** Serialize proposals as JSONL lines. */
-export function serializeProposals(proposals: InvariantProposalLine[]): string[] {
-  return proposals.map((p) => JSON.stringify(p));
-}
-
-/**
- * Append proposals to a JSONL file (created if absent), deduplicating by
- * `targetRef` against lines already present so repeated compaction rounds
- * do not re-propose the same invariant.
- */
-export function appendProposalsFile(
-  path: string,
-  proposals: InvariantProposalLine[],
-): { written: number; skipped: number } {
-  const existingRefs = new Set<string>();
-  if (existsSync(path)) {
-    for (const raw of readFileSync(path, 'utf8').split('\n')) {
-      const trimmed = raw.trim();
-      if (!trimmed) continue;
-      try {
-        const parsed = JSON.parse(trimmed) as { targetRef?: string | null };
-        if (parsed.targetRef) existingRefs.add(parsed.targetRef);
-      } catch {
-        // Foreign or malformed lines never block the append path.
-      }
-    }
-  }
-
-  const fresh = proposals.filter((p) => !p.targetRef || !existingRefs.has(p.targetRef));
-  if (fresh.length > 0) {
-    appendFileSync(path, serializeProposals(fresh).map((l) => l + '\n').join(''));
-  }
-  return { written: fresh.length, skipped: proposals.length - fresh.length };
+function sameText(a: string, b: string): boolean {
+  const key = (s: string) => s.normalize('NFKC').replace(/\s+/g, ' ').trim().toLowerCase();
+  return key(a) === key(b);
 }
