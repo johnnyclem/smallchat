@@ -51,6 +51,11 @@ jobs:
       - name: Build workspace packages
         run: npm run build:packages
 
+      # Pack @smallchat/core as it would be published, install the tarball
+      # into an empty project and load every export and the CLI there.
+      - name: Published package installs and loads
+        run: npm run test:pack
+
   audit:
     name: Dependency audit
     runs-on: ubuntu-latest

@@ -1,7 +1,8 @@
 {
   "name": "@shorthand/core",
-  "version": "0.1.0",
-  "description": "Progressive context compaction for LLMs \u2014 LSM-tree-inspired conversation state management",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Development stand-in for @shorthand/core 1.0, which is published from the short-hand repository. Never published from here; see README.md.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

@@ -2,6 +2,18 @@
 
 1.0 is a major release; the sections below cover each breaking change.
 
+## Installing 1.0: `@shorthand/core` comes from npm
+
+`@smallchat/core@1.0.0` depends on `@shorthand/core@^1.0.0` from the
+registry (0.x pointed at a `file:./shorthand` copy that only resolved
+inside this repository). The compaction, CRDT, importance and truth APIs
+that `@smallchat/core` re-exports are `@shorthand/core` 1.0's. Its truth
+module reads and writes Truth Format v2 (TRANSITION lines for status
+changes, `prevHash`/`hash`, `sinceSeq`, the suite PROPOSAL envelope; the
+bare `shorthand-compaction` proposal format is read-only): follow
+`@shorthand/core`'s MIGRATION.md if you call `proposeInvariants`,
+`selectCurrentTruth` or the wiki codec through `@smallchat/core`.
+
 ## Compiled artifacts (format 1.0) and embedder identity
 
 **Recompile every artifact.** 1.0 refuses 0.x `.toolkit.json` and `.db`
