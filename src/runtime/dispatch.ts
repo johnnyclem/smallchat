@@ -345,13 +345,24 @@ export class DispatchContext {
     return null;
   }
 
+  /** Whether `selectorId` dispatches to the tool `toolId` (as default, overload or in any class). */
+  selectorReachesTool(selectorId: string, toolId: string): boolean {
+    return this.getTool(toolId)?.selectors.includes(selectorId) ?? false;
+  }
+
   /**
-   * Resolve a canonical selector id to a concrete IMP + selector, if any
-   * registered class still owns it. Used by the semantic map to turn a learned
-   * preference back into an executable dispatch. Returns null if the selector
-   * has since been unregistered (a stale learned preference).
+   * Resolve a learned preference to a concrete IMP + selector. With
+   * `toolId`, that exact tool, provided the selector still dispatches to it;
+   * without, the selector's default tool (its first owning class). Returns
+   * null if the selector or tool has since been unregistered (a stale
+   * learned preference).
    */
-  resolveLearnedSelector(selectorId: string): { imp: ToolIMP; selector: ToolSelector } | null {
+  resolveLearnedSelector(selectorId: string, toolId?: string): { imp: ToolIMP; selector: ToolSelector } | null {
+    if (toolId !== undefined) {
+      const selector = this.selectorTable.get(selectorId);
+      const tool = this.getTool(toolId);
+      return selector && tool && tool.selectors.includes(selectorId) ? { imp: tool.imp, selector } : null;
+    }
     const found = this.toolForSelector(selectorId);
     return found ? { imp: found.imp, selector: found.selector } : null;
   }
@@ -361,14 +372,20 @@ export class DispatchContext {
    *
    * Called when the user resolves a refinement by choosing one of the deferred
    * options. Embeds the original (unresolvable) intent and records a mapping to
-   * the chosen selector so that the exact intent resolves instantly next time,
-   * and *similar* intents get a confidence boost toward the same selector.
-   * Learned preferences never authorize a pinned or destructive tool: the
-   * dispatch policy requires an exact phrase or EXACT similarity for those.
+   * the chosen selector — and, with `toolId`, the tool chosen through it (an
+   * overload variant, or one of several classes declaring the selector) — so
+   * that the exact intent resolves to that tool instantly next time, and
+   * *similar* intents get a confidence boost toward it. Throws when `toolId`
+   * is given and the selector does not dispatch to it. Learned preferences
+   * never authorize a pinned or destructive tool: the dispatch policy
+   * requires an exact phrase or EXACT similarity for those.
    */
-  async reinforceRefinement(originalIntent: string, selectorId: string): Promise<LearnedPreference> {
+  async reinforceRefinement(originalIntent: string, selectorId: string, toolId?: string): Promise<LearnedPreference> {
+    if (toolId !== undefined && !this.selectorReachesTool(selectorId, toolId)) {
+      throw new Error(`Selector "${selectorId}" does not dispatch to tool "${toolId}"`);
+    }
     const vector = await this.embedder.embed(originalIntent);
-    const preference = this.semanticMap.reinforce(originalIntent, vector, selectorId);
+    const preference = this.semanticMap.reinforce(originalIntent, vector, selectorId, Date.now(), toolId);
     // A learned boost can change how nearby intents rank.
     this.cache.flush();
     return preference;
@@ -433,27 +450,40 @@ export class DispatchContext {
   }
 
   /**
-   * How the intent pins apply to one tool for one intent. `ownSimilarity`
-   * computes the cosine similarity between the intent's own embedding and
-   * a selector (for 'elevated' pins).
+   * The pinned canonicals that apply to a tool: every pinned selector the
+   * tool is reachable through — its own selectors, the overload tables it
+   * is a variant in (whichever class declares them), and `via`, the
+   * selector a candidate matched through.
+   */
+  private pinnedCanonicalsOf(toolId: string, via?: string): string[] {
+    if (this.intentPins.size === 0) return [];
+    const reachable = new Set(this.toolsById.get(toolId)?.selectors ?? []);
+    if (via !== undefined) reachable.add(via);
+    return this.intentPins.pinnedCanonicals().filter(c => reachable.has(c));
+  }
+
+  /**
+   * How the intent pins apply to one tool for one intent (see
+   * pinnedCanonicalsOf; `via` is the selector the candidate matched
+   * through). `ownSimilarity` computes the cosine similarity between the
+   * intent's own embedding and a selector (for 'elevated' pins).
    */
   async pinStatesFor(
     toolId: string,
     intent: string,
     ownSimilarity: (selector: ToolSelector) => Promise<number>,
+    via?: string,
   ): Promise<PinState[]> {
-    if (this.intentPins.size === 0) return [];
     const states: PinState[] = [];
-    for (const canonical of this.intentPins.pinnedCanonicals()) {
-      const owner = this.toolForSelector(canonical);
-      if (!owner || owner.toolId !== toolId) continue;
+    for (const canonical of this.pinnedCanonicalsOf(toolId, via)) {
       const pin = this.intentPins.getPin(canonical)!;
       const phrase = this.intentPins.matchesPinnedPhrase(canonical, intent);
       if (pin.policy === 'exact') {
         states.push({ canonical, policy: 'exact', satisfied: phrase });
         continue;
       }
-      const similarity = phrase ? null : await ownSimilarity(owner.selector);
+      const pinnedSelector = this.selectorTable.get(canonical);
+      const similarity = phrase ? null : pinnedSelector ? await ownSimilarity(pinnedSelector) : null;
       const verdict = this.intentPins.checkSimilarity(canonical, similarity ?? 0, intent);
       states.push({
         canonical,
@@ -466,10 +496,9 @@ export class DispatchContext {
     return states;
   }
 
-  /** Whether any intent pin applies to this tool. */
-  isPinnedTool(toolId: string): boolean {
-    if (this.intentPins.size === 0) return false;
-    return this.intentPins.pinnedCanonicals().some(c => this.toolForSelector(c)?.toolId === toolId);
+  /** Whether any intent pin applies to this tool (see pinnedCanonicalsOf). */
+  isPinnedTool(toolId: string, via?: string): boolean {
+    return this.pinnedCanonicalsOf(toolId, via).length > 0;
   }
 
   /** A new proof stamped with this context's thresholds, guards and identity. */
@@ -684,11 +713,12 @@ async function resolveInternal(
   /** Pin gate + dispatch policy for one candidate. */
   const judge = async (c: Candidate, llmApproved: boolean): Promise<PolicyVerdict> => {
     let similarity = c.similarity;
-    if (similarity !== null && (isDestructive(c.imp.annotations, context.policyOptions) || context.isPinnedTool(c.toolId))) {
+    const via = c.selector.canonical;
+    if (similarity !== null && (isDestructive(c.imp.annotations, context.policyOptions) || context.isPinnedTool(c.toolId, via))) {
       // Always measured from this intent's own text.
       similarity = await ownSimilarity(c.selector);
     }
-    const pins = await context.pinStatesFor(c.toolId, intent, ownSimilarity);
+    const pins = await context.pinStatesFor(c.toolId, intent, ownSimilarity, via);
     return evaluateDispatchPolicy(
       { mode: 'intent', toolId: c.toolId, imp: c.imp, source: c.source, score: c.score, similarity, llmApproved, pins },
       context.policyOptions,
@@ -781,7 +811,7 @@ async function resolveInternal(
   // 2. LEARNED EXACT — the user taught this exact intent (same intentKey) before.
   if (context.semanticMap.size > 0) {
     const learned = context.semanticMap.lookupExact(intent);
-    const resolved = learned ? context.resolveLearnedSelector(learned.selectorId) : null;
+    const resolved = learned ? context.resolveLearnedSelector(learned.selectorId, learned.toolId) : null;
     if (learned && resolved && !isNegative(toolIdOf(resolved.imp))) {
       const c: Candidate = {
         imp: resolved.imp,
@@ -906,7 +936,7 @@ async function resolveInternal(
   // 7. LEARNED SIMILAR — a near-miss the user previously disambiguated gets a boost.
   if (context.semanticMap.size > 0) {
     const smMatch = context.semanticMap.lookupSimilar(selector.vector);
-    const resolved = smMatch ? context.resolveLearnedSelector(smMatch.preference.selectorId) : null;
+    const resolved = smMatch ? context.resolveLearnedSelector(smMatch.preference.selectorId, smMatch.preference.toolId) : null;
     if (smMatch && resolved && !isNegative(toolIdOf(resolved.imp))) {
       const id = toolIdOf(resolved.imp);
       const existing = byTool.get(id);
@@ -948,11 +978,12 @@ async function resolveInternal(
   // 9. PIN GATE — a pinned tool is never a candidate for an intent its pin refuses.
   const eligible: Candidate[] = [];
   for (const c of byTool.values()) {
-    if (!context.isPinnedTool(c.toolId)) {
+    const via = c.selector.canonical;
+    if (!context.isPinnedTool(c.toolId, via)) {
       eligible.push(c);
       continue;
     }
-    const pins = await context.pinStatesFor(c.toolId, intent, ownSimilarity);
+    const pins = await context.pinStatesFor(c.toolId, intent, ownSimilarity, via);
     const refused = pins.find(p => !p.satisfied);
     if (refused) {
       excluded.push(toProofCandidate(c, refused.policy === 'exact' ? 'pin-exact-required' : 'pin-elevated-required'));
@@ -1053,7 +1084,7 @@ async function resolveInternal(
     : subHigh(chosenTier) ? 'verified' : 'ranked';
 
   // Learn: cache plain vector resolutions of ordinary tools (never pinned or destructive ones).
-  if (run.learn && chosen.source === 'vector' && !context.isPinnedTool(chosen.toolId)
+  if (run.learn && chosen.source === 'vector' && !context.isPinnedTool(chosen.toolId, chosen.selector.canonical)
       && !isDestructive(chosen.imp.annotations, context.policyOptions)) {
     context.cache.store(selector, chosen.imp, chosen.score);
   }

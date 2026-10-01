@@ -19,6 +19,7 @@ import { ResolutionCache } from '../core/resolution-cache.js';
 import { SelectorTable } from '../core/selector-table.js';
 import { ToolClass } from '../core/tool-class.js';
 import { IntentPinRegistry } from '../core/intent-pin.js';
+import { SemanticMap } from './semantic-map.js';
 import { createSignature, param, SCType } from '../core/sc-types.js';
 import { callDigest } from '../core/call-digest.js';
 import { computeProofDigest } from '../core/proof.js';
@@ -285,6 +286,148 @@ describe('SC-INF-04: an exact pin fires only on its exact phrase', () => {
     await toolkit_dispatch(context, 'move the money over', {});
 
     expect(ran).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Review: a pin gates every tool reachable through its selector — overload
+// variants and other classes that declare the same canonical included
+// ---------------------------------------------------------------------------
+
+describe('A pin applies to every tool its selector dispatches to', () => {
+  it('excludes an overload variant of a pinned selector', async () => {
+    const embedder = new ScriptedEmbedder({ 'move money to bob': axis(0) });
+    const runtime = new ToolRuntime(new MemoryVectorIndex(), embedder, {
+      intentPins: [{ canonical: 'bank.transfer', policy: 'exact', aliases: ['transfer money'] }],
+    });
+    const ran: string[] = [];
+    const bank = new ToolClass('bank');
+    runtime.registerClass(bank);
+    const sel = runtime.selectorTable.register(toward(0, 0.97, 1), 'bank.transfer');
+    runtime.addOverload(bank, sel, createSignature([param('to', 0, SCType.string(), true)]), localIMP('bank', 'transfer', ran));
+    runtime.addOverload(
+      bank,
+      sel,
+      createSignature([param('to', 0, SCType.string(), true), param('amount', 1, SCType.number(), true)]),
+      localIMP('bank', 'transfer_amount', ran),
+    );
+
+    const result = await runtime.dispatch('move money to bob', { to: 'bob', amount: 100 });
+
+    expect(ran).toEqual([]);
+    expect(result.metadata!.outcome).not.toBe('resolved');
+    expect(proofOf(result).candidates).toContainEqual(expect.objectContaining({ toolId: 'bank/transfer_amount', excluded: 'pin-exact-required' }));
+    expect(runtime.context.isPinnedTool('bank/transfer_amount')).toBe(true);
+
+    // The pinned phrase still dispatches.
+    await runtime.dispatch('transfer money', { to: 'bob' });
+    expect(ran).toEqual(['bank/transfer']);
+  });
+
+  it('excludes every class that declares a pinned selector, not only the first', async () => {
+    const embedder = new ScriptedEmbedder({ 'move money to bob': axis(0) });
+    const runtime = new ToolRuntime(new MemoryVectorIndex(), embedder, {
+      intentPins: [{ canonical: 'payments.transfer', policy: 'exact' }],
+    });
+    const ran: string[] = [];
+    const sel = runtime.selectorTable.register(toward(0, 0.97, 1), 'payments.transfer');
+    for (const name of ['bankA', 'bankB']) {
+      const cls = new ToolClass(name);
+      cls.addMethod(sel, localIMP(name, 'transfer', ran));
+      runtime.registerClass(cls);
+    }
+
+    const result = await runtime.dispatch('move money to bob', {});
+
+    expect(ran).toEqual([]);
+    const excluded = proofOf(result).candidates.filter(c => c.excluded === 'pin-exact-required').map(c => c.toolId).sort();
+    expect(excluded).toEqual(['bankA/transfer', 'bankB/transfer']);
+  });
+
+  it("applies an 'elevated' pin to an overload variant", async () => {
+    const embedder = new ScriptedEmbedder({ 'move money to bob': toward(0, 0.9, 2) });
+    const runtime = new ToolRuntime(new MemoryVectorIndex(), embedder, {
+      llmClient: approve,
+      intentPins: [{ canonical: 'bank.transfer', policy: 'elevated', threshold: 0.98 }],
+    });
+    const ran: string[] = [];
+    const bank = new ToolClass('bank');
+    runtime.registerClass(bank);
+    const sel = runtime.selectorTable.register(axis(0), 'bank.transfer');
+    runtime.addOverload(bank, sel, createSignature([param('to', 0, SCType.string(), true)]), localIMP('bank', 'transfer', ran));
+    runtime.addOverload(
+      bank,
+      sel,
+      createSignature([param('to', 0, SCType.string(), true), param('amount', 1, SCType.number(), true)]),
+      localIMP('bank', 'transfer_amount', ran),
+    );
+
+    const result = await runtime.dispatch('move money to bob', { to: 'bob', amount: 100 });
+
+    expect(ran).toEqual([]);
+    expect(proofOf(result).candidates).toContainEqual(expect.objectContaining({ toolId: 'bank/transfer_amount', excluded: 'pin-elevated-required' }));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Review: a refinement choice teaches the tool the user picked, not the
+// selector's default tool
+// ---------------------------------------------------------------------------
+
+describe('resolveRefinement learns the chosen tool', () => {
+  function archiveRuntime() {
+    const embedder = new ScriptedEmbedder({ 'archive the logs': toward(0, 0.8, 1) });
+    const runtime = new ToolRuntime(new MemoryVectorIndex(), embedder);
+    const ran: string[] = [];
+    const fs = new ToolClass('fs');
+    runtime.registerClass(fs);
+    const sel = runtime.selectorTable.register(axis(0), 'fs.archive');
+    runtime.addOverload(fs, sel, createSignature([param('path', 0, SCType.string(), true)]), localIMP('fs', 'archive', ran));
+    runtime.addOverload(
+      fs,
+      sel,
+      createSignature([param('path', 0, SCType.string(), true), param('compress', 1, SCType.boolean(), true)]),
+      localIMP('fs', 'archive_compressed', ran),
+    );
+    return { runtime, ran };
+  }
+
+  it('runs the chosen overload again when the same intent recurs', async () => {
+    const { runtime, ran } = archiveRuntime();
+    const args = { path: 'logs', compress: true };
+
+    const first = await runtime.dispatch('archive the logs', args);
+    expect(first.metadata!.outcome).toBe('needs-disambiguation');
+    const option = first.refinement!.options.find(o => o.toolId === 'fs/archive_compressed')!;
+    expect(option.selectorId).toBe('fs.archive');
+
+    await runtime.resolveRefinement('archive the logs', option, args);
+    expect(ran).toEqual(['fs/archive_compressed']);
+
+    const again = await runtime.dispatch('archive the logs', args);
+    expect(ran).toEqual(['fs/archive_compressed', 'fs/archive_compressed']);
+    expect(proofOf(again).decision).toBe('learned-exact');
+    expect(runtime.context.semanticMap.entries()[0]).toMatchObject({ selectorId: 'fs.archive', toolId: 'fs/archive_compressed' });
+  });
+
+  it('keeps the learned tool across a semantic map round trip', async () => {
+    const { runtime, ran } = archiveRuntime();
+    await runtime.resolveRefinement('archive the logs', { selectorId: 'fs.archive', toolId: 'fs/archive_compressed' }, { path: 'logs', compress: true });
+    const restored = SemanticMap.fromJSON(runtime.context.semanticMap.toJSON());
+    expect(restored.lookupExact('archive the logs')).toMatchObject({ toolId: 'fs/archive_compressed' });
+    expect(ran).toEqual(['fs/archive_compressed']);
+  });
+
+  it('does not learn a tool that the chosen selector does not dispatch to', async () => {
+    const { runtime, ran } = archiveRuntime();
+    const other = new ToolClass('net');
+    other.addMethod(runtime.selectorTable.register(axis(5), 'net.upload'), localIMP('net', 'upload', ran));
+    runtime.registerClass(other);
+
+    await runtime.resolveRefinement('archive the logs', { selectorId: 'fs.archive', toolId: 'net/upload' }, {});
+
+    expect(ran).toEqual(['net/upload']);
+    expect(runtime.context.semanticMap.size).toBe(0);
   });
 });
 

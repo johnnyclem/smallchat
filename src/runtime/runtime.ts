@@ -365,9 +365,13 @@ export class ToolRuntime {
    * option back here. This does two things at once:
    *
    *   1. Executes exactly the chosen tool (by id) — the user named it.
-   *   2. Reinforces the semantic map — so the exact intent resolves instantly
-   *      next time, and *similar* intents get a confidence boost toward the same
-   *      selector. (A learned preference never authorizes a pinned or
+   *   2. Reinforces the semantic map — so the exact intent resolves to the
+   *      same tool next time, and *similar* intents get a confidence boost
+   *      toward it. The preference records the chosen tool id, not only the
+   *      selector: a selector with overload variants (or declared by several
+   *      classes) is learned as the variant the user picked. Nothing is
+   *      learned when the chosen selector does not dispatch to the chosen
+   *      tool. (A learned preference never authorizes a pinned or
    *      destructive tool on its own; see runtime/policy.ts.)
    *
    * `choice` is a canonical selector id (as carried on
@@ -387,7 +391,9 @@ export class ToolRuntime {
     const toolId = (typeof choice === 'string' ? undefined : choice.toolId) ?? owner?.toolId;
 
     if (toolId) {
-      if (selectorId) await this.context.reinforceRefinement(originalIntent, selectorId);
+      if (selectorId && this.context.selectorReachesTool(selectorId, toolId)) {
+        await this.context.reinforceRefinement(originalIntent, selectorId, toolId);
+      }
       return dispatchById(this.context, toolId, args ?? {});
     }
 
@@ -398,10 +404,12 @@ export class ToolRuntime {
   /**
    * Directly reinforce a learned dispatch preference without executing it.
    * Lower-level than `resolveRefinement`; use when the host has already run the
-   * tool and only wants to record the mapping.
+   * tool and only wants to record the mapping. Pass `toolId` when the selector
+   * dispatches to more than one tool (overloads, several classes); without it
+   * the preference stands for the selector's default tool.
    */
-  reinforceRefinement(originalIntent: string, selectorId: string): Promise<LearnedPreference> {
-    return this.context.reinforceRefinement(originalIntent, selectorId);
+  reinforceRefinement(originalIntent: string, selectorId: string, toolId?: string): Promise<LearnedPreference> {
+    return this.context.reinforceRefinement(originalIntent, selectorId, toolId);
   }
 
   /**

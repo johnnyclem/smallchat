@@ -52,6 +52,14 @@ export interface LearnedPreference {
   vector: Float32Array;
   /** Canonical selector id the user chose (the vector-index / dispatch id) */
   selectorId: string;
+  /**
+   * Canonical tool id the user chose through that selector, when known. A
+   * selector can dispatch to several tools (overload variants, or several
+   * classes declaring it); this is the one the preference stands for.
+   * Absent on preferences recorded without it (they stand for the
+   * selector's default tool).
+   */
+  toolId?: string;
   /** How many times this exact mapping has been affirmed */
   reinforcements: number;
   /** First time this mapping was recorded (epoch ms) */
@@ -122,7 +130,7 @@ const DEFAULTS: Required<SemanticMapOptions> = {
 // ---------------------------------------------------------------------------
 
 export class SemanticMap {
-  /** Learned preferences keyed by SemanticMap.key(intentKey, selectorId, exact) */
+  /** Learned preferences keyed by SemanticMap.key(intentKey, selectorId, exact, toolId) */
   private prefs: Map<string, LearnedPreference> = new Map();
   /** Fast exact-lookup index: intentKey → key with the most reinforcements */
   private exactIndex: Map<string, string> = new Map();
@@ -147,26 +155,29 @@ export class SemanticMap {
     return this.prefs.size;
   }
 
-  private static key(intent: string, selectorId: string, exact = true): string {
-    return `${exact ? 'k' : 'v1'}\u0000${intent}\u0000${selectorId}`;
+  private static key(intent: string, selectorId: string, exact = true, toolId?: string): string {
+    const base = `${exact ? 'k' : 'v1'}\u0000${intent}\u0000${selectorId}`;
+    return toolId === undefined ? base : `${base}\u0000${toolId}`;
   }
 
   /**
    * Reinforce a mapping from a disambiguated intent to the selector the user
-   * chose. Idempotent per (intent, selector): repeated calls strengthen the
-   * mapping (higher reinforcement count → larger future boost) rather than
-   * duplicating it. `intent` is the intent text; it is normalized with
-   * intentKey(), so only the same text (up to case, NFC form and
-   * whitespace) matches it exactly later.
+   * chose (and, when given, the tool they chose through it). Idempotent per
+   * (intent, selector, tool): repeated calls strengthen the mapping (higher
+   * reinforcement count → larger future boost) rather than duplicating it.
+   * `intent` is the intent text; it is normalized with intentKey(), so only
+   * the same text (up to case, NFC form and whitespace) matches it exactly
+   * later.
    */
   reinforce(
     intent: string,
     vector: Float32Array,
     selectorId: string,
     now: number = Date.now(),
+    toolId?: string,
   ): LearnedPreference {
     const ikey = intentKey(intent);
-    const key = SemanticMap.key(ikey, selectorId);
+    const key = SemanticMap.key(ikey, selectorId, true, toolId);
     const existing = this.prefs.get(key);
 
     let pref: LearnedPreference;
@@ -185,6 +196,7 @@ export class SemanticMap {
         exact: true,
         vector,
         selectorId,
+        ...(toolId !== undefined ? { toolId } : {}),
         reinforcements: 1,
         firstSeen: now,
         lastSeen: now,
@@ -252,7 +264,8 @@ export class SemanticMap {
   /** Deterministic tie order for similar-intent lookups. */
   private static before(a: LearnedPreference, b: LearnedPreference): boolean {
     if (a.selectorId !== b.selectorId) return a.selectorId < b.selectorId;
-    return a.intentKey < b.intentKey;
+    if (a.intentKey !== b.intentKey) return a.intentKey < b.intentKey;
+    return (a.toolId ?? '') < (b.toolId ?? '');
   }
 
   /** Every learned preference (most-recently-used last). */
@@ -278,6 +291,7 @@ export class SemanticMap {
         ...(p.exact ? {} : { exact: false as const }),
         vector: Array.from(p.vector),
         selectorId: p.selectorId,
+        ...(p.toolId !== undefined ? { toolId: p.toolId } : {}),
         reinforcements: p.reinforcements,
         firstSeen: p.firstSeen,
         lastSeen: p.lastSeen,
@@ -296,16 +310,18 @@ export class SemanticMap {
       const legacy = data.version === 1 || !('intentKey' in p);
       const exact = !legacy && (p as SerializedPreference).exact !== false;
       const ikey = legacy ? (p as { intentCanonical: string }).intentCanonical : (p as SerializedPreference).intentKey;
+      const toolId = legacy ? undefined : (p as SerializedPreference).toolId;
       const pref: LearnedPreference = {
         intentKey: ikey,
         exact,
         vector: Float32Array.from(p.vector),
         selectorId: p.selectorId,
+        ...(typeof toolId === 'string' ? { toolId } : {}),
         reinforcements: p.reinforcements,
         firstSeen: p.firstSeen,
         lastSeen: p.lastSeen,
       };
-      map.prefs.set(SemanticMap.key(ikey, p.selectorId, exact), pref);
+      map.prefs.set(SemanticMap.key(ikey, p.selectorId, exact, pref.toolId), pref);
     }
     for (const pref of map.prefs.values()) {
       if (pref.exact) map.reindexExact(pref.intentKey);
@@ -357,6 +373,8 @@ export interface SerializedPreference {
   exact?: false;
   vector: number[];
   selectorId: string;
+  /** Tool chosen through the selector (absent: the selector's default tool) */
+  toolId?: string;
   reinforcements: number;
   firstSeen: number;
   lastSeen: number;

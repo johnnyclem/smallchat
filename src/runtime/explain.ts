@@ -66,11 +66,11 @@ export async function explainResolution(context: DispatchContext, resolution: Re
     const tool = context.getTool(c.toolId);
     const annotations = tool?.imp.annotations ?? null;
     const destructive = isDestructive(annotations ?? undefined, context.policyOptions);
-    const pinned = context.isPinnedTool(c.toolId);
+    const pinned = context.isPinnedTool(c.toolId, c.selector);
     const isEligible = c.excluded === undefined && eligible.has(c.toolId);
     let verdict: PolicyVerdict | null = null;
     if (isEligible && tool) {
-      const pins = await context.pinStatesFor(c.toolId, resolution.intent, ownSimilarity);
+      const pins = await context.pinStatesFor(c.toolId, resolution.intent, ownSimilarity, c.selector);
       const llmApproved = proof.chosen === c.toolId && proof.decision === 'llm-verified';
       verdict = evaluateDispatchPolicy(
         { mode: 'intent', toolId: c.toolId, imp: tool.imp, source: c.source, score: c.score, similarity: c.similarity, llmApproved, pins },
