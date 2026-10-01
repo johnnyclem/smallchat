@@ -28,7 +28,7 @@ smallchat models LLM tool use as message dispatch. The LLM expresses intent. The
 │  protocols · categories · superclass   │
 ├─────────────────────────────────────────┤
 │     SelectorTable · VectorIndex        │
-│  semantic interning · cosine lookup    │
+│  tool selectors · cosine lookup        │
 └─────────────────────────────────────────┘
 ```
 
@@ -36,7 +36,7 @@ Each layer has a focused responsibility with no upward dependencies.
 
 ### Selector Table (`src/core/selector-table.ts`)
 
-Semantic interning of tool intents — analogous to `sel_registerName`. Natural-language intents are embedded into vectors and deduplicated so that `"search for code"` and `"find code"` resolve to the same canonical selector.
+The table of compiled tool (and alias) selectors and the vector index resolution searches — analogous to `sel_registerName`. It holds tools only: an intent is embedded on its own and never added to the table, so what an intent resolves to cannot depend on which intents the process saw before. `"search for code"` and `"find code"` are two intents that may resolve to the same tool; they never become one selector.
 
 ### Resolution Cache (`src/core/resolution-cache.ts`)
 
@@ -44,7 +44,7 @@ LRU cache for resolved dispatches — analogous to `objc_msgSend`'s inline cache
 
 ### ToolClass (`src/core/tool-class.ts`)
 
-Groups related tools under a single provider with a dispatch table (`selector → IMP`), superclass chains for fallback resolution, and protocol conformance.
+Groups related tools under a single provider with a dispatch table (`selector → IMP`), an optional superclass whose selectors it inherits (ranked like any other candidate), and protocol conformance.
 
 ### Overload Table (`src/core/overload-table.ts`)
 
@@ -99,25 +99,26 @@ Tool definitions (JSON/YAML)
 
 ## Streaming architecture
 
-smallchat opens the actual provider stream. Dispatch resolves the intent once, then hands control straight to the LLM provider (OpenAI or Anthropic). Tokens arrive the moment they are generated. No waiting for the full result.
+Streaming is dispatch, one event at a time. `smallchat_dispatchStream` (`runtime.dispatchStream`) resolves the intent once, under the same dispatch policy as `dispatch()`, then runs the chosen tool and yields its events: `resolving` → `tool-start` → `chunk`* → `done`. When nothing runs, the stream is `resolving` → `done` with an `isError` result naming the outcome. When the tool's transport streams tokens (`supportsInference` / `executeInference`), `inference-delta` events carry them before the final `chunk`. smallchat calls no LLM provider itself: every delta comes from the tool that runs.
 
 <Tabs groupId="language">
 <TabItem value="typescript" label="TypeScript">
 
 ```typescript
-async function* smallchat_dispatchStream(context, intent, args) {
+// Simplified from src/runtime/dispatch.ts
+async function* smallchat_dispatchStream(context, intent, args, options) {
   yield { type: 'resolving', intent };
 
-  // Resolve once — semantic match or cache hit; a refusal runs nothing
-  const resolved = await resolveIntent(context, intent);
-  yield { type: 'tool-start', tool: resolved.name };
-
-  // Open the native provider stream
-  for await (const delta of resolved.implementation.stream(args)) {
-    yield { type: 'chunk', content: delta };
+  // Resolve once (pins, cache, vector search, policy); a refusal runs nothing
+  const resolution = await resolveIntent(context, intent, { args });
+  if (resolution.outcome !== 'resolved') {
+    yield { type: 'done', result: notRun(resolution) }; // isError, metadata.outcome
+    return;
   }
+  yield { type: 'tool-start', toolId: resolution.chosen, confidence: resolution.confidence };
 
-  yield { type: 'done' };
+  // The tool's own stream: token deltas if its transport has them, else chunks
+  for await (const event of runChosenTool(resolution, args, options)) yield event;
 }
 ```
 
@@ -151,7 +152,7 @@ func smallchatDispatchStream(
 </TabItem>
 </Tabs>
 
-One generator. Real tokens. No middleware.
+One generator, the same policy as `dispatch()`, no middleware.
 
 ## Design philosophy
 
@@ -189,7 +190,7 @@ The built-in `MCPServer` runs on the official MCP SDK, which negotiates the prot
 | `src/index.ts` | Public API exports |
 | `src/runtime/runtime.ts` | ToolRuntime — public API |
 | `src/runtime/dispatch.ts` | `toolkit_dispatch`, `smallchat_dispatchStream` |
-| `src/core/selector-table.ts` | Semantic interning |
+| `src/core/selector-table.ts` | Tool selectors and vector search |
 | `src/core/resolution-cache.ts` | LRU dispatch cache |
 | `src/core/tool-class.ts` | ToolClass, ToolProxy |
 | `src/core/overload-table.ts` | Multi-signature dispatch |

@@ -12,37 +12,26 @@ A single `ToolSelector` can map to multiple implementations with different param
 
 ## Multiple signatures per selector
 
-When multiple tools from different providers share a selector (e.g. both `github.search_code` and `gitlab.search_code` resolve to the "search code" selector), the `OverloadTable` holds both implementations:
+A `ToolClass` can register several implementations under one of its selectors, each with its own parameter signature (`addOverload`); the class keeps them in an `OverloadTable` for that selector. The compiler never shares a selector between distinct tools, so overloads are registered programmatically, never formed from two providers whose tools happen to embed alike:
 
 <Tabs groupId="language">
 <TabItem value="typescript" label="TypeScript">
 
 ```typescript
-import { OverloadTable } from '@smallchat/core';
+import { ToolClass, SCType, createSignature, param } from '@smallchat/core';
 
-const table = new OverloadTable();
+// `selector` is the class's "search code" selector; the two IMPs run the searches.
+const codeSearch = new ToolClass('code-search');
 
-table.register(selector, {
-  signature: {
-    parameters: [
-      { name: 'query', type: SCType.String },
-      { name: 'repo', type: SCType.String },
-    ],
-    returnType: SCType.Array,
-  },
-  implementation: githubSearchImpl,
-});
+codeSearch.addOverload(selector, createSignature([
+  param('query', 0, SCType.string()),
+  param('repo', 1, SCType.string()),
+]), githubSearchImp, { originalToolName: 'search_in_repo' });
 
-table.register(selector, {
-  signature: {
-    parameters: [
-      { name: 'query', type: SCType.String },
-      { name: 'projectId', type: SCType.Number },
-    ],
-    returnType: SCType.Array,
-  },
-  implementation: gitlabSearchImpl,
-});
+codeSearch.addOverload(selector, createSignature([
+  param('query', 0, SCType.string()),
+  param('projectId', 1, SCType.number()),
+]), gitlabSearchImp, { originalToolName: 'search_in_project' });
 ```
 
 </TabItem>
@@ -119,7 +108,7 @@ Within the same priority tier, arity (number of arguments) acts as a tiebreaker 
 
 ## `OverloadAmbiguityError`
 
-If two signatures score identically and neither is more specific, an `OverloadAmbiguityError` is thrown:
+If two signatures score identically and neither wins the tie-break (higher arity, then an overload you registered over a compiler-generated one), resolving the overload throws `OverloadAmbiguityError`. `OverloadTable.resolve()` and `ToolClass.resolveSelectorWithNamedArgs()` throw it when you call them. Dispatch does not: an ambiguous overload is left out of the candidates (the proof records an `overload` step saying so), so the intent resolves to another candidate or comes back `needs-disambiguation` or `unresolved`.
 
 <Tabs groupId="language">
 <TabItem value="typescript" label="TypeScript">
@@ -128,11 +117,11 @@ If two signatures score identically and neither is more specific, an `OverloadAm
 import { OverloadAmbiguityError } from '@smallchat/core';
 
 try {
-  await runtime.dispatch('search for code', args);
+  codeSearch.resolveSelectorWithNamedArgs(selector, { query: 'parser' });
 } catch (e) {
   if (e instanceof OverloadAmbiguityError) {
-    // e.candidates — the ambiguous implementations
-    console.error('Ambiguous overload:', e.candidates);
+    // e.candidates — the overload entries that matched equally
+    console.error('Ambiguous overload:', e.candidates.map((c) => c.signature.signatureKey));
   }
 }
 ```
@@ -158,7 +147,7 @@ Resolve ambiguity by making signatures more specific, or by adding a discriminat
 
 ## Semantic overloads (compiler-generated)
 
-The compiler can automatically generate semantic overload groups. When two tools have description similarity above `overloadThreshold`, the compiler groups them under one selector and creates overload entries for each:
+With `generateSemanticOverloads`, the compiler also reports groups of similar tools with different argument signatures (similarity at or above `semanticOverloadThreshold`, default 0.82). In 1.0 these groups are a report: they are listed in `CompilationResult.semanticOverloads` and exempt from duplicate detection, but every tool keeps its own selector, and 1.0 artifacts carry no overload tables, so dispatch does not use them.
 
 <Tabs groupId="language">
 <TabItem value="typescript" label="TypeScript">
@@ -166,12 +155,13 @@ The compiler can automatically generate semantic overload groups. When two tools
 ```typescript
 import { ToolCompiler } from '@smallchat/core';
 
-const compiler = new ToolCompiler(embedder, vectorIndex);
-const result = await compiler.compile(manifests, {
-  overloadThreshold: 0.88,  // group tools with similarity >= 0.88
+const compiler = new ToolCompiler(embedder, vectorIndex, {
+  generateSemanticOverloads: true,
+  semanticOverloadThreshold: 0.82,
 });
+const result = await compiler.compile(manifests);
 
-// result.overloadGroups lists all auto-generated groups
+for (const group of result.semanticOverloads) console.log(group);
 ```
 
 </TabItem>

@@ -317,7 +317,7 @@ When compiling from an MCP config or auto-detecting, smallchat spawns each serve
 
 ## MCP Server
 
-`npx @smallchat/core serve --source tools.toolkit.json` serves a compiled toolkit as one MCP server built on the official SDK (`@modelcontextprotocol/sdk`). It runs over stdio by default, or Streamable HTTP at `/mcp` with `--http`. It forwards every `tools/call`, by exact name, to the upstream MCP server that owns the tool, using the provider launch specs recorded at compile time. See [`serve`](../packages/docs/docs/cli/serve.md) for every option.
+`npx -y @smallchat/core serve --source tools.toolkit.json` serves a compiled toolkit as one MCP server built on the official SDK (`@modelcontextprotocol/sdk`). It runs over stdio by default, or Streamable HTTP at `/mcp` with `--http`. It forwards every `tools/call`, by exact name, to the upstream MCP server that owns the tool, using the provider launch specs recorded at compile time. See [`serve`](../packages/docs/docs/cli/serve.md) for every option.
 
 | Capability | Description |
 |------------|-------------|
@@ -397,20 +397,20 @@ await bridge.terminate();
 
 | Command | Description |
 |---------|-------------|
-| `npx @smallchat/core compile` | Parse manifests, embed selectors, link dispatch tables → `.toolkit.json` |
-| `npx @smallchat/core serve` | Serve a toolkit as one MCP server (stdio, or Streamable HTTP with `--http`); `--decision-log` appends every resolution and call to a hash-chained JSONL log |
-| `npx @smallchat/core resolve` | Test dispatch resolution against a compiled artifact; prints the runtime's decision and proof digest |
-| `npx @smallchat/core explain` | Candidate table, tiers, policy verdicts and proof digest for one intent |
-| `npx @smallchat/core replay` | Check golden traces or a decision log against an artifact (exit 0 pass / 1 mismatch / 2 could not run) |
-| `npx @smallchat/core inspect` | Examine providers, selectors, and protocols in a compiled artifact |
-| `npx @smallchat/core doctor` | Check environment (ONNX model, dependencies) and, with `--artifact` (default `./tools.toolkit.json` when present), artifact ↔ embedder ↔ index compatibility and near-duplicate tools; `--mcp <url>` / `--mcp-source <artifact>` run the MCP conformance checks |
-| `npx @smallchat/core init` | Scaffold a new project from `basic`, `mcp-server`, or `agent` templates |
-| `npx @smallchat/core docs` | Generate Markdown documentation from a compiled artifact |
-| `npx @smallchat/core repl` | Interactive shell for testing resolution with `:help`, `:tools`, `:stats` |
+| `npx -y @smallchat/core compile` | Parse manifests, embed selectors, link dispatch tables → `.toolkit.json` |
+| `npx -y @smallchat/core serve` | Serve a toolkit as one MCP server (stdio, or Streamable HTTP with `--http`); `--decision-log` appends every resolution and call to a hash-chained JSONL log |
+| `npx -y @smallchat/core resolve` | Test dispatch resolution against a compiled artifact; prints the runtime's decision and proof digest |
+| `npx -y @smallchat/core explain` | Candidate table, tiers, policy verdicts and proof digest for one intent |
+| `npx -y @smallchat/core replay` | Check golden traces or a decision log against an artifact (exit 0 pass / 1 mismatch / 2 could not run) |
+| `npx -y @smallchat/core inspect` | Examine providers, selectors, and protocols in a compiled artifact |
+| `npx -y @smallchat/core doctor` | Check environment (ONNX model, dependencies) and, with `--artifact` (default `./tools.toolkit.json` when present), artifact ↔ embedder ↔ index compatibility and near-duplicate tools; `--mcp <url>` / `--mcp-source <artifact>` run the MCP conformance checks |
+| `npx -y @smallchat/core init` | Scaffold a new project from `basic`, `mcp-server`, or `agent` templates |
+| `npx -y @smallchat/core docs` | Generate Markdown documentation from a compiled artifact |
+| `npx -y @smallchat/core repl` | Interactive shell for testing resolution with `:help`, `:tools`, `:stats` |
 
 ## Example Manifests
 
-The `examples/` directory contains 32 MCP server manifest files for popular services, ready to use with `npx @smallchat/core compile`:
+The `examples/` directory contains 32 MCP server manifest files for popular services, ready to use with `npx -y @smallchat/core compile`:
 
 | Category | Manifests |
 |----------|-----------|

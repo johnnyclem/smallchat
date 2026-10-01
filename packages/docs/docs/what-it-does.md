@@ -118,21 +118,21 @@ Arguments passed to tools are wrapped in the SCObject type hierarchy, which mirr
 
 ```
 SCObject
-├── SCSelector    — intent fingerprints
-├── SCData        — raw binary / string data
+├── SCSelector    — a compiled tool selector, passed as a value
+├── SCData        — a JSON object
 ├── SCToolReference — reference to another tool
 ├── SCArray       — ordered collection
-└── SCDictionary  — key-value collection
+└── SCDictionary  — key-value collection of SCObjects
 ```
 
-All plain JavaScript values are auto-wrapped by `wrapValue()` before dispatch and unwrapped by `unwrapValue()` after. You can bypass auto-wrapping by passing SCObject instances directly.
+Overload matching reads plain JSON as its wrapped form (`wrapValue()`: an object is `SCData`, an array `SCArray`), so a signature can ask for `SCData`. Arguments that are SCObject instances are unwrapped (`unwrapValue()`) before validation and execution: a tool always receives plain JSON.
 
 ```typescript
-import { SCArray, SCDictionary, wrapValue } from '@smallchat/core';
+import { SCData } from '@smallchat/core';
 
-const args = new SCDictionary({
-  query: wrapValue('typescript generics'),
-  language: wrapValue('typescript'),
+await runtime.dispatch('search code', {
+  query: 'typescript generics',
+  filters: new SCData({ language: 'typescript' }), // the tool receives { language: 'typescript' }
 });
 ```
 

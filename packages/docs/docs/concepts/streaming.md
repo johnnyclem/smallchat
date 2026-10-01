@@ -8,13 +8,13 @@ import TabItem from '@theme/TabItem';
 
 # Streaming
 
-smallchat opens the actual provider stream. Dispatch resolves the intent once, then hands control straight to the LLM provider. Tokens arrive the moment they are generated. No waiting for the full result.
+Streaming is dispatch, one event at a time: the intent is resolved once, under the same dispatch policy as `dispatch()`, then the chosen tool runs and its output arrives as events. When the tool's transport streams tokens (`ToolTransport.supportsInference` / `executeInference`, e.g. an upstream tool that streams), they arrive as they are produced; otherwise the result comes as a chunk. smallchat calls no LLM provider itself: every token comes from the tool that runs.
 
 ## The three tiers
 
 | Tier | Method | Granularity | Use case |
 |------|--------|-------------|----------|
-| 1 | `inferenceStream` | Token-level deltas | Streaming LLM inference directly to the UI |
+| 1 | `inferenceStream` | Text: the tool's token deltas, or its result as one string | Streaming a tool's text straight to the UI |
 | 2 | `dispatchStream` | Chunk-level results | Tool results streamed in logical chunks |
 | 3 | `dispatch` | Completed result | Synchronous-style, wait for full output |
 

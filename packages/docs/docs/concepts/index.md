@@ -23,7 +23,7 @@ This section documents the internals of smallchat for engineers who want to unde
 │  protocols · categories · superclass   │
 ├─────────────────────────────────────────┤
 │     SelectorTable · VectorIndex        │
-│  semantic interning · cosine lookup    │
+│  tool selectors · cosine lookup        │
 └─────────────────────────────────────────┘
 ```
 
@@ -34,14 +34,14 @@ Each layer has a focused responsibility:
 | `ToolRuntime` | Public API, configuration, lifecycle |
 | `DispatchContext` | Per-dispatch state: selector table, cache, overloads, fallback chain |
 | `ToolClass` | Provider grouping, dispatch table, protocol conformance |
-| `SelectorTable` | Semantic interning of intent strings |
+| `SelectorTable` | Compiled tool selectors and vector search (intents are never added) |
 | `VectorIndex` | Cosine similarity search |
 | `ResolutionCache` | LRU cache for resolved dispatches |
 | `OverloadTable` | Multiple signatures per selector |
 
 ## What is covered in this section
 
-- **[Selector Table](./selector-table)** — how intent strings are deduplicated and fingerprinted
+- **[Selector Table](./selector-table)** — how tool selectors are embedded and searched, and how intents are identified
 - **[Dispatch](./dispatch)** — the hot path: `toolkit_dispatch` and `smallchat_dispatchStream`
 - **[ToolClass & ToolProxy](./tool-class)** — provider grouping, superclass chains, lazy loading
 - **[Resolution Cache](./resolution-cache)** — LRU cache mechanics and version tagging

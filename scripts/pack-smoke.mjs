@@ -18,14 +18,17 @@
  * packed @smallchat/react (run `npm run build:packages` first) typechecks
  * against React 19's types with skipLibCheck off. Each `smallchat init`
  * template builds with tsc against the installed package and makes one
- * successful call (the mcp-server template through an MCP client).
+ * successful call (the mcp-server template through an MCP client). Every
+ * TypeScript block in the docs that imports @smallchat/* typechecks against
+ * the installed package (scripts/doc-snippets.mjs).
  */
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { SNIPPET_PRELUDE, checkSnippets, extractSnippets } from './doc-snippets.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf-8'));
@@ -95,6 +98,31 @@ try {
     files: ['react-consumer.ts'],
   }));
   execFileSync(process.execPath, [join(ROOT, 'node_modules', 'typescript', 'bin', 'tsc'), '-p', join(app, 'tsconfig.react.json')], { cwd: app, stdio: 'inherit' });
+
+  // Documentation code blocks that import @smallchat/* typecheck against the
+  // installed package (scripts/doc-snippets.mjs). @smallchat/nextjs and
+  // @smallchat/testing are not installed here (nextjs peer-depends on next):
+  // their built declarations stand in.
+  const ts = (await import(pathToFileURL(join(ROOT, 'node_modules', 'typescript', 'lib', 'typescript.js')).href)).default;
+  const snippetDir = join(app, 'snippets');
+  mkdirSync(snippetDir);
+  writeFileSync(join(snippetDir, 'prelude.d.ts'), SNIPPET_PRELUDE);
+  const snippets = extractSnippets(ROOT);
+  const snippetFiles = snippets.map((snippet, i) => {
+    const file = join(snippetDir, `s${i}.${snippet.lang}`);
+    writeFileSync(file, `export {};\n${snippet.code}\n`);
+    return file;
+  });
+  const snippetErrors = checkSnippets(ts, app, [join(snippetDir, 'prelude.d.ts'), ...snippetFiles], {
+    '@smallchat/nextjs': [join(ROOT, 'packages', 'nextjs', 'dist', 'index.d.ts')],
+    '@smallchat/testing': [join(ROOT, 'packages', 'testing', 'dist', 'index.d.ts')],
+  });
+  for (const error of snippetErrors) {
+    const i = snippetFiles.indexOf(error.fileName);
+    const where = i >= 0 ? `${snippets[i].file}:${snippets[i].line + error.line - 2}` : error.fileName;
+    fail(`documentation snippet ${where}: ${error.message}`);
+  }
+  if (snippetErrors.length === 0) console.log(`pack-smoke: ${snippets.length} documentation snippets typecheck`);
 
   const version = execFileSync(process.execPath, [join(app, 'node_modules', '.bin', 'smallchat'), '--version'], { cwd: app, encoding: 'utf-8' }).trim();
   if (version !== pkg.version) fail(`smallchat --version printed ${version}, expected ${pkg.version}`);

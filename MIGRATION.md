@@ -251,6 +251,28 @@ now live in `core/proof.ts` (still exported from the package root and
 **`resolveRefinement(intent, choice)` runs the chosen tool by id.** Pass the
 option object (it carries `toolId`) or its `selectorId`.
 
+**Named-argument overload resolution changed.** `ToolClass.resolveSelectorWithNamedArgs()`
+and `OverloadTable.resolveNamed()` treat an omitted optional parameter as
+satisfied, match plain objects and arrays against `SCData` / `SCArray`
+parameters, prefer a signature that declares every provided name, and
+break ties as positional resolution does: higher arity, then an overload
+you registered over a compiler-generated one, else `OverloadAmbiguityError`.
+0.5 kept the first registered signature on a tie, so a direct call that
+quietly got the first overload can now throw `OverloadAmbiguityError`: make
+one signature more specific (or give it a discriminating parameter).
+Dispatch never throws it; it leaves an ambiguous overload out of the
+candidates (the proof records an `overload` step), so such an intent can
+now resolve to another tool or come back `needs-disambiguation`.
+
+**`canonicalJson()` and `callDigest()` refuse values that are not plain
+JSON.** A `Date`, `Map`, `Set`, typed array or class instance anywhere in
+the value throws a `TypeError`; 0.5 serialized it as `{}`, so different
+values hashed alike. Convert first (`date.toISOString()`,
+`Object.fromEntries(map)`, `Array.from(bytes)`, a plain object for a class
+instance). Dispatch applies the same rule to arguments: a call whose
+arguments are not plain JSON (after SCObject arguments are unwrapped) comes
+back `outcome: 'invalid-arguments'` and runs nothing.
+
 ## Retrieval: intent identity, determinism, feedback, rate limiting
 
 **Intents are keyed by their full text.** The cache, the semantic map and
@@ -415,6 +437,13 @@ and returns its `name`. The client then calls that name. Nothing executes
 from an intent on the MCP surface any more. When you give `MCPServer` a
 `runtimeOptions.rateLimiter`, a refused intent comes back as `outcome:
 "throttled"` with `retryAfterMs`.
+
+**Resource subscriptions are per session, by URI.** `resources/subscribe`
+and `resources/unsubscribe` take `{ uri }`, as the MCP spec defines them;
+0.5 answered `subscribe` with a `{ subscriptionId }` and required that id to
+unsubscribe. Send `{ uri }` to both. Subscribing twice is a no-op,
+notifications go only to the session that subscribed, and its
+subscriptions end when the session closes.
 
 **Read smallchat data from `_meta`.** Results no longer have top-level
 `confidence`, `refinement` or `rtkSavedPct`. Read

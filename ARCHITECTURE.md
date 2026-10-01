@@ -86,65 +86,49 @@ NSObject-inspired base class for typed parameter passing. Enables runtime type c
 
 ## Streaming Guide
 
-smallchat now opens the actual provider stream. Dispatch resolves the intent once, then hands control straight to the LLM provider (OpenAI or Anthropic). Tokens arrive the moment they are generated. No waiting for the full result. The new `smallchat_dispatchStream` generator yields real deltas in real time.
-
-### The `dispatchStream` generator
+Streaming is dispatch, one event at a time. `runtime.dispatchStream(intent, args, options)` resolves the intent once, under the same dispatch policy as `dispatch()`, then runs the chosen tool and yields `DispatchEvent`s: `resolving` → `tool-start` → `chunk`* → `done`. When nothing runs (needs-disambiguation, unresolved), the stream is `resolving` → `done` with an `isError` result whose metadata names the outcome. When the tool's transport streams tokens (`ToolTransport.supportsInference` / `executeInference`), `inference-delta` events carry them before the final `chunk`. smallchat calls no LLM provider itself: every delta comes from the tool that runs.
 
 ```typescript
-import { ToolRuntime } from "@smallchat/core";
+import { loadRuntime } from '@smallchat/core';
 
-const runtime = new ToolRuntime(/* config with provider and model */);
+const { runtime, upstreams } = await loadRuntime('tools.toolkit.json');
 
-async function* smallchat_dispatchStream(
-  intent: string,
-  args?: Record<string, unknown>,
-) {
-  // Resolve once (semantic match or cache hit; a refusal runs nothing)
-  yield { type: "tool-start", intent };
-
-  // Open the native provider stream
-  const stream = await runtime.openProviderStream(intent, args);
-
-  for await (const delta of stream) {
-    yield { type: "token", content: delta };
-  }
-
-  yield { type: "done" };
-}
-```
-
-### Consuming the stream
-
-```typescript
-for await (const event of smallchat_dispatchStream("find flights", { to: "NYC" })) {
-  if (event.type === "token") {
-    ui.append(event.content);
+for await (const event of runtime.dispatchStream('find flights', { to: 'NYC' })) {
+  switch (event.type) {
+    case 'tool-start':
+      console.log(`running ${event.toolId}`);
+      break;
+    case 'inference-delta':
+      process.stdout.write(event.delta.text);
+      break;
+    case 'chunk':
+      console.log(event.content);
+      break;
+    case 'done':
+      if (event.result.isError) console.log('not run:', event.result.metadata?.outcome);
+      break;
+    case 'error':
+      console.error(event.error);
+      break;
   }
 }
+await upstreams.close();
 ```
 
-That is it. One generator. Real tokens. No middleware. No callback hell.
-
-### Why this beats a framework
-
-| Concern | LangChain | smallchat |
-|---|---|---|
-| Streaming | `CallbackManager` + custom piping | `for await` over native provider deltas |
-| Tool dispatch | Chain/Agent hierarchy | One `smallchat_dispatchStream` call |
-| Caching | External wrappers | Built-in resolution cache |
-| Extensibility | Subclass and register | `toolClass.addMethod` or swizzle |
-| Bundle size | Multiple adapter packages | Single package, zero dependencies |
-
-The runtime gives you primitives. You compose them with the language itself.
+`runtime.inferenceStream(intent, args)` yields text only: the deltas, or the final chunk as one string when the tool does not stream. `runtime.dispatchStreamById(toolId, args)` streams one tool by its exact id, without resolving anything. `smallchat_dispatchStream(runtime.context, intent, args)` is the same generator as a function.
 
 ### Nested streaming
 
 ```typescript
 async function* streamWithContext(intent: string) {
-  const prefs = await runtime.dispatch("get user preferences");
-  yield* smallchat_dispatchStream(intent, { preferences: prefs.output });
+  const prefs = await runtime.dispatch('get user preferences');
+  yield* runtime.dispatchStream(intent, { preferences: prefs.content });
 }
 ```
+
+### Footprint
+
+`@smallchat/core` is one package with eight runtime dependencies: the MCP SDK (`@modelcontextprotocol/sdk`) and MCP Apps SDK (`@modelcontextprotocol/ext-apps`), `onnxruntime-node` with the bundled all-MiniLM-L6-v2 model (about 22 MB, in `models/`), `better-sqlite3` and `sqlite-vec` for SQLite artifacts, `ajv` for argument validation, `commander` for the CLI, and `@shorthand/core`. `better-sqlite3` and `onnxruntime-node` are native modules with prebuilt binaries for the common platforms.
 
 ### Backpressure and cancellation
 
@@ -181,8 +165,8 @@ Tool definitions (JSON/YAML)
   Compiled artifact (JSON)
         │
         ▼
-  smallchat_dispatchStream(intent)
+  runtime.dispatchStream(intent, args)
         │
         ▼
-  for await (event of stream) { ui.append(event.content) }
+  for await (const event of stream) { … }
 ```
