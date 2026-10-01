@@ -25,7 +25,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { CallToolResultSchema, type CallToolResult, type Progress } from '@modelcontextprotocol/sdk/types.js';
 import { connectMcp, expandEnvRefs, listAllTools, type McpConnectSpec } from '../transport/mcp-connect.js';
-import type { InferenceDelta, ToolResult, ToolTransport } from '../core/types.js';
+import type { ExecuteOptions, ToolResult, ToolTransport } from '../core/types.js';
 import type { ArtifactProvider, ArtifactV1 } from '../artifact/types.js';
 
 /** Key under ToolResult.metadata holding the upstream CallToolResult verbatim. */
@@ -105,16 +105,28 @@ export class UpstreamPool {
     return pending;
   }
 
-  /** Call exactly `toolName` on the provider's upstream server. */
-  async callTool(providerId: string, toolName: string, args: Record<string, unknown>): Promise<CallToolResult> {
+  /**
+   * Call exactly `toolName` on the provider's upstream server. The call is
+   * cancelled upstream when `options.signal` or the call context's signal
+   * (withUpstreamCallContext) fires.
+   */
+  async callTool(
+    providerId: string,
+    toolName: string,
+    args: Record<string, unknown>,
+    options: ExecuteOptions = {},
+  ): Promise<CallToolResult> {
     const context = callContext.getStore();
+    const signals = [context?.signal, options.signal].filter((s): s is AbortSignal => s !== undefined);
+    const signal = signals.length > 1 ? AbortSignal.any(signals) : signals[0];
+    signal?.throwIfAborted();
     const client = await this.client(providerId);
     const result = await client.callTool(
       { name: toolName, arguments: args },
       CallToolResultSchema,
       {
         timeout: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
-        ...(context?.signal ? { signal: context.signal } : {}),
+        ...(signal ? { signal } : {}),
         ...(context?.onprogress ? { onprogress: context.onprogress, resetTimeoutOnProgress: true } : {}),
       },
     );
@@ -226,9 +238,9 @@ export class UpstreamPool {
 class UpstreamToolTransport implements ToolTransport {
   constructor(private readonly pool: UpstreamPool, private readonly providerId: string) {}
 
-  async execute(toolName: string, args: Record<string, unknown>): Promise<ToolResult> {
+  async execute(toolName: string, args: Record<string, unknown>, options?: ExecuteOptions): Promise<ToolResult> {
     try {
-      const result = await this.pool.callTool(this.providerId, toolName, args);
+      const result = await this.pool.callTool(this.providerId, toolName, args, options);
       return {
         content: result.structuredContent ?? result.content,
         isError: result.isError === true,
@@ -244,12 +256,7 @@ class UpstreamToolTransport implements ToolTransport {
     }
   }
 
-  async *executeStream(toolName: string, args: Record<string, unknown>): AsyncGenerator<ToolResult> {
-    yield await this.execute(toolName, args);
-  }
-
-  // eslint-disable-next-line require-yield
-  async *executeInference(_toolName: string, _args: Record<string, unknown>): AsyncGenerator<InferenceDelta> {
-    return;
+  async *executeStream(toolName: string, args: Record<string, unknown>, options?: ExecuteOptions): AsyncGenerator<ToolResult> {
+    yield await this.execute(toolName, args, options);
   }
 }

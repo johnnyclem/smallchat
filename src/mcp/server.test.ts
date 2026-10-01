@@ -759,6 +759,8 @@ describe('serve with the core runtime features', () => {
     // An unknown name never reaches the runtime, so it is not a decision.
     await client.callTool({ name: 'echo', arguments: { text: 'x' } });
     await server.stop();
+    // stop() closes the log the server's runtime opened.
+    await expect(server.toolRuntime!.resolve('echo the given text back')).rejects.toThrow(/is closed/);
 
     const verification = verifyDecisionLog(readFileSync(logPath, 'utf-8'));
     expect(verification.error).toBeUndefined();
@@ -801,6 +803,23 @@ describe('serve with the core runtime features', () => {
     expect(proposal.retryAfterMs).toBeGreaterThan(0);
     expect(text(second)).toContain('Nothing was executed.');
   });
+
+  it('cancels the upstream call when a loadRuntime() caller aborts dispatchById', async () => {
+    const upstream = await httpUpstream();
+    const loaded = await loadRuntime(await compileManifests([upstream.manifest]), { upstream: { log: () => {} } });
+    running.push({ stop: () => loaded.upstreams.close() });
+    fixtureEvents.length = 0;
+
+    const controller = new AbortController();
+    const started = Date.now();
+    const call = loaded.runtime.dispatchById('remote/sleep', { ms: 30_000 }, { signal: controller.signal });
+    setTimeout(() => controller.abort(), 300);
+    const result = await call;
+    expect(Date.now() - started).toBeLessThan(10_000);
+    expect(result.isError).toBe(true);
+    await new Promise(r => setTimeout(r, 200));
+    expect(fixtureEvents).toContain('sleep:cancelled');
+  }, 20_000);
 
   it('serve --decision-log through the CLI records the calls it serves', async () => {
     const logPath = join(tmp(), 'cli-decisions.jsonl');

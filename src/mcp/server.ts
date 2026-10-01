@@ -66,6 +66,7 @@ import {
 import type { ToolRuntime, RuntimeOptions } from '../runtime/runtime.js';
 import type { ToolResult } from '../core/types.js';
 import type { ResolutionOutcome } from '../core/proof.js';
+import { DecisionLog } from '../runtime/decision-log.js';
 import type { McpTool, McpUiResourceMeta } from './types.js';
 import { UIResourceRegistry, type UIContentProvider } from './ui-resources.js';
 import { ResourceRegistry, ResourceNotFoundError } from './resources.js';
@@ -419,6 +420,7 @@ export class MCPServer {
 
     const clash = table.entries.find(e => this.registeredTools.has(e.name) || (this.resolveToolEnabled() && e.name === RESOLVE_TOOL_NAME));
     if (clash) {
+      this.closeOwnDecisionLog(runtime);
       await upstreams.close();
       throw new Error(
         `Tool name "${clash.name}" (${clash.toolId}) is already served` +
@@ -553,7 +555,7 @@ export class MCPServer {
     };
   }
 
-  /** Stop serving: close every session and upstream client. */
+  /** Stop serving: close every session and upstream client, and the decision log the runtime opened. */
   async stop(): Promise<void> {
     if (this.stopped) return;
     this.stopped = true;
@@ -562,11 +564,21 @@ export class MCPServer {
       await this.closeConnection(connection);
     }
     await this.upstreams?.close();
+    if (this.runtime) this.closeOwnDecisionLog(this.runtime);
     if (this.httpServer) {
       const server = this.httpServer;
       server.closeAllConnections?.();
       await new Promise<void>(resolve => server.close(() => resolve()));
     }
+  }
+
+  /**
+   * Close the runtime's decision log when the runtime opened it from a path
+   * or options; a DecisionLog instance passed in belongs to the caller.
+   */
+  private closeOwnDecisionLog(runtime: ToolRuntime): void {
+    if (this.config.runtimeOptions?.decisionLog instanceof DecisionLog) return;
+    runtime.decisionLog?.close();
   }
 
   /** Tell every connected client that a list changed. */
@@ -967,7 +979,7 @@ export class MCPServer {
         try {
           const ran: ToolResult = await withUpstreamCallContext(
             { signal: extra.signal, ...(onprogress ? { onprogress } : {}) },
-            () => runtime.dispatchById(entry.toolId, args),
+            () => runtime.dispatchById(entry.toolId, args, { signal: extra.signal }),
           );
           const proof = ran.metadata?.proof as { ran?: string | null; callDigest?: string | null } | undefined;
           if (proof?.ran) details.toolId = proof.ran;

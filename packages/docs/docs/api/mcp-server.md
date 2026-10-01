@@ -41,7 +41,7 @@ interface MCPServerConfig {
 // stdio — one client on this process's stdin/stdout
 await server.startStdio();
 await server.closed();      // resolves when the client goes away
-await server.stop();        // closes sessions and every upstream client (stdio upstreams exit)
+await server.stop();        // closes sessions, every upstream client (stdio upstreams exit) and a decision log opened from a path
 
 // Streamable HTTP at /mcp
 const { url } = await server.startHttp({
