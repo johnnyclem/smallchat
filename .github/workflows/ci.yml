@@ -47,7 +47,8 @@ jobs:
       # SOURCE, or from the published package once that version is on npm.
       - name: Read the mirrored short-hand commit
         id: shorthand
-        run: echo "commit=$(sed -n 's/^commit: //p' shorthand/SOURCE)" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "commit=$(sed -n 's/^commit: //p' shorthand/SOURCE)" >> "$GITHUB_OUTPUT"
 
       - name: Check out short-hand at that commit
         uses: actions/checkout@v4
