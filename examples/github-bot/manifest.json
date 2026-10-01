@@ -1,14 +1,13 @@
 {
   "id": "github-bot",
   "name": "GitHub Bot",
-  "transportType": "rest",
-  "endpoint": "https://api.github.com",
+  "transportType": "local",
   "tools": [
     {
       "name": "create_issue",
       "description": "Create a new issue in a GitHub repository",
       "providerId": "github-bot",
-      "transportType": "rest",
+      "transportType": "local",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -25,7 +24,7 @@
       "name": "list_pull_requests",
       "description": "List open pull requests for a repository",
       "providerId": "github-bot",
-      "transportType": "rest",
+      "transportType": "local",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -40,7 +39,7 @@
       "name": "search_code",
       "description": "Search for code across GitHub repositories",
       "providerId": "github-bot",
-      "transportType": "rest",
+      "transportType": "local",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -54,7 +53,7 @@
       "name": "get_repo_info",
       "description": "Get metadata and stats for a GitHub repository",
       "providerId": "github-bot",
-      "transportType": "rest",
+      "transportType": "local",
       "inputSchema": {
         "type": "object",
         "properties": {

@@ -185,7 +185,7 @@ async function main() {
   const { runtime, upstreams } = await loadRuntime('./manifests');
   try {
     // Resolution proposes one tool and runs nothing...
-    const resolution = await runtime.resolve('greet a user by name');
+    const resolution = await runtime.resolve('greet a user by name with a custom greeting');
     console.log(\`Resolved: \${resolution.outcome} -> \${resolution.chosen ?? '(none)'} (\${resolution.tier})\`);
 
     // ...then exactly that tool runs, with arguments checked against its schema.

@@ -3,13 +3,17 @@
 An assistant that uses smallchat to dispatch database-related intents like
 "query the database", "list tables", and "describe a table schema".
 
-## Setup
+## Run
+
+From the repository root (Node 22+):
 
 ```bash
-cd examples/sql-assistant
-npm install
-npm start
+npm install && npm run build
+node --experimental-strip-types examples/sql-assistant/index.ts   # Node 24: plain `node`
 ```
+
+The tools are compiled from `manifest.json` in-process with the default
+(ONNX) embedder, as `smallchat serve --source examples/sql-assistant` would.
 
 ## Tools
 
@@ -20,6 +24,12 @@ npm start
 
 ## How It Works
 
-This example uses the `@smallchat/testing` mock utilities to simulate
-database tools without a real database connection, making it ideal for
-development and testing.
+The tools are `local` handlers over an in-memory table registered in
+`index.ts`, so no database is needed.
+
+Each intent goes through the fluent API's `execContent()`, which returns the
+content of a tool that ran and succeeded and throws `DispatchError` for
+anything else. The error carries the `outcome` and the candidate tool ids:
+for `needs-disambiguation` the example runs the top candidate by exact id,
+the way a host would after the user picked it; an `unresolved` intent runs
+nothing.
