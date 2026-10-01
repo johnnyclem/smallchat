@@ -19,6 +19,7 @@ import type {
 import type { Embedder, VectorIndex, SelectorMatch } from '../core/types.js';
 import { cosineSimilarity } from './knowledge-compiler.js';
 import { slugify } from './claim-extractor.js';
+import { assertEmbedderMatches } from '../artifact/embedder.js';
 
 // ---------------------------------------------------------------------------
 // Tier thresholds
@@ -60,7 +61,9 @@ export interface ResolverOptions {
  *
  * Uses the same confidence-tiered dispatch pattern as the tool runtime:
  * embed the query, search the claim index, and determine the response
- * strategy based on match quality.
+ * strategy based on match quality. Throws EmbedderMismatchError when the
+ * knowledge base records an embedder other than `embedder`: vectors from
+ * different embedders are not comparable.
  */
 export async function resolve(
   query: string,
@@ -69,6 +72,7 @@ export async function resolve(
   vectorIndex: VectorIndex,
   options: ResolverOptions = {},
 ): Promise<KnowledgeResult> {
+  if (kb.embedder) assertEmbedderMatches(embedder, kb.embedder, 'The knowledge base');
   return withDisputes(await resolveTier(query, kb, embedder, vectorIndex, options), kb);
 }
 

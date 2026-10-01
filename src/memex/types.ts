@@ -14,6 +14,8 @@
  *   KnowledgeSchema  → SmallChatManifest (domain configuration)
  */
 
+import type { EmbedderFingerprint } from '../core/types.js';
+
 // ---------------------------------------------------------------------------
 // Knowledge sources — the raw inputs to compilation
 // ---------------------------------------------------------------------------
@@ -232,6 +234,12 @@ export interface KnowledgeBase {
   compiledAt: string;
   /** Artifact format version. */
   version: string;
+  /**
+   * The embedder that produced the claim vectors. Queries must embed with
+   * the same one (absent in knowledge bases compiled before it was recorded,
+   * or with an embedder that declares no fingerprint).
+   */
+  embedder?: EmbedderFingerprint;
 }
 
 // ---------------------------------------------------------------------------

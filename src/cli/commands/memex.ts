@@ -29,6 +29,7 @@ import {
 import { renderIndexMarkdown, renderLogMarkdown } from '../../memex/wiki-emitter.js';
 import { MemoryVectorIndex } from '../../embedding/memory-vector-index.js';
 import { SqliteVectorIndex } from '../../embedding/sqlite-vector-index.js';
+import { createEmbedder as createBuiltinEmbedder, parseEmbedderKind, resolveArtifactEmbedder } from '../../artifact/embedder.js';
 import type { MemexConfig, KnowledgeBase, KnowledgeSchema } from '../../memex/types.js';
 import type { Embedder, VectorIndex } from '../../core/types.js';
 
@@ -36,13 +37,28 @@ import type { Embedder, VectorIndex } from '../../core/types.js';
 // Embedder/VectorIndex factory (shared with compile command)
 // ---------------------------------------------------------------------------
 
+/** A built-in embedder by name: onnx or hash ("local" is hash's 0.x name); anything else is refused. */
 async function createEmbedder(type: string): Promise<Embedder> {
-  if (type === 'local') {
-    const { HashEmbedder } = await import('../../embedding/hash-embedder.js');
-    return new HashEmbedder();
+  return createBuiltinEmbedder(parseEmbedderKind(type));
+}
+
+/**
+ * The embedder a knowledge base was compiled with, as for tool artifacts:
+ * an explicit -e must name the same kind. A knowledge base compiled before
+ * the embedder was recorded falls back to -e (default onnx), with a warning.
+ */
+async function knowledgeBaseEmbedder(kb: KnowledgeBase, artifactPath: string, requested?: string): Promise<Embedder> {
+  if (!kb.embedder) {
+    console.error(`Warning: ${artifactPath} does not record the embedder it was compiled with; using ${requested ?? 'onnx'}. Recompile it to pin the embedder.`);
+    return createEmbedder(requested ?? 'onnx');
   }
-  const { ONNXEmbedder } = await import('../../embedding/onnx-embedder.js');
-  return new ONNXEmbedder();
+  if (requested !== undefined && parseEmbedderKind(requested) !== kb.embedder.kind) {
+    throw new Error(
+      `--embedder ${requested} does not match ${artifactPath}, which was compiled with the ` +
+      `${kb.embedder.kind} embedder (${kb.embedder.model})`,
+    );
+  }
+  return resolveArtifactEmbedder(kb.embedder, { source: artifactPath });
 }
 
 // Static imports: this is an ES module, so CommonJS require() is undefined
@@ -77,7 +93,7 @@ memexCommand
   .option('-s, --schema <path>', 'Path to knowledge schema file', 'memex.schema.json')
   .option('--sources <paths...>', 'Additional source file paths')
   .option('-o, --output <path>', 'Output artifact path')
-  .option('-e, --embedder <type>', 'Embedder: onnx (default) or local', 'onnx')
+  .option('-e, --embedder <type>', 'Embedder: onnx (default) or hash ("local" is accepted for hash)', 'onnx')
   .option('--db-path <path>', 'SQLite database path (enables sqlite format)')
   .option('--dry-run', 'Analyze without writing artifact')
   .option('--markdown <dir>', 'Also export wiki as markdown files')
@@ -116,7 +132,13 @@ memexCommand
     console.log(`Compiling knowledge base: ${schema.name} (${schema.domain})`);
     console.log(`Schema: ${schemaPath}`);
 
-    const embedder = await createEmbedder(options.embedder);
+    let embedder: Embedder;
+    try {
+      embedder = await createEmbedder(options.embedder);
+    } catch (err) {
+      console.error((err as Error).message);
+      process.exit(1);
+    }
     const vectorIndex = createVectorIndex(options.dbPath);
 
     const result = await compile({
@@ -151,11 +173,18 @@ memexCommand
   .command('query <question>')
   .description('Query the knowledge base with a natural language question')
   .option('-a, --artifact <path>', 'Knowledge base artifact path', 'knowledge.memex.json')
-  .option('-e, --embedder <type>', 'Embedder: onnx (default) or local', 'onnx')
+  .option('-e, --embedder <type>', 'Expected embedder (onnx or hash); refuses if the knowledge base was compiled with another')
   .option('-k, --top-k <n>', 'Number of top matches', '5')
   .action(async (question, options) => {
-    const kb = loadArtifact(resolve(options.artifact));
-    const embedder = await createEmbedder(options.embedder);
+    const artifactPath = resolve(options.artifact);
+    const kb = loadArtifact(artifactPath);
+    let embedder: Embedder;
+    try {
+      embedder = await knowledgeBaseEmbedder(kb, artifactPath, options.embedder);
+    } catch (err) {
+      console.error((err as Error).message);
+      process.exit(1);
+    }
     const vectorIndex = createVectorIndex();
 
     // Re-populate vector index from stored selectors

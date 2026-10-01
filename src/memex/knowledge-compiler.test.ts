@@ -5,9 +5,12 @@ import { tmpdir } from 'node:os';
 import {
   compile,
   cosineSimilarity,
+  ingest,
   serializeKnowledgeBase,
   deserializeKnowledgeBase,
 } from './knowledge-compiler.js';
+import { HashEmbedder } from '../embedding/hash-embedder.js';
+import { EmbedderMismatchError } from '../artifact/types.js';
 import type { KnowledgeSchema, KnowledgeBase } from './types.js';
 import type { Embedder, VectorIndex, SelectorMatch } from '../core/types.js';
 
@@ -328,3 +331,75 @@ describe('compile: contradictions survive deduplication (SAT-17)', () => {
     }
   });
 });
+
+describe('compile: a shared identifier does not hide a contradiction (review of SAT-17)', () => {
+  // Numbers were compared as sets and a pair counted as contradicting only
+  // when the sets were disjoint: "P-100" contributed "100" to both claims,
+  // so "100 rpm" vs "500 rpm" overlapped and one claim was merged away.
+  async function compileClaims(texts: string[]): Promise<KnowledgeBase> {
+    const dir = createTempDir();
+    try {
+      mkdirSync(join(dir, 'sources'), { recursive: true });
+      texts.forEach((text, i) => writeFileSync(join(dir, 'sources', `s${i}.md`), `# Pump\n\n${text}\n`));
+      const schema: KnowledgeSchema = { name: 'kb', domain: 'ops', entityTypes: ['concept'], sources: ['./sources'], compiler: { minConfidence: 0 } };
+      const { knowledgeBase } = await compile({ schema, embedder: new SameVectorEmbedder(), vectorIndex: new MockVectorIndex(), projectDir: dir, dryRun: true });
+      return knowledgeBase;
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  it('keeps and reports claims that share a model number but state different values', async () => {
+    const kb = await compileClaims([
+      'The P-100 pump runs at 100 rpm under normal load.',
+      'The P-100 pump runs at 500 rpm under normal load.',
+    ]);
+    const texts = [...kb.claims.values()].map(c => c.text);
+    expect(texts.some(t => t.includes('100 rpm'))).toBe(true);
+    expect(texts.some(t => t.includes('500 rpm'))).toBe(true);
+    expect(kb.mergedClaimCount).toBe(0);
+    expect(kb.contradictions).toHaveLength(1);
+  });
+
+  it('keeps claims whose dates or versions differ', async () => {
+    const kb = await compileClaims([
+      'Release 2.4 of the pump firmware shipped on 2024-03-01.',
+      'Release 2.4 of the pump firmware shipped on 2024-05-01.',
+    ]);
+    expect(kb.mergedClaimCount).toBe(0);
+    expect(kb.contradictions).toHaveLength(1);
+  });
+
+  it('still merges a near-duplicate that only adds a detail', async () => {
+    const kb = await compileClaims([
+      'The P-100 pump runs at 100 rpm.',
+      'The P-100 pump runs at 100 rpm under normal load.',
+    ]);
+    expect(kb.mergedClaimCount).toBe(1);
+    expect(kb.contradictions).toHaveLength(0);
+  });
+});
+
+describe('compile records its embedder; queries and ingest must use it (review of SAT-16)', () => {
+  it('stores the fingerprint and refuses a different embedder', async () => {
+    const dir = createTempDir();
+    try {
+      mkdirSync(join(dir, 'sources'), { recursive: true });
+      writeFileSync(join(dir, 'sources', 'a.md'), '# Gondor\n\nThe capital of Gondor was Minas Tirith.\n');
+      const schema: KnowledgeSchema = { name: 'kb', domain: 'lore', entityTypes: ['place'], sources: ['./sources'], compiler: { minConfidence: 0 } };
+      const vectorIndex = new MockVectorIndex();
+      const { knowledgeBase: kb } = await compile({ schema, embedder: new HashEmbedder(64), vectorIndex, projectDir: dir, dryRun: true });
+      expect(kb.embedder).toMatchObject({ kind: 'hash', dims: 64 });
+      expect(deserializeKnowledgeBase(serializeKnowledgeBase(kb)).embedder).toEqual(kb.embedder);
+
+      const { resolveQuery } = await import('./resolver.js');
+      await expect(resolveQuery('capital of Gondor', kb, new HashEmbedder(32), vectorIndex)).rejects.toThrow(EmbedderMismatchError);
+      await expect(resolveQuery('capital of Gondor', kb, new HashEmbedder(64), vectorIndex)).resolves.toBeDefined();
+      const source = { id: 'b', path: join(dir, 'sources', 'a.md'), type: 'markdown' as const };
+      await expect(ingest(kb, source, new HashEmbedder(32), vectorIndex)).rejects.toThrow(EmbedderMismatchError);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+

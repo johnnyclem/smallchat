@@ -25,6 +25,7 @@ import type {
   WikiPage,
 } from './types.js';
 import type { Embedder, VectorIndex, SelectorMatch } from '../core/types.js';
+import { assertEmbedderMatches } from '../artifact/embedder.js';
 import { discoverSources, readSources, readSource } from './source-reader.js';
 import {
   extractKnowledgeBatch,
@@ -221,6 +222,7 @@ export async function compile(options: CompileOptions): Promise<MemexCompileResu
     contradictions,
     compiledAt: now,
     version: ARTIFACT_VERSION,
+    ...(embedder.fingerprint ? { embedder: embedder.fingerprint } : {}),
   };
 
   // -----------------------------------------------------------------------
@@ -255,7 +257,8 @@ export async function compile(options: CompileOptions): Promise<MemexCompileResu
 
 /**
  * Incrementally ingest a single new or updated source into an existing
- * knowledge base.
+ * knowledge base. `embedder` must be the one the knowledge base records
+ * (EmbedderMismatchError otherwise).
  */
 export async function ingest(
   kb: KnowledgeBase,
@@ -263,6 +266,7 @@ export async function ingest(
   embedder: Embedder,
   vectorIndex: VectorIndex,
 ): Promise<IngestResult> {
+  if (kb.embedder) assertEmbedderMatches(embedder, kb.embedder, 'The knowledge base');
   const now = new Date().toISOString();
 
   // Read and extract from the new source
@@ -484,7 +488,12 @@ function detectContradictions(
 }
 
 /**
- * Check if two similar claim texts contain contradictory signals.
+ * Check if two similar claim texts contain contradictory signals: a
+ * negation on one side only, or each claim stating a figure the other does
+ * not ("100 rpm" vs "500 rpm"). A figure is a whole token containing a
+ * digit, so an identifier both claims share ("P-100", "2.4") never hides a
+ * different value, and a date or version counts as one figure. A claim that
+ * only adds a figure to the other's is a detail, not a disagreement.
  */
 function hasContradictionSignal(textA: string, textB: string): boolean {
   const negationWords = /\b(?:not|no|never|neither|nor|wasn't|weren't|isn't|aren't|doesn't|don't|didn't|cannot|can't|won't|wouldn't|shouldn't|couldn't)\b/i;
@@ -494,17 +503,26 @@ function hasContradictionSignal(textA: string, textB: string): boolean {
   // One has negation, other doesn't → likely contradiction
   if (aHasNegation !== bHasNegation) return true;
 
-  // Check for opposing numbers/dates in similar claims
-  const numbersA = textA.match(/\b\d+\b/g) ?? [];
-  const numbersB = textB.match(/\b\d+\b/g) ?? [];
-  if (numbersA.length > 0 && numbersB.length > 0) {
-    // If claims mention different numbers → potential contradiction
-    const setA = new Set(numbersA);
-    const setB = new Set(numbersB);
-    const overlap = [...setA].filter((n) => setB.has(n)).length;
-    if (overlap === 0 && setA.size > 0 && setB.size > 0) return true;
-  }
+  const figuresA = figures(textA);
+  const figuresB = figures(textB);
+  return hasFigureNotIn(figuresA, figuresB) && hasFigureNotIn(figuresB, figuresA);
+}
 
+/** Tokens containing a digit ("100", "p-100", "2024-03-01", "2.4"), with counts. */
+function figures(text: string): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const raw of text.match(/[\p{L}\p{N}_.:/-]*\p{N}[\p{L}\p{N}_.:/-]*/gu) ?? []) {
+    const token = raw.replace(/^[.:/-]+|[.:/-]+$/g, '').toLowerCase();
+    counts.set(token, (counts.get(token) ?? 0) + 1);
+  }
+  return counts;
+}
+
+/** Whether `a` has a figure, or more occurrences of one, than `b`. */
+function hasFigureNotIn(a: Map<string, number>, b: Map<string, number>): boolean {
+  for (const [token, count] of a) {
+    if (count > (b.get(token) ?? 0)) return true;
+  }
   return false;
 }
 
@@ -517,6 +535,7 @@ export function serializeKnowledgeBase(kb: KnowledgeBase): Record<string, unknow
   return {
     version: kb.version,
     compiledAt: kb.compiledAt,
+    ...(kb.embedder ? { embedder: kb.embedder } : {}),
     schema: {
       name: kb.schema.name,
       domain: kb.schema.domain,
@@ -577,6 +596,7 @@ export function deserializeKnowledgeBase(
     contradictions: raw.contradictions ?? [],
     compiledAt: raw.compiledAt ?? '',
     version: raw.version ?? '0.0.0',
+    ...(raw.embedder ? { embedder: raw.embedder } : {}),
   };
 }
 
