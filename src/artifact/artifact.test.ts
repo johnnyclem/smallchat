@@ -16,7 +16,7 @@ import { ToolCompiler } from '../compiler/compiler.js';
 import { HashEmbedder } from '../embedding/hash-embedder.js';
 import { MemoryVectorIndex } from '../embedding/memory-vector-index.js';
 import { introspectMcpConfigFile } from '../mcp/client.js';
-import type { ProviderManifest } from '../core/types.js';
+import type { Embedder, ProviderManifest } from '../core/types.js';
 import {
   ARTIFACT_SCHEMA_PATH,
   ArtifactFormatError,
@@ -25,12 +25,14 @@ import {
   buildArtifact,
   computeContentHash,
   createArtifactIndex,
+  fingerprintsEqual,
   parseArtifact,
   readArtifact,
   serializeArtifact,
   validateArtifact,
   writeArtifact,
   type ArtifactV1,
+  type EmbedderFingerprint,
 } from './index.js';
 
 const FIXTURES = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'spec', 'artifact', 'fixtures');
@@ -237,5 +239,48 @@ describe('Feature: Artifact format 1.0', () => {
       const artifact = await build([manifest()]);
       await expect(createArtifactIndex(artifact, { embedder: new HashEmbedder(64) })).rejects.toThrow(EmbedderMismatchError);
     });
+  });
+
+  describe('Scenario: every loader refuses the negative fixtures (spec/artifact/fixtures/invalid)', () => {
+    const index = JSON.parse(readFileSync(join(FIXTURES, 'invalid', 'index.json'), 'utf-8')) as {
+      artifacts: Array<{ file: string; rule: number; error: string }>;
+      embedderMismatches: { artifact: string; cases: Array<{ field: string; fingerprint: EmbedderFingerprint }> };
+    };
+
+    it('covers every loader rule', () => {
+      expect(new Set(index.artifacts.map(c => c.rule))).toEqual(new Set([1, 2, 3, 4]));
+      expect(index.embedderMismatches.cases.map(c => c.field).sort()).toEqual(
+        ['dims', 'kind', 'maxLength', 'model', 'modelSha256', 'normalize', 'pooling'],
+      );
+    });
+
+    for (const { file, rule, error } of index.artifacts) {
+      it(`refuses ${file} (rule ${rule})`, () => {
+        const text = readFileSync(join(FIXTURES, 'invalid', file), 'utf-8');
+        expect(() => parseArtifact(text, file)).toThrow(ArtifactFormatError);
+        expect(() => parseArtifact(text, file)).toThrow(error);
+      });
+    }
+
+    /** The fixture's hash embedder, declaring `fingerprint` instead of its own. */
+    function declaring(fingerprint: EmbedderFingerprint): Embedder {
+      const inner = new HashEmbedder(16);
+      return { dimensions: inner.dimensions, fingerprint, embed: t => inner.embed(t), embedBatch: t => inner.embedBatch(t) };
+    }
+
+    it('accepts the fixture with an embedder that declares its exact fingerprint (control)', async () => {
+      const fixture = parseArtifact(readFileSync(join(FIXTURES, index.embedderMismatches.artifact), 'utf-8'));
+      await expect(createArtifactIndex(fixture, { embedder: declaring({ ...fixture.embedder }) })).resolves.toBeDefined();
+    });
+
+    for (const { field, fingerprint } of index.embedderMismatches.cases) {
+      it(`refuses an embedder whose fingerprint differs only in ${field} (rule 5)`, async () => {
+        const fixture = parseArtifact(readFileSync(join(FIXTURES, index.embedderMismatches.artifact), 'utf-8'));
+        const differing = Object.keys(fingerprint).filter(k => fingerprint[k as keyof EmbedderFingerprint] !== fixture.embedder[k as keyof EmbedderFingerprint]);
+        expect(differing).toEqual([field]);
+        expect(fingerprintsEqual(fingerprint, fixture.embedder)).toBe(false);
+        await expect(createArtifactIndex(fixture, { embedder: declaring(fingerprint) })).rejects.toThrow(EmbedderMismatchError);
+      });
+    }
   });
 });

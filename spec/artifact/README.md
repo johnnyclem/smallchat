@@ -10,6 +10,11 @@ normative definition:
   (`new HashEmbedder(16)`) must reproduce the artifact byte for byte, and
   every implementation must accept the artifact and recompute its
   `contentHash`.
+- `fixtures/invalid/` — negative fixtures every implementation must refuse.
+  `index.json` lists each artifact with the rule below it breaks (and the
+  message smallchat reports), plus `embedderMismatches`: fingerprints that
+  each differ from `minimal.v1.json`'s embedder in exactly one of the seven
+  fields and must not be accepted for it (rule 5).
 
 ## Rules a loader must enforce
 
