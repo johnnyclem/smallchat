@@ -282,3 +282,49 @@ describe('serializeKnowledgeBase / deserializeKnowledgeBase', () => {
     rmSync(dir, { recursive: true });
   });
 });
+
+// ---------------------------------------------------------------------------
+// SAT-17: deduplication must not erase cross-source contradictions
+// ---------------------------------------------------------------------------
+
+/** Embeds every text to the same vector: every pair is a cos-1.0 near-duplicate. */
+class SameVectorEmbedder implements Embedder {
+  readonly dimensions = 4;
+  async embed(): Promise<Float32Array> { return new Float32Array([0.5, 0.5, 0.5, 0.5]); }
+  async embedBatch(texts: string[]): Promise<Float32Array[]> { return Promise.all(texts.map(() => this.embed())); }
+}
+
+describe('compile: contradictions survive deduplication (SAT-17)', () => {
+  function project(): { dir: string; schema: KnowledgeSchema } {
+    const dir = createTempDir();
+    mkdirSync(join(dir, 'sources'), { recursive: true });
+    writeFileSync(join(dir, 'sources', 'a.md'), '# Payments\n\nThe Payments API rate limit is 100 requests per minute per account.\n');
+    writeFileSync(join(dir, 'sources', 'b.md'), '# Payments\n\nThe Payments API rate limit is 500 requests per minute per account.\n');
+    writeFileSync(join(dir, 'sources', 'c.md'), '# Payments\n\nThe Payments API rate limit is 100 requests per minute per account.\n');
+    return { dir, schema: { name: 'kb', domain: 'api', entityTypes: ['concept'], sources: ['./sources'], compiler: { minConfidence: 0 } } };
+  }
+
+  it('keeps both sides of a near-duplicate pair that disagrees, reports it, and lint fails', async () => {
+    const { dir, schema } = project();
+    try {
+      const vectorIndex = new MockVectorIndex();
+      const { knowledgeBase: kb } = await compile({ schema, embedder: new SameVectorEmbedder(), vectorIndex, projectDir: dir, dryRun: true });
+      const texts = [...kb.claims.values()].map(c => c.text);
+      expect(texts.some(t => t.includes('100 requests'))).toBe(true);
+      expect(texts.some(t => t.includes('500 requests'))).toBe(true);
+      // The two identical "100" claims are still deduplicated.
+      expect(kb.mergedClaimCount).toBe(1);
+      expect(kb.contradictions).toHaveLength(1);
+      expect(kb.contradictions[0].severity).toBe('critical');
+
+      const { lint } = await import('./lint.js');
+      expect(lint(kb).passed).toBe(false);
+
+      const { resolveQuery } = await import('./resolver.js');
+      const result = await resolveQuery('What is the Payments API rate limit?', kb, new SameVectorEmbedder(), vectorIndex);
+      expect(result.disputes?.map(d => [d.claimA, d.claimB].sort())).toEqual([[kb.contradictions[0].claimA, kb.contradictions[0].claimB].sort()]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

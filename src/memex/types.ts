@@ -288,6 +288,11 @@ export interface KnowledgeResult {
   subQueries?: string[];
   /** Synthesized answer text (for MEDIUM tier). */
   synthesis?: string;
+  /**
+   * Contradictions (detected at compile time) that involve a matched claim:
+   * the sources disagree, so no single matched claim is the answer.
+   */
+  disputes?: Contradiction[];
 }
 
 // ---------------------------------------------------------------------------

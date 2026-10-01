@@ -1,9 +1,9 @@
 /**
- * Memex CLI Command — compile, ingest, query, lint, and inspect knowledge bases.
+ * Memex CLI Command — compile, query, lint, inspect and export knowledge
+ * bases. Experimental: not part of the tool inference core.
  *
  * Usage:
  *   smallchat memex compile --schema tolkien.schema.json
- *   smallchat memex ingest  --source new-paper.md
  *   smallchat memex query   "What is the relationship between X and Y?"
  *   smallchat memex lint
  *   smallchat memex inspect --page numenor
@@ -27,6 +27,8 @@ import {
   serializeKnowledgeBase,
 } from '../../memex/knowledge-compiler.js';
 import { renderIndexMarkdown, renderLogMarkdown } from '../../memex/wiki-emitter.js';
+import { MemoryVectorIndex } from '../../embedding/memory-vector-index.js';
+import { SqliteVectorIndex } from '../../embedding/sqlite-vector-index.js';
 import type { MemexConfig, KnowledgeBase, KnowledgeSchema } from '../../memex/types.js';
 import type { Embedder, VectorIndex } from '../../core/types.js';
 
@@ -43,12 +45,10 @@ async function createEmbedder(type: string): Promise<Embedder> {
   return new ONNXEmbedder();
 }
 
-function createVectorIndex(embedderType: string, dbPath?: string): VectorIndex {
-  if (dbPath) {
-    const { SqliteVectorIndex } = require('../../embedding/sqlite-vector-index.js');
-    return new SqliteVectorIndex(dbPath);
-  }
-  const { MemoryVectorIndex } = require('../../embedding/memory-vector-index.js');
+// Static imports: this is an ES module, so CommonJS require() is undefined
+// here and both compile and query crashed (SAT-16).
+function createVectorIndex(dbPath?: string): VectorIndex {
+  if (dbPath) return new SqliteVectorIndex(dbPath);
   return new MemoryVectorIndex();
 }
 
@@ -65,7 +65,7 @@ function loadArtifact(artifactPath: string): KnowledgeBase {
 // ---------------------------------------------------------------------------
 
 export const memexCommand = new Command('memex')
-  .description('Knowledge base compiler — compile, query, and maintain knowledge wikis');
+  .description('Knowledge base compiler — compile, query, and maintain knowledge wikis (experimental: not part of tool dispatch; its formats and heuristics may change in any 1.x release)');
 
 // ---------------------------------------------------------------------------
 // memex compile
@@ -117,7 +117,7 @@ memexCommand
     console.log(`Schema: ${schemaPath}`);
 
     const embedder = await createEmbedder(options.embedder);
-    const vectorIndex = createVectorIndex(options.embedder, options.dbPath);
+    const vectorIndex = createVectorIndex(options.dbPath);
 
     const result = await compile({
       schema,
@@ -156,7 +156,7 @@ memexCommand
   .action(async (question, options) => {
     const kb = loadArtifact(resolve(options.artifact));
     const embedder = await createEmbedder(options.embedder);
-    const vectorIndex = createVectorIndex(options.embedder);
+    const vectorIndex = createVectorIndex();
 
     // Re-populate vector index from stored selectors
     for (const [id, sel] of kb.claimSelectors) {
@@ -180,6 +180,16 @@ memexCommand
       console.log('Matched Claims:');
       for (const { claim, score } of result.matchedClaims.slice(0, 5)) {
         console.log(`  [${(score * 100).toFixed(1)}%] ${claim.text.slice(0, 100)}${claim.text.length > 100 ? '...' : ''}`);
+      }
+      console.log('');
+    }
+
+    if (result.disputes && result.disputes.length > 0) {
+      console.log('Disputed — the sources disagree:');
+      for (const d of result.disputes) {
+        const a = kb.claims.get(d.claimA);
+        const b = kb.claims.get(d.claimB);
+        console.log(`  [${d.severity}] "${a?.text ?? d.claimA}" (${a?.sourceId ?? '?'}) vs "${b?.text ?? d.claimB}" (${b?.sourceId ?? '?'})`);
       }
       console.log('');
     }

@@ -31,17 +31,29 @@ const HIGH_SWITCH_AWAY_RATE = 0.3;
 // Prioritization
 // ---------------------------------------------------------------------------
 
+export interface PrioritizeOptions {
+  /** Tools to exclude: an explicit rule, always applied. */
+  exclude?: string[];
+  /** Also exclude the tools the heuristics propose excluding (default false). */
+  applyProposedExclusions?: boolean;
+}
+
 /**
  * Combine memory mentions and usage stats to produce priority hints.
+ *
+ * Heuristics never remove a tool by default: strong negative memory
+ * signals land in `proposedExclusions` for a person to confirm (add the
+ * tool to `exclude`), and are applied only with `applyProposedExclusions`.
  */
 export function prioritizeTools(
   memoryMentions: MemoryToolMention[],
   usageStats: ToolUsageStats[],
   knownTools: string[],
+  options: PrioritizeOptions = {},
 ): ToolPriorityHints {
   const scores = new Map<string, number>();
   const reasoning = new Map<string, string>();
-  const excluded = new Set<string>();
+  const proposedExclusions = new Set<string>();
 
   // Initialize all known tools at base score
   for (const tool of knownTools) {
@@ -122,8 +134,8 @@ export function prioritizeTools(
         /\b(avoid|don'?t use|do not use|deprecated|replaced by)\b/i.test(m.context),
       );
       if (hasExclusionSignal && negativeCount >= 2) {
-        excluded.add(toolName);
-        memoryReasons.push('marked for exclusion (strong negative signal)');
+        proposedExclusions.add(toolName);
+        memoryReasons.push('proposed for exclusion (strong negative signal)');
       }
     }
 
@@ -134,6 +146,14 @@ export function prioritizeTools(
         : `Memory: ${memoryReasons.join('; ')}`;
       reasoning.set(toolName, combined);
     }
+  }
+
+  const excluded = new Set<string>(options.exclude ?? []);
+  for (const toolName of excluded) {
+    if (!reasoning.has(toolName)) reasoning.set(toolName, 'excluded by rule');
+  }
+  if (options.applyProposedExclusions) {
+    for (const toolName of proposedExclusions) excluded.add(toolName);
   }
 
   // --- Normalize and partition into boosted/demoted ---
@@ -152,7 +172,7 @@ export function prioritizeTools(
     }
   }
 
-  return { boosted, demoted, excluded, reasoning };
+  return { boosted, demoted, excluded, proposedExclusions, reasoning };
 }
 
 // ---------------------------------------------------------------------------
@@ -179,7 +199,7 @@ export function generateReport(
 
   // Boosted tools
   if (hints.boosted.size > 0) {
-    lines.push('Boosted tools (higher priority):');
+    lines.push('Boosted tools (advisory: recorded in the artifact, not applied to dispatch):');
     for (const [tool, score] of sortedEntries(hints.boosted, 'desc')) {
       const reason = hints.reasoning.get(tool) ?? '';
       lines.push(`  + ${tool} (score: ${score.toFixed(2)}) — ${reason}`);
@@ -189,7 +209,7 @@ export function generateReport(
 
   // Demoted tools
   if (hints.demoted.size > 0) {
-    lines.push('Demoted tools (lower priority):');
+    lines.push('Demoted tools (advisory: recorded in the artifact, not applied to dispatch):');
     for (const [tool, score] of sortedEntries(hints.demoted, 'asc')) {
       const reason = hints.reasoning.get(tool) ?? '';
       lines.push(`  - ${tool} (score: ${score.toFixed(2)}) — ${reason}`);
@@ -203,6 +223,16 @@ export function generateReport(
     for (const tool of hints.excluded) {
       const reason = hints.reasoning.get(tool) ?? '';
       lines.push(`  x ${tool} — ${reason}`);
+    }
+    lines.push('');
+  }
+
+  const proposed = [...hints.proposedExclusions].filter(t => !hints.excluded.has(t));
+  if (proposed.length > 0) {
+    lines.push('Proposed exclusions (not applied; add them to "exclude" in smallchat.dream.json to remove them):');
+    for (const tool of proposed) {
+      const reason = hints.reasoning.get(tool) ?? '';
+      lines.push(`  ? ${tool} — ${reason}`);
     }
     lines.push('');
   }

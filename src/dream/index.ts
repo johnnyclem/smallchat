@@ -14,6 +14,7 @@ export type { CompileLatestOptions } from './dream-compiler.js';
 export { readMemoryFiles, extractToolMentions } from './memory-reader.js';
 export { discoverLogFiles, analyzeSessionLog, aggregateUsageStats } from './log-analyzer.js';
 export { prioritizeTools, generateReport } from './tool-prioritizer.js';
+export type { PrioritizeOptions } from './tool-prioritizer.js';
 export { loadDreamConfig, saveDreamConfig, DEFAULT_DREAM_CONFIG } from './config.js';
 export {
   loadManifest,

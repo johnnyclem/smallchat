@@ -77,7 +77,8 @@ interface ToolUseContent {
 interface ToolResultContent {
   type: 'tool_result';
   tool_use_id: string;
-  content?: string;
+  /** A string, or (Messages API / Claude Code) an array of content blocks. */
+  content?: unknown;
   is_error?: boolean;
 }
 
@@ -96,8 +97,12 @@ export function analyzeSessionLog(logPath: string): ToolUsageRecord[] {
   let content: string;
   try {
     content = readFileSync(logPath, 'utf-8');
-  } catch {
-    return [];
+  } catch (err) {
+    // A log that vanished between discovery and reading has nothing to say.
+    // Any other failure (e.g. a file too large to read whole) is the
+    // caller's to report: compileLatest warns and skips the file.
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw err;
   }
 
   const lines = content.split('\n').filter(l => l.trim().length > 0);
@@ -147,7 +152,11 @@ export function analyzeSessionLog(logPath: string): ToolUsageRecord[] {
           const pending = pendingCalls.get(item.tool_use_id)!;
           pendingCalls.delete(item.tool_use_id);
 
-          const success = !item.is_error && !isErrorContent(item.content);
+          // Only the harness's own flag says a call failed. Reading the
+          // output for "error" / "not found" marked successful reads of
+          // source code as failures (SAT-22), and crashed on array-form
+          // content (SAT-21).
+          const success = item.is_error !== true;
 
           toolCallSequence.push({
             toolName: pending.toolName,
@@ -186,21 +195,6 @@ export function analyzeSessionLog(logPath: string): ToolUsageRecord[] {
   }
 
   return records;
-}
-
-/**
- * Heuristic: check if tool result content looks like an error.
- */
-function isErrorContent(content: string | undefined): boolean {
-  if (!content) return false;
-  const lower = content.toLowerCase();
-  return (
-    lower.includes('error') ||
-    lower.includes('failed') ||
-    lower.includes('exception') ||
-    lower.includes('permission denied') ||
-    lower.includes('not found')
-  );
 }
 
 // ---------------------------------------------------------------------------

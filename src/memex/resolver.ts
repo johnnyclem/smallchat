@@ -69,6 +69,23 @@ export async function resolve(
   vectorIndex: VectorIndex,
   options: ResolverOptions = {},
 ): Promise<KnowledgeResult> {
+  return withDisputes(await resolveTier(query, kb, embedder, vectorIndex, options), kb);
+}
+
+/** Attach the compile-time contradictions that involve a matched claim. */
+function withDisputes(result: KnowledgeResult, kb: KnowledgeBase): KnowledgeResult {
+  const matched = new Set(result.matchedClaims.map(({ claim }) => claim.id));
+  const disputes = kb.contradictions.filter((c) => matched.has(c.claimA) || matched.has(c.claimB));
+  return disputes.length > 0 ? { ...result, disputes } : result;
+}
+
+async function resolveTier(
+  query: string,
+  kb: KnowledgeBase,
+  embedder: Embedder,
+  vectorIndex: VectorIndex,
+  options: ResolverOptions,
+): Promise<KnowledgeResult> {
   const topK = options.topK ?? 10;
   const maxRelated = options.maxRelatedPages ?? 5;
   const thresholds: KnowledgeTierThresholds = {

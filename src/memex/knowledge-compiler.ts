@@ -386,7 +386,11 @@ export async function ingest(
 
 /**
  * Deduplicate claims by cosine similarity.
- * Claims above the threshold are merged (first one kept, others dropped).
+ * Claims above the threshold are merged (first one kept, others dropped),
+ * except a pair that carries a contradiction signal (a negation on one side
+ * only, or disjoint numbers): "100 requests per minute" vs "500 requests per
+ * minute" embed at cos ≈ 0.95, and merging them erased the disagreement
+ * before contradiction detection could see it (SAT-17). Both are kept.
  */
 function deduplicateClaims(
   claims: ExtractedClaim[],
@@ -408,7 +412,7 @@ function deduplicateClaims(
       if (!selectorB) continue;
 
       const similarity = cosineSimilarity(selectorA.vector, selectorB.vector);
-      if (similarity >= threshold) {
+      if (similarity >= threshold && !hasContradictionSignal(claims[i].text, claims[j].text)) {
         // Keep the claim with higher confidence
         if (claims[i].confidence >= claims[j].confidence) {
           removed.add(claims[j].id);

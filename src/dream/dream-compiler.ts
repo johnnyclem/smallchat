@@ -132,6 +132,7 @@ function dreamExtension(hints: ToolPriorityHints): Record<string, unknown> {
     boosted: Object.fromEntries(hints.boosted),
     demoted: Object.fromEntries(hints.demoted),
     excluded: Array.from(hints.excluded),
+    proposedExclusions: Array.from(hints.proposedExclusions),
     reasoning: Object.fromEntries(hints.reasoning),
     generatedAt: new Date().toISOString(),
   };
@@ -183,14 +184,25 @@ export async function compileLatest(options: CompileLatestOptions = {}): Promise
   const logFiles = discoverLogFiles(config.logDir);
   console.log(`  Found ${logFiles.length} log file(s)`);
 
-  const allRecords = logFiles.flatMap(f => analyzeSessionLog(f));
+  // One unreadable or unexpected log must not abort the run (SAT-21).
+  const allRecords = logFiles.flatMap(f => {
+    try {
+      return analyzeSessionLog(f);
+    } catch (err) {
+      console.warn(`  Skipped ${f}: ${(err as Error).message}`);
+      return [];
+    }
+  });
   const usageStats = aggregateUsageStats(allRecords);
   console.log(`  Analyzed ${allRecords.length} tool call(s) across ${usageStats.length} unique tool(s)`);
 
   // Step 5: Prioritize tools
   console.log('\nPrioritizing tools...');
-  const hints = prioritizeTools(allMentions, usageStats, knownTools);
-  console.log(`  Boosted: ${hints.boosted.size}, Demoted: ${hints.demoted.size}, Excluded: ${hints.excluded.size}`);
+  const hints = prioritizeTools(allMentions, usageStats, knownTools, {
+    exclude: config.exclude,
+    applyProposedExclusions: config.applyProposedExclusions,
+  });
+  console.log(`  Boosted: ${hints.boosted.size}, Demoted: ${hints.demoted.size} (advisory), Excluded: ${hints.excluded.size}, Proposed exclusions: ${hints.proposedExclusions.size}`);
 
   // Step 6: Generate report
   const report = generateReport(hints, usageStats, allMentions);
@@ -216,7 +228,9 @@ export async function compileLatest(options: CompileLatestOptions = {}): Promise
 
   // Step 7: Archive current artifact before overwriting
   console.log('\nArchiving current artifact...');
-  const archived = archiveCurrentArtifact(projectDir, config.outputPath, false);
+  // Provenance from the manifest: a dream output that is still active is
+  // archived as auto-generated, anything else as manual (SAT-23).
+  const archived = archiveCurrentArtifact(projectDir, config.outputPath);
   if (archived) {
     console.log(`  Archived to: ${archived.path}`);
   }
