@@ -32,6 +32,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`resolveRefinement()` runs the chosen tool by id** (and still reinforces the semantic map) instead of re-resolving the original intent. A learned preference alone never authorizes a pinned or destructive tool.
 - **`canonicalJson()` rejects non-plain objects** (`Date`, `Map`, class instances) instead of serializing them as `{}`.
 
+### Fixed — UI component index pollution
+- `ComponentSelectorTable.resolve()` no longer interns every UI intent into the component index. An intent that matches no component gets a transient selector, so later queries keep resolving to the real component and the index stops growing. This is the fix the core `SelectorTable` already had. (SC-SURF-30)
+
 ### Added — Canonical call digest, policy and guard exports
 - `callDigest(toolId, args)` = `sha256hex(UTF8("smallchat.call.v1") || 0x00 || UTF8(toolId) || 0x00 || UTF8(JCS(args)))`, with golden vectors in `spec/call-digest/vectors.json` (UTF-16 key order, Unicode, nested arrays, `1e21`/`0.1`/`-0`, rejection of `NaN`/`Infinity`). SHA-256 is implemented in `src/core/sha256.ts` so the inference core stays free of runtime-specific crypto imports.
 - `RuntimeOptions` gains `intentPins` (a registry or a list of pins), `treatUnannotatedAsDestructive`, `argumentCoercion` and `artifactHash` (set by `loadRuntime` from the artifact); `MCPServerConfig.runtimeOptions` plumbs them into `serve`, which also reads a `"policy"` block from `smallchat.json` (`runtimeOptionsFromPolicy`). (SC-INF-24)
