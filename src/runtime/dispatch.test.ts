@@ -1,13 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
-import { DispatchContext, UnrecognizedIntent, toolkit_dispatch, smallchat_dispatchStream } from './dispatch.js';
-import type { FallbackChainResult } from './dispatch.js';
+import { DispatchContext, toolkit_dispatch, smallchat_dispatchStream } from './dispatch.js';
+import type { ResolutionProof } from '../core/proof.js';
 import { ResolutionCache } from '../core/resolution-cache.js';
 import { SelectorTable } from '../core/selector-table.js';
 import { ToolClass } from '../core/tool-class.js';
 import { LocalEmbedder } from '../embedding/local-embedder.js';
 import { MemoryVectorIndex } from '../embedding/memory-vector-index.js';
 import { IntentPinRegistry } from '../core/intent-pin.js';
-import type { ToolIMP, ToolProtocol, ToolSelector, ToolResult, DispatchEvent, InferenceDelta, DispatchEventInferenceDelta } from '../core/types.js';
+import type { ToolIMP, ToolProtocol, ToolResult, DispatchEvent, InferenceDelta, DispatchEventInferenceDelta } from '../core/types.js';
 
 function createContext(intentPins?: IntentPinRegistry) {
   const embedder = new LocalEmbedder(64);
@@ -86,18 +86,16 @@ describe('toolkit_dispatch', () => {
     expect(context.cache.size).toBeGreaterThan(0); // But cache should be populated
   });
 
-  it('returns fallback stub instead of throwing when no tool matches', async () => {
+  it('returns an unresolved error result instead of throwing when no tool matches', async () => {
     const context = createContext();
 
     const result = await toolkit_dispatch(context, 'completely unknown operation xyz123');
 
-    // Should return a result, not throw
-    expect(result).toBeDefined();
-    expect(result.metadata).toBeDefined();
-    // 0.4.0: may return refinement or forwarding fallback — both include a proof
-    expect(result.metadata!.proof).toBeDefined();
-    expect(result.metadata!.tier).toBeDefined();
-    expect(result.isError).not.toBe(true);
+    // Nothing ran, and the result says so — never a success-shaped stub.
+    expect(result.isError).toBe(true);
+    expect(result.metadata!.outcome).toBe('unresolved');
+    expect((result.metadata!.proof as ResolutionProof).ran).toBeNull();
+    expect(result.metadata!.tier).toBe('none');
   });
 
   it('tries superclass chain during fallback', async () => {
@@ -541,11 +539,9 @@ describe('smallchat_dispatchStream', () => {
 });
 
 describe('Intent Pinning — semantic collision mitigation', () => {
-  it('exact-pinned tool dispatches when intent matches exactly', async () => {
+  it('exact-pinned tool dispatches when the intent is its pinned phrase', async () => {
     const pins = new IntentPinRegistry();
-    // Pin with a canonical that matches what canonicalize() produces for 'delete record'
-    // canonicalize('delete record') → 'delete:record'
-    pins.pin({ canonical: 'delete:record', policy: 'exact' });
+    pins.pin({ canonical: 'delete:record', policy: 'exact', aliases: ['delete record'] });
     const context = createContext(pins);
     const cls = new ToolClass('db');
 
@@ -554,9 +550,12 @@ describe('Intent Pinning — semantic collision mitigation', () => {
     cls.addMethod(selector, makeIMP('db', 'delete_record', 'deleted'));
     context.registerClass(cls);
 
-    // Exact intent should work — canonicalize('delete record') === 'delete:record'
-    const result = await toolkit_dispatch(context, 'delete record');
-    expect(result.content).toBe('deleted');
+    // The pinned phrase (and the pin canonical itself) dispatch...
+    expect((await toolkit_dispatch(context, 'delete record')).content).toBe('deleted');
+    expect((await toolkit_dispatch(context, 'Delete  Record')).content).toBe('deleted');
+    expect((await toolkit_dispatch(context, 'delete:record')).content).toBe('deleted');
+    // ...a phrase that only canonicalizes to it does not (0.x let "do not … " through).
+    expect((await toolkit_dispatch(context, 'do not delete the record')).content).not.toBe('deleted');
   });
 
   it('exact-pinned tool blocks semantically similar but non-exact intents', async () => {
@@ -760,7 +759,7 @@ describe('Inference-core hardening', () => {
     }
   });
 
-  it('completes the forwarding chain by decomposing an unrecognized intent', async () => {
+  it('decomposes an unrecognized intent when dispatching (each sub-intent is dispatched in turn)', async () => {
     // A stub LLM client that decomposes the unknown intent into two sub-intents
     // that DO resolve to registered tools.
     const llmClient = {
@@ -773,8 +772,8 @@ describe('Inference-core hardening', () => {
       }),
     };
 
-    // A vector index that matches nothing — guarantees the broadened-search
-    // step misses, so forwarding reaches the decomposition step deterministically.
+    // A vector index that matches nothing — so resolution has no candidates
+    // and no refinement options, and dispatch reaches decomposition.
     const emptyIndex = {
       insert() {},
       remove() {},
@@ -794,15 +793,9 @@ describe('Inference-core hardening', () => {
     files.addMethod(fSel, makeIMP('files', 'read', 'file-data'));
     context.registerClass(files);
 
-    // An intent that matches nothing directly — drives resolution to forward().
-    const result = await context.forward(
-      await selectorTable.resolve('xyzzy plugh frobnicate nothing matches'),
-      'xyzzy plugh frobnicate nothing matches',
-    );
+    const result = await toolkit_dispatch(context, 'xyzzy plugh frobnicate nothing matches');
 
-    const steps = (result.metadata as any)?.fallbackSteps as Array<{ strategy: string; result: string }>;
-    const llmStep = steps?.find(s => s.strategy === 'llm_disambiguate');
-    expect(llmStep?.result).toBe('hit');
+    expect((result.metadata!.proof as ResolutionProof).decision).toBe('decomposed');
     expect((result.content as any)?.decomposed).toBe(true);
     expect((result.content as any)?.results).toHaveLength(2);
   });
@@ -813,6 +806,7 @@ describe('semantic map — learned refinement resolution (Pillar 4b)', () => {
     toolEmbedText: string,
     selectorId: string,
     opts?: import('./semantic-map.js').SemanticMapOptions,
+    llmClient?: import('../core/llm-client.js').LLMClient,
   ) {
     const embedder = new LocalEmbedder(64);
     const vectorIndex = new MemoryVectorIndex();
@@ -820,7 +814,7 @@ describe('semantic map — learned refinement resolution (Pillar 4b)', () => {
     const cache = new ResolutionCache();
     const context = new DispatchContext(
       selectorTable, cache, vectorIndex, embedder, undefined, undefined,
-      { semanticMapOptions: opts },
+      { semanticMapOptions: opts, llmClient },
     );
 
     const cls = new ToolClass('contexta');
@@ -841,12 +835,13 @@ describe('semantic map — learned refinement resolution (Pillar 4b)', () => {
     const after = await toolkit_dispatch(context, 'quarterly revenue overview');
     expect(after.content).toBe('list_tasks:executed');
 
-    const proof = after.metadata!.proof as any;
-    // The very first proof step is the semantic-map exact resolution.
-    const smStep = proof.steps.find((s: any) => s.stage === 'semantic_map');
+    const proof = after.metadata!.proof as ResolutionProof;
+    // Resolution settled at the semantic-map exact step.
+    const smStep = proof.steps.find(s => s.stage === 'semantic_map');
     expect(smStep).toBeDefined();
-    expect(smStep.output).toBe('contexta:list_tasks');
-    expect(String(smStep.decision)).toContain('exact');
+    expect(smStep!.detail?.selector).toBe('contexta:list_tasks');
+    expect(smStep!.decision).toContain('exact');
+    expect(proof.decision).toBe('learned-exact');
     expect(after.metadata!.tier).toBe('exact');
   });
 
@@ -855,18 +850,20 @@ describe('semantic map — learned refinement resolution (Pillar 4b)', () => {
     // Tool vector is unrelated, so only the learned intent vector can surface it.
     const context = await contextWithTool('deploy production database cluster', 'contexta:list_tasks', {
       similarityThreshold: 0.5,
-    });
+    }, { microCheck: async () => true });
 
     await context.reinforceRefinement('list all tasks', 'contexta:list_tasks');
 
     // Different canonical form ("list tasks now" vs "list tasks"), similar vector.
+    // The boosted score is below HIGH, so the LLM verifier's approval is what lets it run.
     const result = await toolkit_dispatch(context, 'list tasks now');
     expect(result.content).toBe('list_tasks:executed');
 
-    const proof = result.metadata!.proof as any;
-    const smStep = proof.steps.find((s: any) => s.stage === 'semantic_map');
+    const proof = result.metadata!.proof as ResolutionProof;
+    const smStep = proof.steps.find(s => s.stage === 'semantic_map');
     expect(smStep).toBeDefined();
-    expect(String(smStep.decision)).toContain('injected');
+    expect(smStep!.decision).toContain('injected');
+    expect(proof.candidates[0]).toMatchObject({ toolId: 'contexta/list_tasks', source: 'semantic-map-similar', similarity: null });
   });
 
   it('does not fire for an unrelated intent after learning', async () => {
@@ -981,12 +978,35 @@ describe('requireLLMForSubHighDispatch — sub-HIGH tiers without an LLM client'
     };
   }
 
-  it('defaults to auto-dispatching a LOW-confidence match (prior behavior)', async () => {
+  it('defaults to deferring a LOW-confidence match when no LLM verifier is configured', async () => {
     const index = fixedDistanceIndex(0.35); // confidence 0.65 → LOW tier
     const embedder = new LocalEmbedder(64);
     const selectorTable = new SelectorTable(index as any, embedder);
     const cache = new ResolutionCache();
     const context = new DispatchContext(selectorTable, cache, index as any, embedder);
+
+    const cls = new ToolClass('write');
+    const sel = await selectorTable.intern(await embedder.embed('delete a record'), 'write.delete_record');
+    cls.addMethod(sel, makeIMP('write', 'delete_record', 'deleted!'));
+    context.registerClass(cls);
+
+    const result = await toolkit_dispatch(context, 'delete a record');
+    expect(result.content).not.toBe('deleted!');
+    expect(result.isError).toBe(true);
+    expect(result.metadata?.outcome).toBe('needs-disambiguation');
+    expect((result.metadata?.proof as ResolutionProof).decision).toBe('needs-llm-verifier');
+    expect(result.refinement?.options[0].toolId).toBe('write/delete_record');
+  });
+
+  it('auto-dispatches a LOW-confidence match when the guard is turned off (0.x behavior)', async () => {
+    const index = fixedDistanceIndex(0.35); // confidence 0.65 → LOW tier
+    const embedder = new LocalEmbedder(64);
+    const selectorTable = new SelectorTable(index as any, embedder);
+    const cache = new ResolutionCache();
+    const context = new DispatchContext(
+      selectorTable, cache, index as any, embedder, undefined, undefined,
+      { requireLLMForSubHighDispatch: false },
+    );
 
     const cls = new ToolClass('write');
     const sel = await selectorTable.intern(await embedder.embed('delete a record'), 'write.delete_record');
@@ -1037,14 +1057,14 @@ describe('requireLLMForSubHighDispatch — sub-HIGH tiers without an LLM client'
     expect(result.content).toBe('deleted!');
   });
 
-  it('has no effect when an LLMClient is configured', async () => {
+  it('lets the LLM verifier approve a sub-HIGH match', async () => {
     const index = fixedDistanceIndex(0.35); // confidence 0.65 → LOW tier
     const embedder = new LocalEmbedder(64);
     const selectorTable = new SelectorTable(index as any, embedder);
     const cache = new ResolutionCache();
     const llmClient = {
-      microCheck: async () => ({ pass: true, confidence: 1 }),
-      decompose: async () => ({ decomposed: false, subIntents: [], strategy: 'none' as const }),
+      microCheck: async () => true,
+      decompose: async () => ({ subIntents: [], strategy: 'sequential' as const }),
     };
     const context = new DispatchContext(
       selectorTable, cache, index as any, embedder, undefined, undefined,

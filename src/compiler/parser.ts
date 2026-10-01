@@ -4,6 +4,7 @@ import type {
   JSONSchemaType,
   ProviderManifest,
   ProviderCompilerHints,
+  ToolAnnotations,
   ToolDefinition,
   TransportType,
 } from '../core/types.js';
@@ -23,6 +24,8 @@ export interface ParsedTool {
   arguments: ArgumentSpec[];
   /** The tool's full input JSON Schema, when the source provides one */
   inputSchema?: JSONSchemaType;
+  /** MCP tool annotations declared by the upstream server */
+  annotations?: ToolAnnotations;
   transportType: TransportType;
   /** Resolved compiler hints (merged from provider defaults + tool overrides) */
   compilerHints?: CompilerHint;
@@ -49,6 +52,7 @@ export function parseMCPManifest(manifest: ProviderManifest): ParsedTool[] {
       description: tool.description,
       arguments: extractArguments(tool.inputSchema),
       inputSchema: tool.inputSchema,
+      annotations: tool.annotations,
       transportType: manifest.transportType,
       compilerHints: mergedHints,
       providerHints: manifest.compilerHints,
@@ -160,8 +164,9 @@ export function parseRawSchema(definition: ToolDefinition): ParsedTool {
 }
 
 /** Extract ArgumentSpecs from a JSON schema */
-function extractArguments(schema: JSONSchemaType): ArgumentSpec[] {
-  if (!schema.properties) return [];
+/** The top-level properties of an object input schema, as ArgumentSpecs. */
+export function extractArguments(schema: JSONSchemaType | undefined): ArgumentSpec[] {
+  if (!schema?.properties) return [];
 
   const required = new Set(schema.required ?? []);
 

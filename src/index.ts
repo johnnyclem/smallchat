@@ -40,6 +40,7 @@ export type {
   StdioLaunchSpec,
   RemoteLaunchSpec,
   ToolAnnotations,
+  ToolRefinementNeeded,
   OverloadEntryData,
   OverloadTableData,
   ProviderManifest,
@@ -116,15 +117,55 @@ export type { SemanticRateLimiterOptions, FloodingMetrics } from './core/semanti
 export { ToolClass, ToolProxy } from './core/tool-class.js';
 
 // Runtime
-export { DispatchContext, UnrecognizedIntent, toolkit_dispatch, smallchat_dispatchStream } from './runtime/dispatch.js';
-export type { FallbackStep, FallbackChainResult, DispatchConfig } from './runtime/dispatch.js';
-export { ToolRuntime } from './runtime/runtime.js';
+export {
+  DispatchContext,
+  UnrecognizedIntent,
+  toolkit_dispatch,
+  smallchat_dispatchStream,
+  smallchat_dispatchStreamById,
+  dispatchById,
+  resolveIntent,
+  toolIdOf,
+} from './runtime/dispatch.js';
+export type {
+  DispatchConfig,
+  DispatchByIdOptions,
+  RegisteredTool,
+  Resolution,
+  ResolutionCandidate,
+  ResolveOptions,
+} from './runtime/dispatch.js';
+export { ToolRuntime, runtimeOptionsFromPolicy } from './runtime/runtime.js';
 export type { RuntimeOptions } from './runtime/runtime.js';
 export { DispatchBuilder } from './runtime/dispatch-builder.js';
 
 // 0.4.0: Confidence-Tiered Dispatch (Pillar 1)
-export { computeTier, requiresVerification, requiresDecomposition, requiresRefinement, createProof, addProofStep, DEFAULT_THRESHOLDS } from './core/confidence.js';
-export type { ConfidenceTier, TierThresholds, ResolutionProof, ProofStep } from './core/confidence.js';
+export { computeTier, requiresVerification, requiresDecomposition, requiresRefinement, DEFAULT_THRESHOLDS } from './core/confidence.js';
+export type { ConfidenceTier, TierThresholds } from './core/confidence.js';
+export { createProof, addProofStep, finalizeProof, computeProofDigest, PROOF_DIGEST_DOMAIN } from './core/proof.js';
+export type {
+  ResolutionProof,
+  ResolutionOutcome,
+  ProofStep,
+  ProofStage,
+  ProofCandidate,
+  ProofGuards,
+  ProofContext,
+  CandidateSource,
+  DecisionCode,
+} from './core/proof.js';
+
+// Dispatch policy, guards, argument validation and the canonical call digest
+export { evaluateDispatchPolicy, isDestructive } from './runtime/policy.js';
+export type { DispatchPolicyOptions, PinState, PolicyCode, PolicyInput, PolicyVerdict } from './runtime/policy.js';
+export { IntentPinRegistry, normalizePinPhrase } from './core/intent-pin.js';
+export type { IntentPin, IntentPinPolicy, IntentPinMatch } from './core/intent-pin.js';
+export { SignatureValidationError } from './core/overload-table.js';
+export type { SignatureViolation } from './core/sc-types.js';
+export { compileArgumentValidator, createSchemaConstraints, InputSchemaError } from './core/argument-validator.js';
+export type { ArgumentCheck, ArgumentCoercion, ArgumentValidationOptions, ArgumentValidator, SchemaDialect } from './core/argument-validator.js';
+export { callDigest, CALL_DIGEST_DOMAIN } from './core/call-digest.js';
+export { canonicalJson } from './core/jcs.js';
 
 // 0.4.0: Pluggable LLM Interface
 export { NULL_LLM_CLIENT } from './core/llm-client.js';
@@ -586,6 +627,7 @@ export type {
   SmallChatPackage,
   ManifestCompilerConfig,
   ManifestOutputConfig,
+  ManifestPolicyConfig,
   PreCompiledProvider,
 } from './core/manifest.js';
 

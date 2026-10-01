@@ -8,7 +8,7 @@ Detailed documentation for smallchat's runtime, dispatch system, CLI, and MCP se
 - **Resolution Cache** — LRU cache with version tagging and automatic staleness detection
 - **ToolClass** — provider grouping with dispatch tables, superclass chains, and overload support
 - **ToolProxy** — lazy schema loading (like `NSProxy`)
-- **smallchat_dispatch** — the hot path for intent → tool resolution
+- **resolve / dispatchById / dispatch** — choose a tool without running it; run exactly one tool by id; or both in one call (see below)
 - **smallchat_dispatchStream** — async generator streaming dispatch with real-time event feedback
 - **ToolRuntime** — top-level runtime with swizzling, header generation, and inference streaming
 
@@ -59,32 +59,88 @@ Tools can register multiple signatures under the same selector. Resolution picks
 
 The compiler can also generate **semantic overloads** automatically by clustering tools with similar embeddings but different argument signatures (configurable threshold, default 0.82).
 
-## Fallback Chain
+## Resolve, Dispatch by Id, and the Dispatch Policy
 
-When no exact dispatch match is found, the runtime attempts graceful degradation:
+Resolution and execution are separate calls:
 
-1. **Superclass traversal** — walks ISA chains
-2. **Broadened search** — lowers similarity threshold (0.75 → 0.5)
-3. **LLM disambiguation** — (stub, planned for Phase 3)
+```typescript
+// Choose a tool; nothing runs, nothing is cached or interned (learn: false).
+const resolution = await runtime.resolve('close the stale issue');
+// resolution.outcome: 'resolved' | 'needs-disambiguation' | 'unresolved'
+// resolution.chosen:  'github/update_issue' (when resolved)
+// resolution.candidates: [{ toolId, score, similarity, tier, source }, ...]
 
-Results include `fallbackSteps` metadata so callers know the resolution path taken.
+// Run exactly one tool by canonical id: O(1), no embedding.
+const result = await runtime.dispatchById('github/update_issue', { number: 7, state: 'closed' },
+  { resolutionDigest: resolution.proof.proofDigest });
 
-## Dispatching Without an LLMClient
+// Convenience: resolve → policy → the same execution boundary.
+const result2 = await runtime.dispatch('close the stale issue', { number: 7, state: 'closed' });
+```
 
-`LLMClient` is optional — verification, decomposition, and refinement all
-degrade gracefully without one. But "gracefully" means the MEDIUM tier's
-verification becomes schema-only and the LOW tier's decomposition can't run
-at all, so by default **both tiers fall through to executing the best
-vector match**, auto-firing a tool on as little as 0.60 confidence with no
-human in the loop. That's fine for read-only tools; it's a real risk for
-write/destructive ones if you haven't wired an `LLMClient`.
+When resolution does not settle on one tool, `dispatch()` runs nothing and
+returns `isError: true` with `metadata.outcome` (`needs-disambiguation` or
+`unresolved`) and a `refinement` whose options carry `toolId`s for
+`dispatchById`. MCP `tools/call` names tools exactly (by listed name or
+canonical id) and never resolves semantically; an unknown or ambiguous name
+is a `-32602` error.
 
-Set `RuntimeOptions.requireLLMForSubHighDispatch: true` to make MEDIUM/LOW
-resolutions defer to the refinement protocol (ask the user) instead of
-auto-dispatching whenever no `LLMClient` is configured. It's off by default
-to preserve prior behavior, and has no effect once you wire in an
-`LLMClient` — verification and decomposition then run for real instead of
-degrading.
+The dispatch policy (`src/runtime/policy.ts`) is one function evaluated on
+every path that can run a tool — pinned phrases, learned preferences, cache
+hits, vector and overload candidates, protocol conformance, and each
+sub-intent of a decomposition:
+
+1. Dispatch by exact tool id is always allowed.
+2. An `exact` intent pin accepts only its pinned phrases (the pin canonical
+   or an alias, compared after Unicode NFKC, case and whitespace
+   normalization — "do not transfer funds" is not "transfer funds"). An
+   `elevated` pin needs its threshold on the cosine similarity of the
+   intent's own embedding.
+3. A destructive tool runs only by exact id, a pinned phrase, or EXACT
+   similarity from the intent's own embedding — never from a cache hit, a
+   learned preference or a boosted score. A tool is destructive when
+   `annotations.destructiveHint` is true, or when it says
+   `readOnlyHint: false` without a `destructiveHint` (MCP's default);
+   `treatUnannotatedAsDestructive: true` extends this to tools with no
+   annotations.
+4. Below HIGH (MEDIUM/LOW), a tool runs only after an LLM verifier
+   (`LLMClient.microCheck`) approves it for this intent. This is
+   `requireLLMForSubHighDispatch`, on by default; without an `LLMClient`,
+   sub-HIGH matches are `needs-disambiguation`. Alternates are verified
+   with the same strategies as the best candidate.
+5. Below LOW, nothing runs.
+
+Configure it with `RuntimeOptions` (`requireLLMForSubHighDispatch`,
+`strict`, `intentPins`, `treatUnannotatedAsDestructive`, `thresholds`,
+`llmClient`) or, for `smallchat serve`, a `"policy"` block in
+`smallchat.json`.
+
+## Argument Validation
+
+Every call is validated against the tool's `inputSchema` before it runs
+(`src/core/argument-validator.ts`, Ajv): JSON Schema 2020-12 by default
+(the MCP default dialect), 2019-09 and draft-07 when `$schema` says so.
+Semantics are the schema's own: a closed schema (`additionalProperties:
+false`) rejects unknown arguments; `required` ignores inherited and
+`undefined` values; `NaN`/`Infinity` are not numbers. Types are not coerced
+unless `argumentCoercion: 'primitives'` is set. A failure returns
+`isError: true` with one readable line per problem, e.g.
+`argument "days" must be integer, got string "-1"`, and the tool does not
+run. A schema that cannot be compiled makes that tool uncallable (with the
+compile error) rather than unchecked.
+
+## Resolution Proofs and Call Digests
+
+Every result carries `metadata.proof` (`src/core/proof.ts`): the outcome
+and decision code, the chosen tool and the tool that actually ran, the full
+candidate table (scores, similarities, tiers, sources, exclusions), the
+thresholds and guards in force, the embedder fingerprint, the artifact
+`contentHash`, and the steps taken. Raw arguments are never recorded; the
+call is bound by its canonical call digest
+(`sha256(UTF8("smallchat.call.v1") || 0x00 || toolId || 0x00 || JCS(args))`,
+golden vectors in `spec/call-digest/vectors.json`). `proofDigest` covers the
+whole proof except its timings, so the same decision made from the same
+inputs has the same digest.
 
 ## Selector Table: Tools vs. Intents
 
@@ -173,7 +229,7 @@ When compiling from an MCP config or auto-detecting, smallchat spawns each serve
 
 | Capability | Description |
 |------------|-------------|
-| **JSON-RPC** | `initialize`, `tools/list` (paginated), `tools/call` |
+| **JSON-RPC** | `initialize`, `tools/list` (paginated), `tools/call` (by exact listed name or canonical tool id; arguments validated against the tool's `inputSchema`) |
 | **Resources** | `resources/list`, `resources/read`, `resources/subscribe` with change notifications |
 | **Prompts** | `prompts/list`, `prompts/get` with template arguments |
 | **SSE** | Server-Sent Events stream with keep-alive |
@@ -305,5 +361,5 @@ Metrics include top-1 accuracy, top-5 accuracy, acceptable hit rate, and latency
 
 ## Current Limitations
 
-- **No LLM disambiguation**: Multiple-candidate resolution takes the best match. LLM-assisted disambiguation planned for Phase 3.
+- **No built-in LLM verifier**: below HIGH confidence, intent dispatch needs an `LLMClient` you supply; without one those matches return `needs-disambiguation`.
 - **JSON output**: Compiled artifacts are JSON. SQLite binary format planned for Phase 4.

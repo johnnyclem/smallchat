@@ -1,12 +1,15 @@
 /**
- * Confidence-Tiered Dispatch — Pillar 1 of smallchat 0.4.0.
+ * Confidence-Tiered Dispatch — Pillar 1.
  *
- * Every dispatch returns a confidence tier that determines runtime behavior:
+ * Every resolution has a confidence tier that determines runtime behavior
+ * (the dispatch policy in runtime/policy.ts has the full rules):
  *   EXACT  (>= 0.95) — dispatch immediately, cache aggressively
- *   HIGH   (>= 0.85) — dispatch, log for review
- *   MEDIUM (>= 0.75) — dispatch with verification (Pillar 2)
- *   LOW    (>= 0.60) — trigger decomposition (Pillar 3)
- *   NONE   (< 0.60)  — trigger refinement protocol (Pillar 4)
+ *   HIGH   (>= 0.85) — dispatch
+ *   MEDIUM (>= 0.75) — dispatch only after verification approves it (an LLM
+ *                      verifier, unless requireLLMForSubHighDispatch is off)
+ *   LOW    (>= 0.60) — decomposition when dispatching, else as MEDIUM
+ *   NONE   (< 0.60)  — never dispatched; refinement protocol (Pillar 4)
+ * Destructive tools additionally need EXACT similarity or an exact tool id.
  */
 
 // ---------------------------------------------------------------------------
@@ -54,46 +57,5 @@ export function requiresRefinement(tier: ConfidenceTier): boolean {
   return tier === 'none';
 }
 
-// ---------------------------------------------------------------------------
-// Resolution proof — a serializable trace of why a tool was chosen
-// ---------------------------------------------------------------------------
-
-export interface ResolutionProof {
-  intent: string;
-  steps: ProofStep[];
-  elapsed: number;
-  tier: ConfidenceTier;
-  /** Final resolved tool name, or null if unresolved */
-  resolvedTool: string | null;
-}
-
-export interface ProofStep {
-  stage: 'cache' | 'intent_pin' | 'semantic_map' | 'vector_search' | 'overload'
-       | 'verification' | 'decomposition' | 'refinement'
-       | 'protocol' | 'forwarding' | 'fallback';
-  input: unknown;
-  output: unknown;
-  elapsed: number;
-  decision: string;
-}
-
-/** Create a new empty proof trace */
-export function createProof(intent: string): ResolutionProof {
-  return {
-    intent,
-    steps: [],
-    elapsed: 0,
-    tier: 'none',
-    resolvedTool: null,
-  };
-}
-
-/** Add a step to a proof trace */
-export function addProofStep(
-  proof: ResolutionProof,
-  step: Omit<ProofStep, 'elapsed'>,
-  elapsed: number,
-): void {
-  proof.steps.push({ ...step, elapsed });
-  proof.elapsed += elapsed;
-}
+// The resolution proof (a structured record of each decision) lives in
+// ./proof.ts.

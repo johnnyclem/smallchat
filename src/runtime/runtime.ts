@@ -3,15 +3,20 @@ import { ResolutionCache, computeSchemaFingerprint } from '../core/resolution-ca
 import { SelectorTable } from '../core/selector-table.js';
 import { ToolClass } from '../core/tool-class.js';
 import { OverloadTable } from '../core/overload-table.js';
-import { DispatchContext, toolkit_dispatch, smallchat_dispatchStream } from './dispatch.js';
-import type { DispatchConfig } from './dispatch.js';
+import { DispatchContext, toolkit_dispatch, smallchat_dispatchStream, smallchat_dispatchStreamById, dispatchById, resolveIntent } from './dispatch.js';
+import type { DispatchConfig, DispatchByIdOptions, RegisteredTool, Resolution, ResolveOptions } from './dispatch.js';
 import type { SCMethodSignature } from '../core/sc-types.js';
 import { DispatchBuilder } from './dispatch-builder.js';
 import { SelectorNamespace } from '../core/selector-namespace.js';
 import type { LLMClient } from '../core/llm-client.js';
 import type { DispatchObserver } from './observer.js';
 import type { SemanticMap, SemanticMapOptions, LearnedPreference } from './semantic-map.js';
-import type { ConfidenceTier, ResolutionProof, TierThresholds } from '../core/confidence.js';
+import type { TierThresholds } from '../core/confidence.js';
+import { IntentPinRegistry } from '../core/intent-pin.js';
+import type { IntentPin } from '../core/intent-pin.js';
+import type { ArgumentCoercion } from '../core/argument-validator.js';
+import type { ManifestPolicyConfig } from '../core/manifest.js';
+import { DEFAULT_THRESHOLDS } from '../core/confidence.js';
 
 /**
  * ToolRuntime — the top-level runtime that manages everything.
@@ -64,7 +69,18 @@ export class ToolRuntime {
       semanticMap: options?.semanticMap,
       semanticMapOptions: options?.semanticMapOptions,
       requireLLMForSubHighDispatch: options?.requireLLMForSubHighDispatch,
+      treatUnannotatedAsDestructive: options?.treatUnannotatedAsDestructive,
+      argumentCoercion: options?.argumentCoercion,
+      artifactHash: options?.artifactHash,
     };
+
+    let intentPins: IntentPinRegistry | undefined;
+    if (options?.intentPins instanceof IntentPinRegistry) {
+      intentPins = options.intentPins;
+    } else if (options?.intentPins) {
+      intentPins = new IntentPinRegistry();
+      for (const pin of options.intentPins) intentPins.pin(pin);
+    }
 
     this.context = new DispatchContext(
       this.selectorTable,
@@ -72,9 +88,14 @@ export class ToolRuntime {
       vectorIndex,
       embedder,
       this.selectorNamespace,
-      undefined, // intentPins
+      intentPins,
       dispatchConfig,
     );
+  }
+
+  /** The intent pins guarding sensitive selectors (add pins at any time) */
+  get intentPins(): IntentPinRegistry {
+    return this.context.intentPins;
   }
 
   // ---------------------------------------------------------------------------
@@ -212,14 +233,62 @@ export class ToolRuntime {
   }
 
   /**
+   * Resolve an intent to at most one tool, without executing anything.
+   *
+   * Returns the outcome ('resolved' | 'needs-disambiguation' |
+   * 'unresolved'), the chosen tool id when resolved, the ranked
+   * candidates, and a proof with a stable `proofDigest`. By default
+   * (`learn: false`) it changes nothing in the runtime — no interning, no
+   * caching; only the semantic rate limiter counts the embedding. Run the
+   * chosen tool with `dispatchById(resolution.chosen, args)`.
+   */
+  resolve(intent: string, options?: ResolveOptions): Promise<Resolution> {
+    return resolveIntent(this.context, intent, options);
+  }
+
+  /**
+   * Execute exactly the tool with this canonical id (`<providerId>/<toolName>`):
+   * O(1) lookup, no embedding, no semantic resolution. Arguments are
+   * validated against the tool's inputSchema first. An unknown id or
+   * invalid arguments return an isError result; nothing runs.
+   */
+  dispatchById(
+    toolId: string,
+    args: Record<string, unknown> = {},
+    options?: DispatchByIdOptions,
+  ): Promise<ToolResult> {
+    return dispatchById(this.context, toolId, args, options);
+  }
+
+  /** Streaming variant of dispatchById. */
+  dispatchStreamById(
+    toolId: string,
+    args: Record<string, unknown> = {},
+    options?: DispatchByIdOptions,
+  ): AsyncGenerator<DispatchEvent> {
+    return smallchat_dispatchStreamById(this.context, toolId, args, options);
+  }
+
+  /** The registered tool with this canonical id, if any. */
+  getTool(toolId: string): RegisteredTool | undefined {
+    return this.context.getTool(toolId);
+  }
+
+  /** Every registered canonical tool id, sorted. */
+  toolIds(): string[] {
+    return this.context.toolIds();
+  }
+
+  /**
    * Fluent dispatch — returns a DispatchBuilder for chaining .withArgs().exec()/.stream().
    *
-   * @example
-   *   // Fluent (new):
-   *   const result = await runtime.dispatch("fetch url").withArgs({ url }).exec();
-   *   // for await (const tok of runtime.dispatch("summarise").withArgs({ url }).inferStream()) ...
+   * `dispatch(intent, args)` is resolve → policy → execute: the chosen tool
+   * runs only when resolution settles on exactly one tool that the
+   * dispatch policy allows; otherwise the result is an isError result
+   * (outcome 'needs-disambiguation' or 'unresolved') listing candidates.
    *
-   *   // Direct (legacy):
+   * @example
+   *   const result = await runtime.dispatch("fetch url").withArgs({ url }).exec();
    *   const result = await runtime.dispatch("fetch url", { url });
    */
   dispatch(intent: string): DispatchBuilder;
@@ -241,33 +310,34 @@ export class ToolRuntime {
    * the options and the user picks one. Pass the original intent and the chosen
    * option back here. This does two things at once:
    *
-   *   1. Executes the chosen selector — the dispatch the user actually wanted.
+   *   1. Executes exactly the chosen tool (by id) — the user named it.
    *   2. Reinforces the semantic map — so the exact intent resolves instantly
    *      next time, and *similar* intents get a confidence boost toward the same
-   *      selector. Deferring to the user costs one click; it never costs two.
+   *      selector. (A learned preference never authorizes a pinned or
+   *      destructive tool on its own; see runtime/policy.ts.)
    *
-   * `choice` is either a canonical selector id (as carried on
-   * `ToolRefinementNeeded.options[n].selectorId`) or the option object itself.
-   * When only a narrowed intent is available (some LLM-suggested rewrites carry
-   * no selector id), the narrowed intent is dispatched without reinforcement —
-   * there is no single selector to bind the preference to.
+   * `choice` is a canonical selector id (as carried on
+   * `ToolRefinementNeeded.options[n].selectorId`) or the option object itself
+   * (whose `toolId` or `selectorId` is used). When only a narrowed intent is
+   * available (some LLM-suggested rewrites carry neither), the narrowed intent
+   * is dispatched as an intent, without reinforcement.
    */
   async resolveRefinement(
     originalIntent: string,
-    choice: string | { selectorId?: string; intent?: string },
+    choice: string | { selectorId?: string; toolId?: string; intent?: string },
     args?: Record<string, unknown>,
   ): Promise<ToolResult> {
     const selectorId = typeof choice === 'string' ? choice : choice.selectorId;
     const narrowedIntent = typeof choice === 'string' ? undefined : choice.intent;
+    const owner = selectorId ? this.context.toolForSelector(selectorId) : null;
+    const toolId = (typeof choice === 'string' ? undefined : choice.toolId) ?? owner?.toolId;
 
-    if (selectorId) {
-      // Learn first, then dispatch — the exact fast-path now resolves the
-      // original intent straight to the selector the user chose.
-      await this.context.reinforceRefinement(originalIntent, selectorId);
-      return toolkit_dispatch(this.context, originalIntent, args);
+    if (toolId) {
+      if (selectorId) await this.context.reinforceRefinement(originalIntent, selectorId);
+      return dispatchById(this.context, toolId, args ?? {});
     }
 
-    // No selector to bind to — dispatch the narrowed rewrite as-is.
+    // No tool to bind to — dispatch the narrowed rewrite as an intent.
     return toolkit_dispatch(this.context, narrowedIntent ?? originalIntent, args);
   }
 
@@ -487,9 +557,38 @@ export interface RuntimeOptions {
    */
   maxIntentEntries?: number;
   /**
-   * When true, and no LLMClient is configured, MEDIUM/LOW confidence
-   * resolutions defer to the refinement protocol instead of auto-dispatching
-   * the best vector match. See DispatchConfig for details. Defaults to false.
+   * Below HIGH confidence, run a resolved tool only when an LLM verifier
+   * (llmClient.microCheck) approved it; otherwise the outcome is
+   * needs-disambiguation. Default true (0.x default was false).
    */
   requireLLMForSubHighDispatch?: boolean;
+  /**
+   * Intent pins guarding sensitive selectors: a registry, or pins to load
+   * into a new one. See core/intent-pin.ts.
+   */
+  intentPins?: IntentPinRegistry | IntentPin[];
+  /**
+   * Treat tools without any MCP annotations as destructive (they then run
+   * only by exact id, a pinned phrase, or EXACT similarity). Default false.
+   */
+  treatUnannotatedAsDestructive?: boolean;
+  /** Type coercion before argument validation: 'none' (default) or 'primitives'. */
+  argumentCoercion?: ArgumentCoercion;
+  /** contentHash of the artifact the tools came from (recorded in proofs) */
+  artifactHash?: string;
+}
+
+/**
+ * RuntimeOptions for a smallchat.json "policy" block. Unset fields are left
+ * out, so the runtime defaults apply to them.
+ */
+export function runtimeOptionsFromPolicy(policy: ManifestPolicyConfig): RuntimeOptions {
+  const options: RuntimeOptions = {};
+  if (policy.requireLLMForSubHighDispatch !== undefined) options.requireLLMForSubHighDispatch = policy.requireLLMForSubHighDispatch;
+  if (policy.strict !== undefined) options.strict = policy.strict;
+  if (policy.treatUnannotatedAsDestructive !== undefined) options.treatUnannotatedAsDestructive = policy.treatUnannotatedAsDestructive;
+  if (policy.argumentCoercion !== undefined) options.argumentCoercion = policy.argumentCoercion;
+  if (policy.thresholds) options.thresholds = { ...DEFAULT_THRESHOLDS, ...policy.thresholds };
+  if (policy.pins) options.intentPins = policy.pins;
+  return options;
 }

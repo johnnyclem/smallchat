@@ -1,4 +1,4 @@
-import type { ToolIMP, ToolMethod, ToolProtocol, ToolSchema, ToolSelector, ToolResult, TransportType, ArgumentConstraints, ValidationResult, InferenceDelta, ToolTransport, ToolTransportFactory } from './types.js';
+import type { ToolIMP, ToolMethod, ToolProtocol, ToolSchema, ToolSelector, ToolResult, TransportType, ArgumentConstraints, ValidationResult, InferenceDelta, ToolTransport, ToolTransportFactory, ToolAnnotations } from './types.js';
 import { OverloadTable } from './overload-table.js';
 import type { OverloadResolutionResult } from './overload-table.js';
 import type { SCMethodSignature } from './sc-types.js';
@@ -201,6 +201,9 @@ export class ToolProxy implements ToolIMP {
   schema: ToolSchema | null = null;
   schemaLoader: () => Promise<ToolSchema>;
   constraints: ArgumentConstraints;
+
+  /** Upstream behavioural hints (MCP tool annotations), when declared */
+  annotations?: ToolAnnotations;
 
   /** Optional endpoint for remote transports */
   endpoint?: string;

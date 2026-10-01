@@ -9,7 +9,8 @@
  * the bytes.
  *
  * Only plain JSON values are accepted: non-finite numbers, bigint,
- * functions, symbols and `undefined` array elements throw. Object
+ * functions, symbols, `undefined` array elements, typed arrays and
+ * non-plain objects (Date, Map, class instances) throw. Object
  * properties whose value is `undefined` are omitted, matching
  * JSON.stringify.
  */
@@ -49,6 +50,14 @@ function serialize(value: unknown, path: string): string {
 
   if (ArrayBuffer.isView(value)) {
     throw new TypeError(`canonicalJson: typed array at ${path} (convert with Array.from first)`);
+  }
+
+  // Only plain objects: a Date, Map or class instance has no faithful JSON
+  // form here (JSON.stringify would call toJSON or silently emit "{}").
+  const proto = Object.getPrototypeOf(value);
+  if (proto !== Object.prototype && proto !== null) {
+    const name = (value as object).constructor?.name ?? 'object';
+    throw new TypeError(`canonicalJson: non-plain object (${name}) at ${path}`);
   }
 
   const obj = value as Record<string, unknown>;

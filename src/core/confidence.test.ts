@@ -5,8 +5,6 @@ import {
   requiresDecomposition,
   requiresRefinement,
   DEFAULT_THRESHOLDS,
-  createProof,
-  addProofStep,
 } from './confidence';
 
 // ---------------------------------------------------------------------------
@@ -141,88 +139,4 @@ describe('requiresRefinement', () => {
       expect(requiresRefinement(tier)).toBe(false);
     },
   );
-});
-
-// ---------------------------------------------------------------------------
-// createProof
-// ---------------------------------------------------------------------------
-
-describe('createProof', () => {
-  it('returns a ResolutionProof with the given intent', () => {
-    const proof = createProof('book a flight');
-    expect(proof.intent).toBe('book a flight');
-  });
-
-  it('initialises steps as an empty array', () => {
-    const proof = createProof('test');
-    expect(proof.steps).toEqual([]);
-  });
-
-  it('initialises elapsed to 0', () => {
-    const proof = createProof('test');
-    expect(proof.elapsed).toBe(0);
-  });
-
-  it('defaults tier to "none"', () => {
-    const proof = createProof('test');
-    expect(proof.tier).toBe('none');
-  });
-
-  it('defaults resolvedTool to null', () => {
-    const proof = createProof('test');
-    expect(proof.resolvedTool).toBeNull();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// addProofStep
-// ---------------------------------------------------------------------------
-
-describe('addProofStep', () => {
-  it('appends a step with the given elapsed time', () => {
-    const proof = createProof('greet');
-    addProofStep(
-      proof,
-      { stage: 'cache', input: 'greet', output: 'hit', decision: 'use cached' },
-      12,
-    );
-
-    expect(proof.steps).toHaveLength(1);
-    expect(proof.steps[0]).toEqual({
-      stage: 'cache',
-      input: 'greet',
-      output: 'hit',
-      decision: 'use cached',
-      elapsed: 12,
-    });
-  });
-
-  it('accumulates elapsed time across multiple steps', () => {
-    const proof = createProof('search');
-
-    addProofStep(
-      proof,
-      { stage: 'intent_pin', input: 'search', output: null, decision: 'no pin' },
-      5,
-    );
-    addProofStep(
-      proof,
-      { stage: 'vector_search', input: 'search', output: 'tool_x', decision: 'matched' },
-      20,
-    );
-
-    expect(proof.elapsed).toBe(25);
-    expect(proof.steps).toHaveLength(2);
-  });
-
-  it('preserves step order', () => {
-    const proof = createProof('multi');
-
-    addProofStep(proof, { stage: 'cache', input: 'a', output: 'miss', decision: 'skip' }, 1);
-    addProofStep(proof, { stage: 'verification', input: 'b', output: 'ok', decision: 'pass' }, 2);
-    addProofStep(proof, { stage: 'fallback', input: 'c', output: 'done', decision: 'end' }, 3);
-
-    expect(proof.steps.map((s) => s.stage)).toEqual(['cache', 'verification', 'fallback']);
-    expect(proof.elapsed).toBe(6);
-  });
 });

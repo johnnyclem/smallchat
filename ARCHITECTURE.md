@@ -8,7 +8,7 @@ smallchat models LLM tool use as message dispatch. The LLM expresses intent. The
 
 The codebase is deliberately split in two, reflecting what lasts and what is contingent:
 
-- **Tier 1 — the tool-inference core (durable).** Everything that turns an intent into a resolved tool: the selector table, vector index, resolution cache, confidence tiers, the serializable resolution proof, and the `verify → decompose → refine → observe` fallback chain. Its value is *selection correctness, determinism, microsecond latency, and auditability* — none of which depend on the price of a token. This tier is importable on its own as `@smallchat/core/inference`.
+- **Tier 1 — the tool-inference core (durable).** Everything that turns an intent into a resolved tool: the selector table, vector index, resolution cache, confidence tiers, the serializable resolution proof, and the `verify → decompose → refine → observe` fallback chain. Its value is *selection correctness, determinism (with the same artifact, embedder, policy, learned state and LLM-verifier answers, on one platform, the same intent yields the same choice and the same proof digest), microsecond latency, and auditability* — none of which depend on the price of a token. This tier is importable on its own as `@smallchat/core/inference`.
 - **Tier 2 — optimization satellites (contingent).** Compaction, output compression (RTK), knowledge pre-compilation (`memex`), CRDT memory, importance scoring, and dream recompilation. These exist to reduce token spend — pressing *today*, less so as tokens get cheap. They orbit the core and are tagged `[satellite]` in `src/index.ts`. Nothing in Tier 1 depends on them.
 
 The guiding principle: **token bloat is today's problem that a compiler solves; tool inference is the innovation that survives a future where token costs are nominal.** The sections below describe Tier 1 in detail.
@@ -49,9 +49,17 @@ Groups related tools under a single provider with a dispatch table (`selector �
 
 Maps a single selector to multiple signatures, resolved by argument types and arity. Resolution priority: exact type match > superclass match > union match > any.
 
-### Dispatch (`src/runtime/dispatch.ts`)
+### Dispatch (`src/runtime/dispatch.ts`, `src/runtime/policy.ts`)
 
-The hot path. `toolkit_dispatch(context, intent, args)` embeds the intent, searches the selector table, walks the class hierarchy, checks overloads, and invokes the resolved IMP.
+Resolution and execution are separate:
+
+- `runtime.resolve(intent)` chooses at most one tool and executes nothing. It returns an outcome (`resolved`, `needs-disambiguation` or `unresolved`), the chosen canonical tool id (`<providerId>/<toolName>`), the ranked candidates, and a structured proof. Candidates come from pinned phrases, learned preferences, the cache, vector and overload matches and protocol conformance, are ranked once (score, then tool id), and the chosen one passes verification and the dispatch policy.
+- `runtime.dispatchById(toolId, args)` executes exactly that tool: an O(1) lookup, no embedding. MCP `tools/call` uses it.
+- `runtime.dispatch(intent, args)` is `resolve` → policy → the same execution boundary as `dispatchById`.
+
+The dispatch policy is one function evaluated on every path that can run a tool: an `exact` intent pin accepts only its pinned phrases; a destructive tool (MCP `destructiveHint`) runs only by exact id, a pinned phrase or EXACT similarity measured from the intent's own embedding; below HIGH a tool runs only after an LLM verifier approves it (`requireLLMForSubHighDispatch`, on by default). Anything refused is `needs-disambiguation`, with the candidates' tool ids.
+
+Before anything executes, arguments are validated against the tool's `inputSchema` (JSON Schema 2020-12 or draft-07, `src/core/argument-validator.ts`) and the call is identified by its canonical call digest (`spec/call-digest/`). The proof (`src/core/proof.ts`) records the candidate table, thresholds, guards, embedder fingerprint, artifact hash, decision code, the tool that ran and the call digest, and carries a `proofDigest` over all of it except timings.
 
 ### Refinement + Semantic Map (`src/runtime/refinement.ts`, `src/runtime/semantic-map.ts`)
 
@@ -62,7 +70,7 @@ The Semantic Map closes the loop. When the user picks an option (`runtime.resolv
 1. **Exact fast-path** — the identical intent later resolves straight to the learned selector, before vector search, at the EXACT tier. The system never re-asks a question it has already been answered.
 2. **Similarity boost** — a *similar* future intent (cosine ≥ threshold to a remembered one) gets a confidence boost toward the learned selector, scaled by similarity and how many times the mapping has been reinforced. A near-miss that would otherwise defer again is lifted into a confident dispatch.
 
-Both paths add a `semantic_map` step to the resolution proof, so the learned influence is auditable. The map is the positive-signal mirror of the observer's negative examples (below), and it is serializable (`SemanticMap.toJSON()` / `fromJSON`) so a host can persist learning across sessions.
+Both paths add a `semantic_map` step to the resolution proof, so the learned influence is auditable. A learned preference never authorizes a pinned or destructive tool on its own: the dispatch policy requires the pinned phrase or EXACT similarity for those. The map is the positive-signal mirror of the observer's negative examples (below), and it is serializable (`SemanticMap.toJSON()` / `fromJSON`) so a host can persist learning across sessions.
 
 ### Compiler (`src/compiler/compiler.ts`)
 

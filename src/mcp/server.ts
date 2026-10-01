@@ -21,7 +21,7 @@ import {
   type ServerResponse,
   type Server,
 } from 'node:http';
-import type { ToolRuntime } from '../runtime/runtime.js';
+import type { ToolRuntime, RuntimeOptions } from '../runtime/runtime.js';
 import type { ToolResult } from '../core/types.js';
 import type { McpTool, McpUiResourceMeta } from './types.js';
 import { UIResourceRegistry, type UIContentProvider } from './ui-resources.js';
@@ -37,6 +37,7 @@ import {
   formatContent,
 } from './artifact.js';
 import type { ArtifactV1 } from '../artifact/types.js';
+import { parseToolId } from '../core/tool-id.js';
 import { filterContentWithRtk } from '../transport/rtk-transport.js';
 import type { RtkConfig } from '../transport/types.js';
 
@@ -71,6 +72,12 @@ export interface MCPServerConfig {
    * instead of failing to compile (same as `compile --allow-duplicates`).
    */
   allowDuplicates?: boolean;
+  /**
+   * Runtime options — the dispatch policy (requireLLMForSubHighDispatch,
+   * strict, intentPins, treatUnannotatedAsDestructive, thresholds,
+   * argumentCoercion) and an optional LLM verifier.
+   */
+  runtimeOptions?: RuntimeOptions;
   /** SQLite database path for sessions */
   dbPath?: string;
   /** Enable OAuth 2.1 authentication */
@@ -179,6 +186,8 @@ export class MCPServer {
   private server: Server | null = null;
   private runtime: ToolRuntime | null = null;
   private artifact: ArtifactV1 | null = null;
+  /** Upstream tool name → canonical tool ids carrying it (for tools/call by listed name) */
+  private toolIdsByName = new Map<string, string[]>();
   private readonly sessionStore: SessionStore;
   private readonly oauthManager: OAuthManager;
   private readonly resourceRegistry: ResourceRegistry;
@@ -291,9 +300,15 @@ export class MCPServer {
   async start(): Promise<void> {
     const { runtime, artifact } = await loadRuntime(this.config.sourcePath, {
       compilerOptions: { allowDuplicates: this.config.allowDuplicates },
+      runtimeOptions: this.config.runtimeOptions,
     });
     this.runtime = runtime;
     this.artifact = artifact;
+    this.toolIdsByName.clear();
+    for (const id of runtime.toolIds()) {
+      const { toolName } = parseToolId(id);
+      this.toolIdsByName.set(toolName, [...(this.toolIdsByName.get(toolName) ?? []), id]);
+    }
 
     const ttl = this.config.sessionTTLMs ?? 24 * 60 * 60 * 1000;
     this.sessionStore.prune(ttl);
@@ -663,10 +678,21 @@ export class MCPServer {
       return;
     }
 
+    // tools/call names a tool exactly; it is never resolved semantically.
+    let toolId: string | undefined;
+    if (!registered) {
+      const lookup = this.toolIdForName(toolName);
+      if ('error' in lookup) {
+        sendRpcError(res, id, INVALID_PARAMS, lookup.error);
+        return;
+      }
+      toolId = lookup.toolId;
+    }
+
     // Streaming applies only to runtime-dispatched tools; registered tools
     // respond with a plain JSON-RPC result regardless of the Accept header.
-    if (wantsStream && !registered) {
-      return this.rpcToolsCallStreaming(toolName, args, id, res);
+    if (wantsStream && toolId) {
+      return this.rpcToolsCallStreaming(toolId, args, id, res);
     }
 
     try {
@@ -678,7 +704,7 @@ export class MCPServer {
         }
         result = await registered.executor(args);
       } else {
-        result = await this.runtime!.dispatch(toolName, args);
+        result = await this.runtime!.dispatchById(toolId!, args);
       }
       let formattedContent = formatContent(result);
 
@@ -714,8 +740,23 @@ export class MCPServer {
     }
   }
 
+  /**
+   * Map a tools/call name to exactly one canonical tool id: the id itself
+   * (`<providerId>/<toolName>`), or a listed upstream tool name that only
+   * one provider has. Anything else is an error — never a guess.
+   */
+  private toolIdForName(name: string): { toolId: string } | { error: string } {
+    if (this.runtime!.getTool(name)) return { toolId: name };
+    const ids = this.toolIdsByName.get(name) ?? [];
+    if (ids.length === 1) return { toolId: ids[0] };
+    if (ids.length > 1) {
+      return { error: `Tool name "${name}" is ambiguous: it is provided by ${ids.join(', ')}. Call it by tool id.` };
+    }
+    return { error: `Unknown tool: ${name}` };
+  }
+
   private async rpcToolsCallStreaming(
-    toolName: string,
+    toolId: string,
     args: Record<string, unknown>,
     id: string | number | null,
     res: ServerResponse,
@@ -724,12 +765,12 @@ export class MCPServer {
 
     sendSSE(res, 'message', {
       jsonrpc: '2.0', method: 'notifications/progress',
-      params: { progressToken: id, progress: 0, total: 1, status: 'started', tool: toolName },
+      params: { progressToken: id, progress: 0, total: 1, status: 'started', tool: toolId },
     });
 
     try {
       let chunkIndex = 0;
-      for await (const event of this.runtime!.dispatchStream(toolName, args)) {
+      for await (const event of this.runtime!.dispatchStreamById(toolId, args)) {
         switch (event.type) {
           case 'tool-start':
             sendSSE(res, 'message', {

@@ -30,6 +30,17 @@ export interface VerificationResult {
 export interface VerificationOptions {
   /** Skip the LLM micro-check even if a client is available */
   skipLLMCheck?: boolean;
+  /**
+   * Ask the LLM even when keyword overlap is high (it is otherwise asked
+   * only for borderline overlap). The runtime sets this when the LLM's
+   * answer is what authorizes a below-HIGH dispatch.
+   */
+  forceLLMCheck?: boolean;
+  /**
+   * Skip strategy 1 (required parameters present). Set when resolving an
+   * intent before the call's arguments are known.
+   */
+  skipSchemaCheck?: boolean;
   /** Minimum keyword overlap score to pass (0-1, default 0.15) */
   minOverlap?: number;
 }
@@ -54,7 +65,7 @@ export async function verify(
   const minOverlap = options?.minOverlap ?? 0.15;
 
   // Strategy 1: Schema validation — do the args fit?
-  const schemaMatch = validateArgsAgainstSchema(args, schema);
+  const schemaMatch = options?.skipSchemaCheck ? true : validateArgsAgainstSchema(args, schema);
   if (!schemaMatch) {
     return {
       pass: false,
@@ -75,8 +86,9 @@ export async function verify(
     };
   }
 
-  // Strategy 3: LLM micro-check — optional, only when strategies 1-2 pass but are borderline
-  if (!options?.skipLLMCheck && llmClient?.microCheck && overlap < 0.5) {
+  // Strategy 3: LLM micro-check — optional, only when strategies 1-2 pass but
+  // are borderline, or when the caller needs the LLM's answer (forceLLMCheck)
+  if (!options?.skipLLMCheck && llmClient?.microCheck && (overlap < 0.5 || options?.forceLLMCheck)) {
     const confirmed = await llmClient.microCheck({
       intent,
       toolName: imp.toolName,

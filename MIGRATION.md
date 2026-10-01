@@ -52,6 +52,72 @@ instead of `JSON.parse`. The format is specified in
 `spec/artifact/artifact.v1.schema.json`. `SqliteArtifactStore.save()/load()`
 now take/return `ArtifactV1`.
 
+## Resolve vs. execute, argument validation and the dispatch policy
+
+**Call tools by id when you know which tool you mean.** MCP hosts that pick
+a tool from `tools/list` already do: `tools/call` now runs exactly the named
+tool. In code, prefer `dispatchById` over `dispatch` whenever the tool is
+known:
+
+```typescript
+// 0.5 — every call was semantic, even with an exact name
+await runtime.dispatch('create_issue', { title: 'Bug' });
+
+// 1.0 — exact: O(1), no embedding
+await runtime.dispatchById('github/create_issue', { title: 'Bug' });
+
+// 1.0 — propose, confirm, run
+const r = await runtime.resolve('file a bug about the login page');
+if (r.outcome === 'resolved') {
+  await runtime.dispatchById(r.chosen!, args, { resolutionDigest: r.proof.proofDigest });
+} else {
+  // r.candidates / r.refinement.options carry tool ids to choose from
+}
+```
+
+**Sub-HIGH matches no longer run without an LLM verifier.**
+`requireLLMForSubHighDispatch` defaults to `true`. If MEDIUM/LOW matches
+used to auto-run for you, either supply an `llmClient` with `microCheck`
+(it is now asked whenever its approval authorizes the call), or opt out:
+`new ToolRuntime(index, embedder, { requireLLMForSubHighDispatch: false })`.
+
+**Unresolved dispatches are errors.** Check `result.isError` and
+`result.metadata.outcome` (`'resolved' | 'needs-disambiguation' |
+'unresolved' | 'invalid-arguments'`). The 0.x success-shaped "No match …
+want me to search?" stub, `DispatchContext.forward()`, `FallbackStep` and
+`FallbackChainResult` are gone; near misses are never executed.
+
+**Destructive tools need an exact id, a pinned phrase or EXACT similarity.**
+Tools annotated `destructiveHint: true` (or `readOnlyHint: false` without a
+`destructiveHint`) return `needs-disambiguation` below EXACT; call them with
+`dispatchById`. Set `treatUnannotatedAsDestructive: true` to treat tools
+without annotations the same way.
+
+**Arguments are validated.** Calls whose arguments do not match the tool's
+`inputSchema` return `isError: true` with readable errors and do not run.
+If a client sends numbers as strings, fix the client or set
+`argumentCoercion: 'primitives'`. Custom `ToolIMP`s are validated against
+`schemaLoader().inputSchema`; give them an accurate schema (or none).
+
+**Intent pins match whole phrases.** `checkExact()` and `checkSimilarity()`
+take the raw intent, compared with `normalizePinPhrase` (NFKC, lower case,
+collapsed whitespace). A pin that relied on `canonicalize()` folding (e.g.
+pin `delete:record` matching the intent "delete the record") needs the
+phrase as an alias: `{ canonical: 'db.delete_record', policy: 'exact',
+aliases: ['delete the record'] }`. Pass pins with
+`RuntimeOptions.intentPins` (or a `"policy": { "pins": [...] }` block in
+`smallchat.json` for `serve`).
+
+**Proofs changed shape.** Read `proof.chosen`/`proof.ran` instead of
+`proof.resolvedTool`, `proof.timings.totalMs` instead of `proof.elapsed`,
+and `step.detail` instead of `step.input`/`step.output`. Compare decisions
+with `proof.proofDigest` (timings excluded). `createProof`/`addProofStep`
+now live in `core/proof.ts` (still exported from the package root and
+`/inference`). `metadata.topCandidates[i].tool` is now `.toolId`.
+
+**`resolveRefinement(intent, choice)` runs the chosen tool by id.** Pass the
+option object (it carries `toolId`) or its `selectorId`.
+
 ---
 
 # Migration Guide: 0.1.0 → 0.2.0

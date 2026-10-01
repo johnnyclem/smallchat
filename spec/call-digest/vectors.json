@@ -1,0 +1,113 @@
+{
+  "description": "Golden vectors for the smallchat canonical call digest: sha256hex(UTF8(\"smallchat.call.v1\") || 0x00 || UTF8(toolId) || 0x00 || UTF8(JCS(arguments))). See README.md.",
+  "domain": "smallchat.call.v1",
+  "vectors": [
+    {
+      "name": "empty arguments",
+      "toolId": "github/get_issue",
+      "arguments": {},
+      "jcs": "{}",
+      "digest": "2b63546a7a7af4bcad2fbd3a6d834d0f9e18d5cb1d607096143f556d1b2ed59e"
+    },
+    {
+      "name": "keys sorted by UTF-16 code units (RFC 8785 section 3.2.3)",
+      "toolId": "p/t",
+      "arguments": {"\u20ac": "Euro Sign", "\r": "Carriage Return", "\ufb33": "Hebrew Letter Dalet With Dagesh", "1": "One", "\ud83d\ude00": "Emoji: Grinning Face", "\u0080": "Control", "\u00f6": "Latin Small Letter O With Diaeresis"},
+      "jcs": "{\"\\r\":\"Carriage Return\",\"1\":\"One\",\"\u0080\":\"Control\",\"\u00f6\":\"Latin Small Letter O With Diaeresis\",\"\u20ac\":\"Euro Sign\",\"\ud83d\ude00\":\"Emoji: Grinning Face\",\"\ufb33\":\"Hebrew Letter Dalet With Dagesh\"}",
+      "digest": "aa2d0afa62c1764575f9ecfa044f99d360e0950102e3851b8fa766d266db9d94"
+    },
+    {
+      "name": "ASCII key order is by code unit, not case-insensitive",
+      "toolId": "p/t",
+      "arguments": {"b": null, "B": true, "a": false, "_": "underscore", "A": "upper"},
+      "jcs": "{\"A\":\"upper\",\"B\":true,\"_\":\"underscore\",\"a\":false,\"b\":null}",
+      "digest": "f371560cd33631b34f9940b44f3fd15cb5ec3c88cc22b572ed3868a5b01d62c7"
+    },
+    {
+      "name": "unicode and escaped string content",
+      "toolId": "p/t",
+      "arguments": {"text": "h\u00e9llo w\u00f6rld \u2014 \u65e5\u672c\u8a9e \ud83d\ude00", "controls": "\u0000\u0007\b\t\n\f\r\u001f", "quotes": "\"\\\/"},
+      "jcs": "{\"controls\":\"\\u0000\\u0007\\b\\t\\n\\f\\r\\u001f\",\"quotes\":\"\\\"\\\\/\",\"text\":\"h\u00e9llo w\u00f6rld \u2014 \u65e5\u672c\u8a9e \ud83d\ude00\"}",
+      "digest": "47069f836789ea7b31fa9ebac9be6f1285c62230a2eea80dbe8765d9c57efe61"
+    },
+    {
+      "name": "nested arrays and objects",
+      "toolId": "p/t",
+      "arguments": {"b": [1, [2, [3, {"z": 1, "a": [true, false, null]}]]], "a": {"y": [], "x": {}}},
+      "jcs": "{\"a\":{\"x\":{},\"y\":[]},\"b\":[1,[2,[3,{\"a\":[true,false,null],\"z\":1}]]]}",
+      "digest": "63d2f3102c645d2ab7a12b01e36d710ad709e4f50d401a40e793762e16ee4579"
+    },
+    {
+      "name": "numbers in ECMAScript shortest round-trip form",
+      "toolId": "p/t",
+      "arguments": {"big": 1e21, "justBelow": 1e20, "tenth": 0.1, "third": 0.3333333333333333, "negzero": -0, "maxSafe": 9007199254740991, "tiny": 1e-7, "small": 0.000001, "neg": -1.5, "exp": 1E30, "frac": 333333333.33333329, "trailing": 4.50, "intf": 2.0},
+      "jcs": "{\"big\":1e+21,\"exp\":1e+30,\"frac\":333333333.3333333,\"intf\":2,\"justBelow\":100000000000000000000,\"maxSafe\":9007199254740991,\"neg\":-1.5,\"negzero\":0,\"small\":0.000001,\"tenth\":0.1,\"third\":0.3333333333333333,\"tiny\":1e-7,\"trailing\":4.5}",
+      "digest": "a23b365dc8bba24a8d16d540382a8b74f6352875daaf2061c6085be8994d7310"
+    },
+    {
+      "name": "non-ASCII tool id",
+      "toolId": "wiki/página_búsqueda",
+      "arguments": {"q": "caf\u00e9"},
+      "jcs": "{\"q\":\"caf\u00e9\"}",
+      "digest": "e3474df451be66eb10cd1827d870ceaa104a2902c0ef02030fa410d0b89513ee"
+    },
+    {
+      "name": "same call, spelling A (whitespace, key order)",
+      "toolId": "github/search_issues",
+      "arguments": { "query" : "is:open" , "limit" : 10 },
+      "jcs": "{\"limit\":10,\"query\":\"is:open\"}",
+      "digest": "8090592888996ef978f88d10ae3e70480eff142ccbb0cd7689210ef96da68b11"
+    },
+    {
+      "name": "same call, spelling B (number spelling)",
+      "toolId": "github/search_issues",
+      "arguments": {"limit": 1.0e1, "query": "is:open"},
+      "jcs": "{\"limit\":10,\"query\":\"is:open\"}",
+      "digest": "8090592888996ef978f88d10ae3e70480eff142ccbb0cd7689210ef96da68b11"
+    },
+    {
+      "name": "same arguments, different tool",
+      "toolId": "gitlab/search_issues",
+      "arguments": {"limit": 10, "query": "is:open"},
+      "jcs": "{\"limit\":10,\"query\":\"is:open\"}",
+      "digest": "dd15bbe8f327e533b76cde171235cb6caad648057fa27346e9539617ac413df6"
+    }
+  ],
+  "invalid": [
+    {
+      "name": "NaN argument",
+      "toolId": "p/t",
+      "nonFinite": {"key":"x","value":"NaN"}
+    },
+    {
+      "name": "Infinity argument",
+      "toolId": "p/t",
+      "nonFinite": {"key":"x","value":"Infinity"}
+    },
+    {
+      "name": "-Infinity argument",
+      "toolId": "p/t",
+      "nonFinite": {"key":"x","value":"-Infinity"}
+    },
+    {
+      "name": "arguments is an array",
+      "toolId": "p/t",
+      "arguments": [1, 2]
+    },
+    {
+      "name": "arguments is null",
+      "toolId": "p/t",
+      "arguments": null
+    },
+    {
+      "name": "tool id without a provider",
+      "toolId": "get_issue",
+      "arguments": {}
+    },
+    {
+      "name": "tool id with an empty provider",
+      "toolId": "/get_issue",
+      "arguments": {}
+    }
+  ]
+}

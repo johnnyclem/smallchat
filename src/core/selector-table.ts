@@ -173,6 +173,29 @@ export class SelectorTable {
     return this.intern(embedding, canonical, 'intent');
   }
 
+  /**
+   * Embed an intent without interning it: the returned selector carries
+   * this exact text's own embedding, and the table and vector index are
+   * left unchanged. The semantic rate limiter still applies (it is a guard,
+   * not learned state). Used by side-effect-free resolution.
+   */
+  async probe(intent: string): Promise<ToolSelector> {
+    const canonical = canonicalize(intent);
+    if (this.rateLimiter && !this.rateLimiter.check(canonical)) {
+      throw new VectorFloodError(canonical);
+    }
+    const embedding = await this.embedder.embed(intent);
+    this.rateLimiter?.record(canonical, embedding);
+    const parts = canonical.split(':').filter(Boolean);
+    return {
+      vector: embedding,
+      canonical,
+      parts,
+      arity: Math.max(0, parts.length - 1),
+      provenance: 'intent',
+    };
+  }
+
   /** Look up a selector by its canonical name */
   get(canonical: string): ToolSelector | undefined {
     return this.selectors.get(canonical);

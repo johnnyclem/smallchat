@@ -140,6 +140,41 @@ export interface SmallChatManifest {
    * Requires the rtk binary to be installed: https://github.com/johnnyclem-rdc/rtk
    */
   rtk?: RtkProjectConfig;
+
+  /**
+   * Dispatch policy for runtimes loaded by `smallchat serve` (see
+   * runtime/policy.ts). Intent-based dispatch applies all of it; MCP
+   * tools/call names a tool exactly, so only argumentCoercion affects it.
+   */
+  policy?: ManifestPolicyConfig;
+}
+
+/**
+ * ManifestPolicyConfig — smallchat.json "policy" block.
+ *
+ * ```json
+ * {
+ *   "policy": {
+ *     "requireLLMForSubHighDispatch": true,
+ *     "treatUnannotatedAsDestructive": true,
+ *     "pins": [{ "canonical": "bank.transfer_funds", "policy": "exact", "aliases": ["transfer funds"] }]
+ *   }
+ * }
+ * ```
+ */
+export interface ManifestPolicyConfig {
+  /** Below HIGH, run a resolved tool only with LLM approval (default true) */
+  requireLLMForSubHighDispatch?: boolean;
+  /** Verify every dispatch below EXACT and raise the search floor to MEDIUM */
+  strict?: boolean;
+  /** Treat tools without MCP annotations as destructive (default false) */
+  treatUnannotatedAsDestructive?: boolean;
+  /** Confidence tier thresholds (each 0–1) */
+  thresholds?: { exact?: number; high?: number; medium?: number; low?: number };
+  /** Intent pins guarding sensitive selectors */
+  pins?: Array<{ canonical: string; policy: 'exact' | 'elevated'; threshold?: number; aliases?: string[] }>;
+  /** Coerce scalar argument types to the input schema before validation (default 'none') */
+  argumentCoercion?: 'none' | 'primitives';
 }
 
 export interface ManifestCompilerConfig {

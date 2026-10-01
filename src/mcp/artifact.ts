@@ -11,6 +11,8 @@ import { join } from 'node:path';
 import type { Embedder, JSONSchemaType, ProviderManifest, ToolResult, VectorIndex } from '../core/types.js';
 import { ToolClass, ToolProxy } from '../core/tool-class.js';
 import { ToolCompiler, type CompilerOptions } from '../compiler/compiler.js';
+import { extractArguments } from '../compiler/parser.js';
+import { createSchemaConstraints } from '../core/argument-validator.js';
 import { ToolRuntime, type RuntimeOptions } from '../runtime/runtime.js';
 import { MemoryVectorIndex } from '../embedding/memory-vector-index.js';
 import { safeJsonParse } from '../core/safe-json.js';
@@ -98,6 +100,7 @@ export async function loadRuntime(
   const runtime = new ToolRuntime(vectorIndex, embedder, {
     ...options.runtimeOptions,
     modelVersion: options.runtimeOptions?.modelVersion ?? `${artifact.embedder.kind}:${artifact.embedder.model}`,
+    artifactHash: options.runtimeOptions?.artifactHash ?? artifact.contentHash,
   });
   await hydrateRuntime(runtime, artifact);
   return { runtime, artifact, embedder };
@@ -125,6 +128,7 @@ async function hydrateRuntime(runtime: ToolRuntime, artifact: ArtifactV1): Promi
     let proxy = proxies.get(tool.id);
     if (!proxy) {
       const launch = artifact.providers[tool.providerId].launch;
+      const specs = extractArguments(tool.inputSchema as unknown as JSONSchemaType);
       proxy = new ToolProxy(
         tool.providerId,
         tool.name,
@@ -133,16 +137,13 @@ async function hydrateRuntime(runtime: ToolRuntime, artifact: ArtifactV1): Promi
           name: tool.name,
           description: tool.description,
           inputSchema: tool.inputSchema as unknown as JSONSchemaType,
-          arguments: [],
+          arguments: specs,
         }),
-        {
-          required: [],
-          optional: [],
-          validate: () => ({ valid: true, errors: [] }),
-        },
+        createSchemaConstraints(tool.inputSchema, specs),
         launch && launch.transport !== 'stdio' ? { endpoint: launch.url } : undefined,
         getTransport,
       );
+      proxy.annotations = tool.annotations;
       proxies.set(tool.id, proxy);
     }
 

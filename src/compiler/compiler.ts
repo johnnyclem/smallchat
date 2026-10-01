@@ -1,5 +1,4 @@
 import type {
-  ArgumentConstraints,
   CompilationResult,
   CompiledToolRef,
   CompilerHint,
@@ -14,7 +13,6 @@ import type {
   ToolProtocol,
   ToolSchema,
   ToolSelector,
-  ValidationResult,
   VectorIndex,
 } from '../core/types.js';
 import { SelectorTable } from '../core/selector-table.js';
@@ -27,6 +25,7 @@ import type { SmallChatManifest } from '../core/manifest.js';
 import { AppCompiler } from '../app/app-compiler.js';
 import { getTransport } from '../mcp/transport.js';
 import { toolId } from '../core/tool-id.js';
+import { createSchemaConstraints } from '../core/argument-validator.js';
 
 /**
  * Thrown by compile() when two distinct tools embed at or above the
@@ -467,8 +466,11 @@ export class ToolCompiler {
 
   /** Create a ToolIMP (as a ToolProxy) from a parsed tool */
   private createIMP(tool: ParsedTool): ToolIMP {
-    const constraints = createConstraints(tool);
-    return new ToolProxy(
+    const constraints = createSchemaConstraints(
+      tool.inputSchema as unknown as Record<string, unknown> | undefined,
+      tool.arguments,
+    );
+    const proxy = new ToolProxy(
       tool.providerId,
       tool.name,
       tool.transportType,
@@ -482,6 +484,8 @@ export class ToolCompiler {
       undefined,
       getTransport,
     );
+    proxy.annotations = tool.annotations;
+    return proxy;
   }
 
   /**
@@ -566,30 +570,6 @@ export class ToolCompiler {
 
     return groups;
   }
-}
-
-/** Create argument constraints from a parsed tool */
-function createConstraints(tool: ParsedTool): ArgumentConstraints {
-  const required = tool.arguments.filter(a => a.required);
-  const optional = tool.arguments.filter(a => !a.required);
-
-  return {
-    required,
-    optional,
-    validate(args: Record<string, unknown>): ValidationResult {
-      const errors = [];
-      for (const arg of required) {
-        if (!(arg.name in args)) {
-          errors.push({
-            path: arg.name,
-            message: `Required argument "${arg.name}" is missing`,
-            expected: arg.type.type,
-          });
-        }
-      }
-      return { valid: errors.length === 0, errors };
-    },
-  };
 }
 
 /** Cosine similarity between two vectors */

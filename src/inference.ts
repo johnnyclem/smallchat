@@ -58,15 +58,56 @@ export { OverloadTable, OverloadAmbiguityError } from './core/overload-table.js'
 export type { OverloadEntry, OverloadResolutionResult } from './core/overload-table.js';
 
 // --- The runtime: dispatch, streaming, the fluent builder ---
-export { DispatchContext, UnrecognizedIntent, toolkit_dispatch, smallchat_dispatchStream } from './runtime/dispatch.js';
-export type { FallbackStep, FallbackChainResult, DispatchConfig } from './runtime/dispatch.js';
-export { ToolRuntime } from './runtime/runtime.js';
+export {
+  DispatchContext,
+  UnrecognizedIntent,
+  toolkit_dispatch,
+  smallchat_dispatchStream,
+  smallchat_dispatchStreamById,
+  dispatchById,
+  resolveIntent,
+  toolIdOf,
+} from './runtime/dispatch.js';
+export type {
+  DispatchConfig,
+  DispatchByIdOptions,
+  RegisteredTool,
+  Resolution,
+  ResolutionCandidate,
+  ResolveOptions,
+} from './runtime/dispatch.js';
+export { ToolRuntime, runtimeOptionsFromPolicy } from './runtime/runtime.js';
 export type { RuntimeOptions } from './runtime/runtime.js';
 export { DispatchBuilder } from './runtime/dispatch-builder.js';
 
 // --- Confidence-tiered resolution + the serializable resolution proof ---
-export { computeTier, requiresVerification, requiresDecomposition, requiresRefinement, createProof, addProofStep, DEFAULT_THRESHOLDS } from './core/confidence.js';
-export type { ConfidenceTier, TierThresholds, ResolutionProof, ProofStep } from './core/confidence.js';
+export { computeTier, requiresVerification, requiresDecomposition, requiresRefinement, DEFAULT_THRESHOLDS } from './core/confidence.js';
+export type { ConfidenceTier, TierThresholds } from './core/confidence.js';
+export { createProof, addProofStep, finalizeProof, computeProofDigest, PROOF_DIGEST_DOMAIN } from './core/proof.js';
+export type {
+  ResolutionProof,
+  ResolutionOutcome,
+  ProofStep,
+  ProofStage,
+  ProofCandidate,
+  ProofGuards,
+  ProofContext,
+  CandidateSource,
+  DecisionCode,
+} from './core/proof.js';
+
+// Dispatch policy, guards, argument validation and the canonical call digest
+export { evaluateDispatchPolicy, isDestructive } from './runtime/policy.js';
+export type { DispatchPolicyOptions, PinState, PolicyCode, PolicyInput, PolicyVerdict } from './runtime/policy.js';
+export { IntentPinRegistry, normalizePinPhrase } from './core/intent-pin.js';
+export type { IntentPin, IntentPinPolicy, IntentPinMatch } from './core/intent-pin.js';
+export { SignatureValidationError } from './core/overload-table.js';
+export type { SignatureViolation } from './core/sc-types.js';
+export { compileArgumentValidator, createSchemaConstraints, InputSchemaError } from './core/argument-validator.js';
+export type { ArgumentCheck, ArgumentCoercion, ArgumentValidationOptions, ArgumentValidator, SchemaDialect } from './core/argument-validator.js';
+export { callDigest, CALL_DIGEST_DOMAIN } from './core/call-digest.js';
+export { canonicalJson } from './core/jcs.js';
+export { toolId, parseToolId } from './core/tool-id.js';
 
 // --- The fallback chain: verify → decompose → refine → observe ---
 export { verify, computeKeywordOverlap } from './runtime/verification.js';
@@ -77,6 +118,8 @@ export { refine, buildRefinementResult } from './runtime/refinement.js';
 export type { RefinementResult } from './runtime/refinement.js';
 export { DispatchObserver } from './runtime/observer.js';
 export type { DispatchRecord, CorrectionSignal, SchemaRejection, AdaptiveThreshold, NegativeExample, ObserverOptions } from './runtime/observer.js';
+export { SemanticMap } from './runtime/semantic-map.js';
+export type { LearnedPreference, SemanticMapMatch, SemanticMapOptions, SerializedSemanticMap } from './runtime/semantic-map.js';
 
 // --- Pluggable LLM interface (degrades gracefully when absent) ---
 export { NULL_LLM_CLIENT } from './core/llm-client.js';
@@ -115,6 +158,8 @@ export type {
   ToolResult,
   ToolSchema,
   ToolSelector,
+  ToolAnnotations,
+  ToolRefinementNeeded,
   ToolTransport,
   ToolTransportConnectionOptions,
   ToolTransportFactory,

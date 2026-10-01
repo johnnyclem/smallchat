@@ -65,12 +65,10 @@ const manifests: ProviderManifest[] = [
   },
 ];
 
-/** Resolve an intent without executing anything: stop at tool-start. */
-async function resolveOnly(runtime: ToolRuntime, intent: string) {
-  for await (const event of runtime.dispatchStream(intent, {})) {
-    if (event.type === 'tool-start' || event.type === 'done' || event.type === 'error') return event;
-  }
-  return null;
+/** Resolve an intent without executing anything: the best-ranked tool id. */
+async function bestToolFor(runtime: ToolRuntime, intent: string): Promise<string | undefined> {
+  const resolution = await runtime.resolve(intent);
+  return resolution.candidates[0]?.toolId;
 }
 
 describe('Feature: Artifact loading', () => {
@@ -102,9 +100,7 @@ describe('Feature: Artifact loading', () => {
 
       expect(artifact.embedder.kind).toBe('onnx');
       expect(embedder.fingerprint).toEqual(artifact.embedder);
-      const event = await resolveOnly(runtime, 'search_code');
-      expect(event?.type).toBe('tool-start');
-      expect(event?.type === 'tool-start' && event.toolName).toBe('search_code');
+      expect(await bestToolFor(runtime, 'search_code')).toBe('github/search_code');
     }, 60_000);
 
     it('Given an ONNX-compiled artifact, When a hash embedder is injected, Then loading is refused with EmbedderMismatchError', async () => {
@@ -188,8 +184,7 @@ describe('Feature: Artifact loading', () => {
       expect(fromDb.runtime.context.getClasses()).toHaveLength(2);
       // The exact embedding text of a tool resolves on the sqlite-vec index
       // (paraphrase scoring there depends on its distance metric, SC-INF-02).
-      const event = await resolveOnly(fromDb.runtime, 'search_code: Search for code across repositories');
-      expect(event?.type === 'tool-start' && event.toolName).toBe('search_code');
+      expect(await bestToolFor(fromDb.runtime, 'search_code: Search for code across repositories')).toBe('github/search_code');
     });
   });
 

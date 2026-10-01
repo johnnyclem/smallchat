@@ -1,6 +1,8 @@
 import { Command } from 'commander';
 import { resolve } from 'node:path';
 import { MCPServer, type MCPServerConfig } from '../../mcp/server.js';
+import { runtimeOptionsFromPolicy } from '../../runtime/runtime.js';
+import { findSmallChatManifest } from './compile.js';
 
 /**
  * MCP-compatible serve command.
@@ -40,11 +42,19 @@ export const serveCommand = new Command('serve')
 
     console.log('Loading toolkit...');
 
+    // smallchat.json "policy" block (nearest one upward from the cwd)
+    const project = findSmallChatManifest(process.cwd());
+    const runtimeOptions = project?.manifest.policy ? runtimeOptionsFromPolicy(project.manifest.policy) : undefined;
+    if (runtimeOptions) {
+      console.log(`  Dispatch policy from ${project!.path}: ${JSON.stringify(project!.manifest.policy)}`);
+    }
+
     const config: MCPServerConfig = {
       port,
       host,
       sourcePath,
       allowDuplicates: options.allowDuplicates === true,
+      runtimeOptions,
       dbPath: options.dbPath,
       enableAuth: options.auth,
       enableRateLimit: options.rateLimit,

@@ -12,6 +12,7 @@ import type { Embedder, VectorIndex, ToolSelector, ToolIMP, ToolProtocol, ToolRe
 import { SelectorNamespace, SelectorShadowingError } from '../core/selector-namespace.js';
 import { LocalEmbedder } from '../embedding/local-embedder.js';
 import { MemoryVectorIndex } from '../embedding/memory-vector-index.js';
+import type { ResolutionProof } from '../core/proof.js';
 
 /** Minimal mock embedder */
 function createMockEmbedder(): Embedder {
@@ -527,16 +528,20 @@ describe('Feature: Refinement resolution & the semantic map (Pillar 4b)', () => 
   it('resolveRefinement executes the chosen tool and records the preference', async () => {
     const runtime = await runtimeWithTool('deploy production database cluster', 'contexta:list_tasks');
 
-    // The user picked "contexta:list_tasks" from the deferred options.
+    // The user picked "contexta:list_tasks" from the deferred options: that
+    // tool runs, by exact id.
     const result = await runtime.resolveRefinement('quarterly revenue overview', 'contexta:list_tasks');
     expect(result.content).toBe('list_tasks:executed');
+    expect((result.metadata!.proof as ResolutionProof).decision).toBe('exact-id');
 
     // The choice is now learned.
     expect(runtime.semanticMap.size).toBe(1);
 
     // ...and the exact intent resolves without deferring again.
-    const proof = (result.metadata!.proof as any);
-    expect(proof.steps.some((s: any) => s.stage === 'semantic_map')).toBe(true);
+    const again = await runtime.resolve('quarterly revenue overview');
+    expect(again.outcome).toBe('resolved');
+    expect(again.chosen).toBe('contexta/list_tasks');
+    expect(again.proof.decision).toBe('learned-exact');
   });
 
   it('accepts the full option object as the choice', async () => {
@@ -553,9 +558,16 @@ describe('Feature: Refinement resolution & the semantic map (Pillar 4b)', () => 
     const runtime = await runtimeWithTool('deploy production database cluster', 'contexta:list_tasks');
     await runtime.resolveRefinement('list all tasks', 'contexta:list_tasks');
 
-    // Different phrasing, same intent — resolves via the learned preference.
-    const result: ToolResult = await (runtime.dispatch('list tasks now', {}) as Promise<ToolResult>);
-    expect(result.content).toBe('list_tasks:executed');
+    // Different phrasing, same intent — the learned preference surfaces the tool.
+    const resolution = await runtime.resolve('list tasks now');
+    expect(resolution.candidates[0]).toMatchObject({ toolId: 'contexta/list_tasks', source: 'semantic-map-similar' });
+
+    // A boosted score below HIGH still needs an LLM verifier's approval to run.
+    if (resolution.tier !== 'exact' && resolution.tier !== 'high') {
+      expect(resolution.outcome).toBe('needs-disambiguation');
+      const result: ToolResult = await (runtime.dispatch('list tasks now', {}) as Promise<ToolResult>);
+      expect(result.isError).toBe(true);
+    }
   });
 
   it('reinforceRefinement records without executing', async () => {

@@ -160,7 +160,7 @@ function createVectorIndex(type: string, dbPath: string): VectorIndex {
  * Attempt to find and load a smallchat.json manifest.
  * Searches upward from the given directory.
  */
-function findSmallChatManifest(startDir: string): { manifest: SmallChatManifest; path: string } | null {
+export function findSmallChatManifest(startDir: string): { manifest: SmallChatManifest; path: string } | null {
   let dir = startDir;
   const root = resolve('/');
 

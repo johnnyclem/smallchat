@@ -73,6 +73,12 @@ export interface ToolRefinementNeeded {
      * user's choice is reinforced against the exact selector.
      */
     selectorId?: string;
+    /**
+     * Canonical tool id (`<providerId>/<toolName>`) of the option, when it
+     * names one tool. Pass it to `runtime.dispatchById()` to run exactly
+     * that tool.
+     */
+    toolId?: string;
   }>;
   narrowedIntents: string[];
 }
@@ -114,6 +120,13 @@ export interface ArgumentConstraints {
   required: ArgumentSpec[];
   optional: ArgumentSpec[];
   validate(args: Record<string, unknown>): ValidationResult;
+  /**
+   * The JSON Schema `validate` enforces, when these constraints are
+   * schema-backed (createSchemaConstraints). The runtime validates every
+   * call against the tool's inputSchema either way; see
+   * core/argument-validator.ts.
+   */
+  inputSchema?: Record<string, unknown>;
 }
 
 export interface ToolSchema {
@@ -142,6 +155,12 @@ export interface ToolIMP {
   uiUri?: string;
   /** Visibility for the UI resource: which audiences can invoke it */
   uiVisibility?: Array<'model' | 'app'>;
+  /**
+   * Behavioural hints declared by the upstream server (MCP tool
+   * annotations). The dispatch policy reads `destructiveHint` and
+   * `readOnlyHint`; smallchat does not verify them.
+   */
+  annotations?: ToolAnnotations;
 }
 
 // ---------------------------------------------------------------------------
@@ -254,6 +273,8 @@ export interface DispatchEventResolving {
 
 export interface DispatchEventToolStart {
   type: 'tool-start';
+  /** Canonical tool id `<providerId>/<toolName>` of the tool about to run */
+  toolId: string;
   toolName: string;
   providerId: string;
   confidence: number;
