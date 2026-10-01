@@ -88,9 +88,15 @@ Type natural language intents and see which tools they resolve to. Try:
 | `agent` | Streaming agent with dispatch loop |
 
 ```bash
-npx @smallchat/core init my-server --template mcp-server
-npx @smallchat/core init my-agent --template agent
+npx -y @smallchat/core init my-server --template mcp-server
+npx -y @smallchat/core init my-agent --template agent
 ```
+
+`init` runs `git init` (unless the directory is already in a repository)
+and `npm install`; skip them with `--no-git` / `--no-install`. Then
+`npm run compile` compiles `manifests/`, and for the basic template
+`npm run build && npm start` resolves an intent against the sample
+manifest and runs the chosen tool.
 
 ## Example Projects
 

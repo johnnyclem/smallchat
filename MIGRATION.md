@@ -324,6 +324,43 @@ a configured sender allowlist was enough. Read the approver from the
 `httpBridgeCorsOrigin`. `meta.source` is dropped (the tag's `source` is
 the channel name), so rename that key, e.g. to `origin`.
 
+## `smallchat setup`, `smallchat rtk setup` and `smallchat init`
+
+**`setup` keeps your servers.** Answering "yes" now adds a `smallchat`
+entry next to your existing `mcpServers`. Removing duplicates is a
+separate, optional step (`--disable-originals`): the originals move under
+`smallchatDisabledMcpServers` in the same file. To undo either step, copy
+the newest `<config>.smallchat-backup-<timestamp>` over the config. If an
+earlier version replaced your servers, your original is in
+`<config>.backup`, unless setup ran twice.
+
+**Fix configs written by 0.5 setup.** Replace an entry like
+`{"command": "npx", "args": ["smallchat", "serve", ...]}` with the one
+setup now writes:
+
+```json
+{ "type": "stdio", "command": "npx", "args": ["-y", "@smallchat/core@1.0.0", "serve", "--source", "/abs/tools.toolkit.json"] }
+```
+
+`npx smallchat` refers to an unregistered npm name: anyone could publish a
+package under it, and npx installs without prompting when an MCP host
+starts it. Never use the unscoped name.
+
+**Scripted setup:** `smallchat setup --no-interactive --config .mcp.json
+--install [--disable-originals] [--embedder hash]`. Before, non-interactive
+mode never wrote the config.
+
+**`rtk setup`** stops with an error when `.claude/settings.json` is not
+valid JSON. Fix the file and re-run. Re-running replaces the broken inline
+hook that 0.5 installed with `.claude/hooks/smallchat-rtk-rewrite.mjs`.
+Commit that file with `.claude/settings.json` if your team shares
+settings. The hook rewrites `git status` to `rtk git status`, and your
+permission rules then see the rewritten command, so an allow rule such as
+`Bash(git status:*)` may also need `Bash(rtk git status:*)`.
+
+**`init` runs `git init` and `npm install`** unless you pass `--no-git` /
+`--no-install`.
+
 ---
 
 # Migration Guide: 0.1.0 → 0.2.0
