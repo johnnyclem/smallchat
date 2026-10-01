@@ -179,13 +179,17 @@ swift run smallchat resolve tools.toolkit.json "open a bug report"
 
 ## 5. Start the MCP server
 
-smallchat includes a built-in MCP 2025-11-25 compliant server. Point any MCP client at it:
+smallchat serves a compiled toolkit as one MCP server (built on the official MCP SDK). Every tool is listed as `<provider>__<tool>`, and each call is forwarded by exact name to the upstream server that owns it. Point any MCP client at it:
 
 <Tabs groupId="language">
 <TabItem value="typescript" label="TypeScript">
 
 ```bash
-npx @smallchat/core serve --source ./tools --port 3001
+# stdio, what MCP hosts launch
+npx @smallchat/core serve --source tools.json
+
+# or Streamable HTTP at http://127.0.0.1:3001/mcp (bearer token in ~/.smallchat/serve-token)
+npx @smallchat/core serve --source tools.json --http
 ```
 
 </TabItem>
@@ -198,11 +202,11 @@ swift run smallchat serve --source ./tools --port 3001
 </TabItem>
 </Tabs>
 
-Output:
+With `--http` the output ends with:
 
 ```
-smallchat server running on http://localhost:3001 ✓
-MCP discovery: http://localhost:3001/.well-known/mcp.json
+smallchat MCP server (Streamable HTTP) at http://127.0.0.1:3001/mcp
+  generated bearer token in /home/you/.smallchat/serve-token; send "Authorization: Bearer <token>"
 ```
 
 ## 6. Use the API

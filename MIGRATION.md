@@ -118,6 +118,86 @@ now live in `core/proof.ts` (still exported from the package root and
 **`resolveRefinement(intent, choice)` runs the chosen tool by id.** Pass the
 option object (it carries `toolId`) or its `selectorId`.
 
+## `smallchat serve`: SDK-based, stdio by default, exact aggregate names
+
+**Configure hosts for stdio, or add `--http`.** `smallchat serve --source X`
+now speaks MCP over stdio. This is what `mcpServers` entries launch:
+
+```json
+{ "mcpServers": { "smallchat": { "command": "smallchat", "args": ["serve", "--source", "/abs/tools.toolkit.json"] } } }
+```
+
+For HTTP, add `--http`. The endpoint is `http://127.0.0.1:3001/mcp`. It was
+`POST /` or `/rpc` and `GET /sse`, and those paths, `/.well-known/mcp.json`,
+`/health` and `POST /oauth/token` are gone. HTTP requires
+`Authorization: Bearer <token>`, with the token in `~/.smallchat/serve-token`,
+generated with mode 0600 on first start (`--token-file` to move it,
+`--http-insecure` to opt out). Browsers need `--allowed-origin`. Binding
+`0.0.0.0` needs `--allowed-host <name>`.
+
+| 0.5 flag | 1.0 |
+|---|---|
+| `--auth` (OAuth 2.1) | bearer token by default; OAuth resource-server support is future work |
+| `--db-path`, `--session-ttl <hours>` | sessions are in memory: `--max-sessions`, `--session-idle-timeout <minutes>` |
+| `--cors-origin <o>` | `--allowed-origin <o...>` |
+| `--audit` | `--audit-log <file>` (JSON lines) |
+| `--rate-limit`, `--rate-limit-rpm`, `--rtk*`, `--max-body-bytes` | unchanged (HTTP only, except `--rtk`) |
+
+**Recompile so serve knows how to start each server.** Execution uses the
+provider launch specs recorded by `smallchat compile --source .mcp.json`
+(or a manifest's `launch` / `endpoint`). Environment variables are recorded
+by name: set their values in the environment `serve` runs in. A provider
+without a launch spec lists its tools, but calls to them return an
+`isError` result that says so.
+
+**Call tools by their listed names.** Names are `<providerId>__<toolName>`
+(e.g. `github__create_issue`). Calls by bare upstream name or canonical id
+(`github/create_issue`) now return an `isError` result with close names
+instead of running. To keep upstream names (e.g. for OpenAPPA batteries
+keyed `mcp/<server>/<tool>`), serve each provider separately with
+`--provider <id>`. Tools whose aggregate name would be invalid (dots,
+more than 128 characters, or a provider id containing `__` or ending in `_`)
+are only reachable with `--provider`.
+
+**Intent dispatch is the `smallchat_resolve` tool.** It proposes a tool
+and returns its `name`. The client then calls that name. Nothing executes
+from an intent on the MCP surface any more.
+
+**Read smallchat data from `_meta`.** Results no longer have top-level
+`confidence`, `refinement` or `rtkSavedPct`. Read
+`_meta["dev.smallchat/resolution"]` (`toolId`, `ran`, `tier`, `callDigest`,
+`proofDigest`, …) and `_meta["dev.smallchat/rtk"].savedPct`. Upstream
+results pass through unchanged (`structuredContent`, non-text content,
+`isError`).
+
+**Programmatic `MCPServer`.** Replace `new MCPServer({ port, host, sourcePath, dbPath, … }).start()` with:
+
+```typescript
+const server = new MCPServer({ sourcePath });
+await server.startHttp({ port: 3001, host: '127.0.0.1', token });  // or: await server.startStdio()
+```
+
+`createHttpHandler(options)` needs `await server.load()` first and serves
+`/mcp` only. `McpTool` drops `id`, `tags` and `version`. `title` and
+`description` are optional, and `inputSchema` must be `{ type: 'object', … }`.
+`OAuthManager`, `MCP_SCOPES`, `SessionStore`, `McpRouter`, `SessionManager`,
+`SseBroker`, the `registry.ts` registries, `wire-format`, `MCP_ERROR` and
+`formatContent` (use `toCallToolResult`) are removed. `AuditEntry.success` is
+now `outcome: 'ok' | 'error' | 'rejected'`. `MCP_PROTOCOL_VERSIONS` lists the
+versions the SDK negotiates.
+
+**`loadRuntime()` returns `upstreams`.** MCP tools now execute on their
+upstream servers. Call `await upstreams.close()` when you are done, or stdio
+upstream processes keep your process alive.
+
+**`smallchat resolve --execute` needs a HIGH/EXACT match.** Add `--force`
+to run a weaker match. `--endpoint` is gone: the artifact's launch spec
+decides where the tool runs.
+
+**`doctor --mcp`** checks `http://127.0.0.1:3001/mcp` by default (it was
+`http://127.0.0.1:3001`). Use `--mcp-source <artifact>` to check `serve`
+over stdio.
+
 ---
 
 # Migration Guide: 0.1.0 → 0.2.0

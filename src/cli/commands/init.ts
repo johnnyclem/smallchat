@@ -140,12 +140,10 @@ main().catch(console.error);
 function generateMcpServerTemplate(projectDir: string): void {
   const serverFile = `import { MCPServer } from '@smallchat/core';
 
-const server = new MCPServer({
-  port: 3001,
-  host: '127.0.0.1',
-  sourcePath: './manifests',
-  dbPath: 'smallchat.db',
-});
+// Serves ./manifests over stdio — point your MCP host at \`node dist/server.js\`.
+// Logs go to stderr: stdout is the protocol channel.
+// For Streamable HTTP (bearer token, Host/Origin checks) run: smallchat serve --http --source ./manifests
+const server = new MCPServer({ sourcePath: './manifests' });
 
 // Graceful shutdown
 process.on('SIGINT', async () => {
@@ -153,10 +151,9 @@ process.on('SIGINT', async () => {
   process.exit(0);
 });
 
-server.start().then(() => {
-  console.log('MCP server running on http://127.0.0.1:3001');
-  console.log('Discovery: http://127.0.0.1:3001/.well-known/mcp.json');
-});
+server.startStdio()
+  .then(() => server.closed())
+  .then(() => server.stop());
 `;
   writeIfNotExists(join(projectDir, 'src', 'server.ts'), serverFile);
 

@@ -5,112 +5,50 @@ sidebar_label: resolve
 
 # `resolve`
 
-Tests dispatch resolution against a compiled artifact. Given a natural-language intent, prints the matched tool and confidence score. Useful for verifying that your tool descriptions produce the dispatch behaviour you expect.
+Shows which tool the runtime would choose for a natural-language intent, and why. It runs the same resolution as `runtime.resolve()` and `serve`'s `smallchat_resolve`: tiers, intent pins, the dispatch policy from the nearest `smallchat.json`, and verification. It prints the outcome, the candidate table and the proof digest. Nothing executes unless you pass `--execute`.
 
 ## Usage
 
 ```bash
-npx @smallchat/core resolve <file> "<intent>"
+npx @smallchat/core resolve <file> "<intent>" [--execute [--force]] [--args '<json>'] [--json]
 ```
 
-## Arguments
+## Arguments and options
 
-| Argument | Description |
-|----------|-------------|
+| | Description |
+|---|---|
 | `<file>` | Path to a compiled artifact |
-| `"<intent>"` | Natural-language intent string to resolve |
+| `"<intent>"` | Natural-language intent to resolve |
+| `-e, --embedder <type>` | Expected embedder. Refuses if the artifact was compiled with another. |
+| `-x, --execute` | Run the chosen tool on its upstream server. Only a `resolved` outcome at **EXACT or HIGH** tier runs. |
+| `--force` | With `--execute`: run the chosen tool (or, when nothing was chosen, the top-ranked candidate) at any tier |
+| `--args <json>` | Arguments for the call. They are validated against the tool's `inputSchema` and also used to choose among overloads. |
+| `--timeout <ms>` | Upstream call timeout (default 30000) |
+| `--json` | Print the resolution (and result) as JSON |
 
-## Examples
-
-### Successful match
-
-```bash
-npx @smallchat/core resolve tools.json "search for code"
-```
-
-Output:
-
-```
-Matched: github.search_code (confidence: 0.98)
-```
-
-### Lower-confidence match
+## Example
 
 ```bash
-npx @smallchat/core resolve tools.json "look up source files"
+npx @smallchat/core resolve tools.toolkit.json "search for code"
 ```
 
-Output:
-
 ```
-Matched: github.search_code (confidence: 0.81)
-```
+Intent: "search for code"
+Outcome: resolved (tier HIGH, decision ranked)
+Chosen: github/search_code  (serve name: github__search_code)
 
-### Paraphrase test
+Candidates:
+  github/search_code  score 0.912  HIGH  via vector
+  gitlab/search_code  score 0.801  MEDIUM  via vector
 
-```bash
-npx @smallchat/core resolve tools.json "open a bug report"
-```
-
-Output:
-
-```
-Matched: github.create_issue (confidence: 0.87)
+Proof digest: 4c1f…
 ```
 
-### No match
+`--execute` runs the chosen tool through the same path as `serve`: `dispatchById`, argument validation, then the upstream MCP server from the artifact's launch spec. Below HIGH tier, or when the outcome is `needs-disambiguation` / `unresolved`, it prints why and exits with code 1 without running anything, unless `--force` is given.
 
-```bash
-npx @smallchat/core resolve tools.json "send a rocket to the moon"
-```
+## Exit codes
 
-Output:
+- **0**: resolved (and, with `--execute`, the tool ran without `isError`)
+- **1**: load error, execution refused, or the tool returned `isError`
 
-```
-No match found. (best candidate: slack.send_message, confidence: 0.31)
-```
-
-The process exits with code 1 when no match is found above `minConfidence`.
-
-## Testing dispatch systematically
-
-Use `resolve` in CI to verify dispatch quality across a set of test intents:
-
-```bash
-#!/bin/bash
-# test-dispatch.sh
-
-ARTIFACT="tools.json"
-PASS=0
-FAIL=0
-
-check() {
-  local intent="$1"
-  local expected="$2"
-  local result=$(npx @smallchat/core resolve "$ARTIFACT" "$intent" 2>&1)
-  if echo "$result" | grep -q "$expected"; then
-    echo "  PASS: '$intent' → $expected"
-    ((PASS++))
-  else
-    echo "  FAIL: '$intent' → expected $expected, got: $result"
-    ((FAIL++))
-  fi
-}
-
-check "search for code" "github.search_code"
-check "find code in a repo" "github.search_code"
-check "open a bug report" "github.create_issue"
-check "send a slack message" "slack.send_message"
-check "read a file" "filesystem.read_file"
-
-echo ""
-echo "Results: $PASS passed, $FAIL failed"
-[ $FAIL -eq 0 ] && exit 0 || exit 1
-```
-
-## Output format
-
-The resolve command exits with:
-
-- **Code 0** — a match was found above `minConfidence`
-- **Code 1** — no match found, or error
+Without `--execute` the exit code is 0 whatever the outcome. Use `--json` and check `resolution.outcome` and `resolution.chosen` in CI.

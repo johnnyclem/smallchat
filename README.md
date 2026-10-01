@@ -92,8 +92,9 @@ smallchat compile --source ~/.mcp.json
 # Ask it a question — see which tool it picks and why
 smallchat resolve tools.toolkit.json "search for code"
 
-# Start an MCP-compatible server
-smallchat serve --source ./manifests --port 3001
+# Serve every tool through one MCP server (stdio; --http for Streamable HTTP)
+# Tools are <provider>__<tool>; each call goes to the upstream server by exact name.
+smallchat serve --source tools.toolkit.json
 
 # Scaffold a new project
 smallchat init my-app --template agent
@@ -180,10 +181,10 @@ See the [Architecture doc](./ARCHITECTURE.md) for the full design and the [Refer
 | `setup` | Auto-detect MCP servers and run an interactive compile wizard |
 | `init` | Scaffold a new project from a template |
 | `compile` | Compile manifests into a dispatch artifact |
-| `serve` | Start an MCP-compatible server |
+| `serve` | Serve a toolkit as one MCP server that forwards each call, by exact name, to its upstream server |
 | `resolve` | Test intent-to-tool resolution |
 | `inspect` | Examine a compiled artifact |
-| `doctor` | Check your environment |
+| `doctor` | Check your environment; `--mcp` / `--mcp-source` run the MCP conformance checks |
 | `docs` | Generate Markdown docs from a compiled artifact |
 | `repl` | Interactive shell for testing resolution |
 | `channel` | Claude Code channel-protocol bridge |

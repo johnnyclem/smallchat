@@ -29,7 +29,6 @@ import { ToolCompiler } from '../compiler/compiler.js';
 import { buildArtifact } from '../artifact/format.js';
 import { writeArtifact } from '../artifact/io.js';
 import { loadRuntime } from '../mcp/artifact.js';
-import { MCPServer } from '../mcp/server.js';
 import { registerLocalHandler, unregisterLocalHandler } from '../mcp/transport.js';
 import type { Embedder, LLMClient, ProviderManifest, ToolAnnotations, ToolIMP, ToolResult } from '../core/types.js';
 
@@ -530,79 +529,6 @@ describe('SC-INF-14: tools are executable by exact id, and resolve never execute
     const result = await runtime.dispatchById(resolution.chosen!, { number: 7 }, { resolutionDigest: resolution.proof.proofDigest });
     expect(ran).toEqual(['github/get_issue']);
     expect(proofOf(result).resolutionDigest).toBe(resolution.proof.proofDigest);
-  });
-
-  it('MCP tools/call executes the listed tool by name, and never guesses', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'sc2-mcp-'));
-    const manifests: ProviderManifest[] = [
-      {
-        id: 'github',
-        name: 'GitHub',
-        transportType: 'local',
-        tools: [
-          { name: 'get_issue', description: 'Retrieve the full details of a single issue including comments, labels, assignees and linked pull requests', inputSchema: { type: 'object', properties: { number: { type: 'integer' } }, required: ['number'] } as never, providerId: 'github', transportType: 'local' },
-          { name: 'search_code', description: 'Search code across repositories', inputSchema: { type: 'object', properties: { query: { type: 'string' } } } as never, providerId: 'github', transportType: 'local' },
-        ],
-      },
-      {
-        id: 'gitlab',
-        name: 'GitLab',
-        transportType: 'local',
-        tools: [
-          { name: 'search_code', description: 'Find text in GitLab project files', inputSchema: { type: 'object', properties: { query: { type: 'string' } } } as never, providerId: 'gitlab', transportType: 'local' },
-        ],
-      },
-    ];
-    const embedder = new HashEmbedder(64);
-    const result = await new ToolCompiler(embedder, new MemoryVectorIndex()).compile(manifests);
-    const path = join(dir, 'tools.toolkit.json');
-    await writeArtifact(path, buildArtifact(result, manifests, embedder.fingerprint));
-
-    const calls: unknown[] = [];
-    registerLocalHandler('get_issue', async (args) => {
-      calls.push(args);
-      return { content: { title: 'Bug' } };
-    });
-    const server = new MCPServer({ port: 0, host: '127.0.0.1', sourcePath: path, dbPath: ':memory:' });
-    const call = async (name: string, args: Record<string, unknown>) => {
-      const port = ((server as unknown as { server: { address(): { port: number } } }).server.address()).port;
-      const res = await fetch(`http://127.0.0.1:${port}/`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }),
-      });
-      return await res.json() as { result?: { isError: boolean; content: Array<{ text: string }> }; error?: { code: number; message: string } };
-    };
-    try {
-      await server.start();
-
-      const ok = await call('get_issue', { number: 7 });
-      expect(ok.result?.isError).toBe(false);
-      expect(calls).toEqual([{ number: 7 }]);
-
-      // By canonical id, too.
-      expect((await call('github/get_issue', { number: 8 })).result?.isError).toBe(false);
-      expect(calls).toEqual([{ number: 7 }, { number: 8 }]);
-
-      // A name that is not listed must never execute some other tool.
-      const miss = await call('get issue', { number: 9 });
-      expect(miss.error?.code).toBe(-32602);
-
-      // A listed name two providers share is ambiguous, not guessed.
-      const ambiguous = await call('search_code', { query: 'x' });
-      expect(ambiguous.error?.code).toBe(-32602);
-      expect(ambiguous.error?.message).toContain('github/search_code, gitlab/search_code');
-
-      // Invalid arguments are reported to the model; the tool does not run.
-      const invalid = await call('get_issue', { number: 'seven' });
-      expect(invalid.result?.isError).toBe(true);
-      expect(invalid.result?.content[0].text).toContain('argument \\"number\\" must be integer');
-      expect(calls).toHaveLength(2);
-    } finally {
-      unregisterLocalHandler('get_issue');
-      await server.stop();
-      rmSync(dir, { recursive: true, force: true });
-    }
   });
 });
 

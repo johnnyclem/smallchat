@@ -217,21 +217,20 @@ export type { McpServerConfig, McpConfigFile, IntrospectionResult } from './mcp/
 
 // MCP Server & Transport Engine
 export { MCPServer } from './mcp/server.js';
-export type { MCPServerConfig, McpApp, McpToolExecutor } from './mcp/server.js';
+export type { MCPServerConfig, HttpServeOptions, McpApp, McpToolExecutor } from './mcp/server.js';
+export { UpstreamPool } from './mcp/upstream.js';
+export type { UpstreamPoolOptions } from './mcp/upstream.js';
 export { MCPTransport, getTransport, clearTransports, registerLocalHandler, unregisterLocalHandler } from './mcp/transport.js';
 export type { TransportOptions } from './mcp/transport.js';
-export { SessionStore } from './mcp/session-store.js';
-export type { MCPSession } from './mcp/session-store.js';
-export { OAuthManager, MCP_SCOPES } from './mcp/oauth.js';
-export type { OAuthToken, OAuthClient, TokenIntrospection, PermissionsConfig, OAuthManagerOptions, MCPScope } from './mcp/oauth.js';
 export { ResourceRegistry, ResourceNotFoundError } from './mcp/resources.js';
 export type { MCPResource, MCPResourceContent, MCPResourceTemplate, ResourceChangeEvent, ResourceHandler } from './mcp/resources.js';
 export { PromptRegistry, PromptNotFoundError } from './mcp/prompts.js';
 export type { MCPPrompt, MCPPromptArgument, MCPPromptMessage, MCPPromptContent, PromptHandler, StaticPrompt } from './mcp/prompts.js';
 export { RateLimiter } from './mcp/rate-limiter.js';
 export { AuditLog } from './mcp/audit-log.js';
-export type { AuditEntry } from './mcp/audit-log.js';
-export { loadRuntime, buildToolList, formatContent, findManifests } from './mcp/artifact.js';
+export type { AuditEntry, AuditLogOptions } from './mcp/audit-log.js';
+export { loadRuntime, buildToolList, findManifests } from './mcp/artifact.js';
+export { toCallToolResult } from './mcp/results.js';
 export type { LoadRuntimeOptions, LoadedRuntime } from './mcp/artifact.js';
 export { SqliteArtifactStore } from './mcp/sqlite-artifact.js';
 export type { SqliteArtifactStoreOptions } from './mcp/sqlite-artifact.js';

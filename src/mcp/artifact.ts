@@ -1,6 +1,7 @@
 /**
  * Artifact — load a ToolRuntime from a compiled 1.0 artifact (.json or
- * .db) or a directory of provider manifests, plus MCP tool-list helpers.
+ * .db) or a directory of provider manifests, wired to the upstream MCP
+ * servers its providers name, plus the MCP tool-list helper.
  *
  * The artifact format itself (types, writer, validating reader, embedder
  * identity) lives in src/artifact/ — see src/artifact/index.ts.
@@ -8,7 +9,8 @@
 
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import type { Embedder, JSONSchemaType, ProviderManifest, ToolResult, VectorIndex } from '../core/types.js';
+import type { Tool } from '@modelcontextprotocol/sdk/types.js';
+import type { Embedder, JSONSchemaType, ProviderManifest, ToolTransportFactory, VectorIndex } from '../core/types.js';
 import { ToolClass, ToolProxy } from '../core/tool-class.js';
 import { ToolCompiler, type CompilerOptions } from '../compiler/compiler.js';
 import { extractArguments } from '../compiler/parser.js';
@@ -17,6 +19,8 @@ import { ToolRuntime, type RuntimeOptions } from '../runtime/runtime.js';
 import { MemoryVectorIndex } from '../embedding/memory-vector-index.js';
 import { safeJsonParse } from '../core/safe-json.js';
 import { getTransport } from './transport.js';
+import { UpstreamPool, type UpstreamPoolOptions } from './upstream.js';
+import { buildToolTable } from './tool-names.js';
 import type { ArtifactV1 } from '../artifact/types.js';
 import { buildArtifact } from '../artifact/format.js';
 import { isSqliteArtifactPath, readArtifact } from '../artifact/io.js';
@@ -44,6 +48,13 @@ export interface LoadRuntimeOptions {
   runtimeOptions?: RuntimeOptions;
   /** Compiler options when `sourcePath` is a manifest directory */
   compilerOptions?: CompilerOptions;
+  /**
+   * Load only these providers' tools (e.g. `serve --provider <id>`). The
+   * runtime then resolves among these tools only. Default: all providers.
+   */
+  providers?: string[];
+  /** Options for the upstream MCP clients MCP providers execute through */
+  upstream?: UpstreamPoolOptions;
 }
 
 export interface LoadedRuntime {
@@ -51,6 +62,12 @@ export interface LoadedRuntime {
   artifact: ArtifactV1;
   /** The embedder the runtime resolves intents with (matches artifact.embedder) */
   embedder: Embedder;
+  /**
+   * The upstream MCP clients the runtime's MCP tools execute through. They
+   * connect lazily on first call; close() them when done (it stops stdio
+   * upstream processes).
+   */
+  upstreams: UpstreamPool;
 }
 
 /**
@@ -60,7 +77,12 @@ export interface LoadedRuntime {
  * directory of provider manifests, which is compiled in-process with the
  * same default embedder as `smallchat compile`. Resolves only after every
  * tool class is registered; any load error (unreadable or pre-1.0
- * artifact, embedder mismatch, selector shadowing) rejects.
+ * artifact, embedder mismatch, selector shadowing, unknown provider)
+ * rejects.
+ *
+ * Tools of MCP providers execute on the upstream server named by the
+ * provider's launch spec (see UpstreamPool); 'local' and 'rest' tools use
+ * the registered local handlers and HTTP endpoints as before.
  */
 export async function loadRuntime(
   sourcePath: string,
@@ -88,7 +110,7 @@ export async function loadRuntime(
       embedder: options.embedder,
       source: sourcePath,
     });
-    if (isSqliteArtifactPath(sourcePath)) {
+    if (isSqliteArtifactPath(sourcePath) && options.providers === undefined) {
       // Search the vectors already indexed in the artifact database.
       const { SqliteVectorIndex } = await import('../embedding/sqlite-vector-index.js');
       vectorIndex = new SqliteVectorIndex(sourcePath, artifact.embedder.dims);
@@ -97,29 +119,46 @@ export async function loadRuntime(
     }
   }
 
+  for (const providerId of options.providers ?? []) {
+    if (!artifact.providers[providerId]) {
+      const known = Object.keys(artifact.providers).sort().join(', ') || '(none)';
+      throw new Error(`Provider "${providerId}" is not in ${sourcePath}. Providers: ${known}`);
+    }
+  }
+
   const runtime = new ToolRuntime(vectorIndex, embedder, {
     ...options.runtimeOptions,
     modelVersion: options.runtimeOptions?.modelVersion ?? `${artifact.embedder.kind}:${artifact.embedder.model}`,
     artifactHash: options.runtimeOptions?.artifactHash ?? artifact.contentHash,
   });
-  await hydrateRuntime(runtime, artifact);
-  return { runtime, artifact, embedder };
+  const upstreams = new UpstreamPool(artifact, options.upstream);
+  const transportFactory: ToolTransportFactory = (providerId, connection) =>
+    upstreams.handles(providerId) ? upstreams.transport(providerId) : getTransport(providerId, connection);
+  await hydrateRuntime(runtime, artifact, transportFactory, options.providers);
+  return { runtime, artifact, embedder, upstreams };
 }
 
 /**
- * Register every provider of an artifact as a ToolClass. Each selector is
- * registered under its exact canonical — never folded into a similar one —
- * so distinct tools stay distinct at runtime too.
+ * Register every provider of an artifact (or only `providers`) as a
+ * ToolClass. Each selector is registered under its exact canonical — never
+ * folded into a similar one — so distinct tools stay distinct at runtime too.
  */
-async function hydrateRuntime(runtime: ToolRuntime, artifact: ArtifactV1): Promise<void> {
+async function hydrateRuntime(
+  runtime: ToolRuntime,
+  artifact: ArtifactV1,
+  transportFactory: ToolTransportFactory,
+  providers?: string[],
+): Promise<void> {
+  const included = new Set(providers ?? Object.keys(artifact.providers));
   const classes = new Map<string, ToolClass>();
-  for (const providerId of Object.keys(artifact.providers)) {
+  for (const providerId of included) {
     classes.set(providerId, new ToolClass(providerId));
   }
 
   const proxies = new Map<string, ToolProxy>();
   for (const selectorData of Object.values(artifact.selectors)) {
     const tool = artifact.tools[selectorData.toolId];
+    if (!included.has(tool.providerId)) continue;
     const selector = runtime.selectorTable.register(
       Float32Array.from(selectorData.vector),
       selectorData.canonical,
@@ -141,7 +180,7 @@ async function hydrateRuntime(runtime: ToolRuntime, artifact: ArtifactV1): Promi
         }),
         createSchemaConstraints(tool.inputSchema, specs),
         launch && launch.transport !== 'stdio' ? { endpoint: launch.url } : undefined,
-        getTransport,
+        transportFactory,
       );
       proxy.annotations = tool.annotations;
       proxies.set(tool.id, proxy);
@@ -191,28 +230,22 @@ export function findManifests(dir: string): ProviderManifest[] {
 // ---------------------------------------------------------------------------
 
 /**
- * MCP tools/list entries for every tool in the artifact, carrying the
- * upstream description, inputSchema, outputSchema, annotations and title.
+ * MCP tools/list entries for the artifact's tools, as `smallchat serve`
+ * lists them: aggregate names `<providerId>__<toolName>` by default, or
+ * one provider's upstream names verbatim with `provider`. Each carries the
+ * upstream title, description, inputSchema, outputSchema and annotations.
+ * Tools whose names cannot be represented are omitted (see
+ * buildToolTable for the reasons).
  */
-export function buildToolList(artifact: ArtifactV1): object[] {
-  return Object.values(artifact.tools).map(tool => ({
-    name: tool.name,
+export function buildToolList(artifact: ArtifactV1, options: { provider?: string } = {}): Tool[] {
+  return buildToolTable(artifact, options).entries.map(({ name, tool }) => ({
+    name,
     ...(tool.title !== undefined ? { title: tool.title } : {}),
     description: tool.description,
-    inputSchema: tool.inputSchema,
-    ...(tool.outputSchema !== undefined ? { outputSchema: tool.outputSchema } : {}),
+    inputSchema: tool.inputSchema as Tool['inputSchema'],
+    ...(tool.outputSchema !== undefined ? { outputSchema: tool.outputSchema as Tool['outputSchema'] } : {}),
     ...(tool.annotations !== undefined ? { annotations: tool.annotations } : {}),
   }));
-}
-
-export function formatContent(
-  result: ToolResult,
-): Array<{ type: string; text: string }> {
-  const text =
-    typeof result.content === 'string'
-      ? result.content
-      : JSON.stringify(result.content);
-  return [{ type: 'text', text }];
 }
 
 // ---------------------------------------------------------------------------

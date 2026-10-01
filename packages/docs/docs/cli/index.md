@@ -33,7 +33,7 @@ smallchat <command> [options]
 | [`compile`](./compile) | Compile tool manifests to a dispatch artifact |
 | [`inspect`](./inspect) | Inspect a compiled artifact |
 | [`resolve`](./resolve) | Test dispatch resolution against an artifact |
-| [`serve`](./serve) | Start a MCP 2025-11-25 compliant HTTP server |
+| [`serve`](./serve) | Serve a toolkit as one MCP server (stdio, or Streamable HTTP with `--http`) that forwards calls to the upstream servers |
 
 ## Global options
 
@@ -54,6 +54,6 @@ npx @smallchat/core inspect tools.json --providers --selectors
 # Test a dispatch
 npx @smallchat/core resolve tools.json "search for code"
 
-# Start the MCP server on port 3001
-npx @smallchat/core serve --source ./tools --port 3001
+# Serve the toolkit over stdio (or --http for Streamable HTTP at :3001/mcp)
+npx @smallchat/core serve --source tools.json
 ```

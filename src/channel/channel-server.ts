@@ -5,10 +5,10 @@
  * stdio MCP server (for Claude Code to spawn as a subprocess), with an optional
  * HTTP bridge for receiving webhook events and serving SSE for outbound visibility.
  *
- * Justification: Claude Code spawns channel servers over stdio. The existing
- * "smallchat serve" is HTTP-based with sessions, OAuth, etc. — too heavy for
- * a channel subprocess. A dedicated stdio server is simpler, correct, and
- * keeps the existing serve command backward-compatible.
+ * Justification: Claude Code spawns channel servers over stdio, and a channel
+ * speaks the claude/channel extension (notifications, permission relay)
+ * rather than serving a compiled toolkit as "smallchat serve" does, so it
+ * gets its own small stdio server.
  *
  * Protocol:
  *   stdin/stdout  — JSON-RPC 2.0 (newline-delimited) with MCP host (Claude Code)

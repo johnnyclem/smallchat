@@ -225,19 +225,22 @@ When compiling from an MCP config or auto-detecting, smallchat spawns each serve
 
 ## MCP Server
 
-`npx @smallchat/core serve` starts an HTTP server implementing the MCP 2026 protocol:
+`npx @smallchat/core serve --source tools.toolkit.json` serves a compiled toolkit as one MCP server built on the official SDK (`@modelcontextprotocol/sdk`). It runs over stdio by default, or Streamable HTTP at `/mcp` with `--http`. It forwards every `tools/call`, by exact name, to the upstream MCP server that owns the tool, using the provider launch specs recorded at compile time. See [`serve`](../packages/docs/docs/cli/serve.md) for every option.
 
 | Capability | Description |
 |------------|-------------|
-| **JSON-RPC** | `initialize`, `tools/list` (paginated), `tools/call` (by exact listed name or canonical tool id; arguments validated against the tool's `inputSchema`) |
-| **Resources** | `resources/list`, `resources/read`, `resources/subscribe` with change notifications |
-| **Prompts** | `prompts/list`, `prompts/get` with template arguments |
-| **SSE** | Server-Sent Events stream with keep-alive |
-| **Streaming execution** | `tools/call` with `Accept: text/event-stream` |
-| **Sessions** | SQLite-backed session management |
-| **OAuth 2.1** | Token-based auth with scopes (`tools:read`, `tools:execute`, `resources:read`, `prompts:read`) |
-| **Rate limiting** | Per-session request throttling |
-| **Health** | `/health` endpoint with tool count |
+| **Tool names** | `<providerId>__<toolName>` (always `^[A-Za-z0-9_-]{1,128}$`, collision-free by construction). With `--provider <id>`, one provider's upstream names, verbatim, so OpenAPPA batteries keyed `mcp/<server>/<tool>` apply unchanged. |
+| **tools/list** | Upstream `title`, `description`, `inputSchema`, `outputSchema`, `annotations`, unchanged |
+| **tools/call** | Exact listed name only. Arguments are validated against `inputSchema`, then the call is forwarded. The upstream result passes through (all content types, `structuredContent`, `isError`). Unknown names return an `isError` result listing close names. Nothing is resolved fuzzily. |
+| **smallchat_resolve** | `{ intent, args? }` → proposal (`toolId`, `name`, `tier`, `candidates`, `proofDigest`). Never executes. |
+| **Proof** | `_meta["dev.smallchat/resolution"]` on every result: tool id, what ran, decision, tier, canonical call digest, proof digest, artifact hash |
+| **Upstreams** | SDK clients over stdio (env variables by name, values from serve's environment), Streamable HTTP or legacy SSE. Lazy connect, reconnect after exit, cancellation and progress forwarded. |
+| **Resources / prompts** | `resources/list`, `read`, `templates/list`, `subscribe`/`unsubscribe` (per session, released on close), `prompts/list`, `get` |
+| **HTTP guards** | Host allowlist (DNS rebinding), Origin allowlist (CSRF), bearer token required by default (generated into a 0600 file), JSON-only bodies, 4 MiB cap, session cap and idle expiry, optional rate limit |
+| **Protocol** | Versions negotiated by the SDK: 2025-11-25, 2025-06-18, 2025-03-26, 2024-11-05, 2024-10-07 |
+| **Audit** | `--audit-log <file>`: one JSON line per request with its real outcome, including HTTP rejections. Never records arguments. |
+
+`smallchat doctor --mcp-source <artifact>` (stdio) or `--mcp <url>` (HTTP) runs the same conformance checks as the test suite.
 
 ## Cache Versioning & Hot Reload
 
@@ -297,7 +300,7 @@ const runtime = new ToolRuntime(index, embedder);
 | Command | Description |
 |---------|-------------|
 | `npx @smallchat/core compile` | Parse manifests, embed selectors, link dispatch tables → `.toolkit.json` |
-| `npx @smallchat/core serve` | Start MCP-compatible HTTP server with SSE streaming |
+| `npx @smallchat/core serve` | Serve a toolkit as one MCP server (stdio, or Streamable HTTP with `--http`) |
 | `npx @smallchat/core resolve` | Test dispatch resolution against a compiled artifact |
 | `npx @smallchat/core inspect` | Examine providers, selectors, and protocols in a compiled artifact |
 | `npx @smallchat/core doctor` | Check environment: Node version, ONNX model availability, dependencies |
