@@ -8,6 +8,8 @@
  *   npm run check:shorthand            (verify shorthand/ against shorthand/SOURCE)
  *   node scripts/sync-shorthand.mjs --check ../short-hand
  *                                      (also verify it is the checkout's current tree)
+ *   node scripts/sync-shorthand.mjs --check --registry
+ *                                      (also verify src/ against the published package)
  *
  * Sync replaces shorthand/ with the checkout's src/ and test/ trees,
  * tsconfig.json, vitest.config.ts and LICENSE, copied byte for byte. It
@@ -19,6 +21,11 @@
  * in shorthand/SOURCE. Check mode (also run by src/shorthand-mirror.test.ts
  * and CI) fails when any file under shorthand/ is missing, added or differs
  * from SOURCE, so the mirror only ever changes by re-running this script.
+ * SOURCE is a file in this repository, so that check alone cannot tell a
+ * mirror from a fork whose SOURCE was edited to match: CI also checks out
+ * short-hand at the commit SOURCE records (which fails when that commit was
+ * never pushed) and compares the tree with it, and --registry compares src/
+ * with the published @shorthand/core tarball once that version is on npm.
  *
  * @smallchat/core itself depends on "@shorthand/core": "^1.0.0" from the
  * registry; the workspace link to this mirror is for development only.
@@ -26,7 +33,8 @@
 
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -220,6 +228,54 @@ export function checkMirror(mirror = DEFAULT_MIRROR, checkout) {
   return problems;
 }
 
+/**
+ * Differences between the mirror's src/ (tests excluded) and the published
+ * @shorthand/core package unpacked at `packageDir`, whose tarball ships
+ * src/ without its tests. Empty when they match.
+ */
+export function checkPublished(mirror = DEFAULT_MIRROR, packageDir) {
+  const source = readSource(mirror);
+  if (!source) return ['SOURCE is missing: run scripts/sync-shorthand.mjs'];
+  const isTest = (file) => /\.test\.ts$/.test(file);
+  const published = new Map(
+    walk(join(packageDir, 'src')).filter((f) => !isTest(f)).map((f) => [`src/${f}`, sha256(readFileSync(join(packageDir, 'src', f)))]),
+  );
+  const problems = [];
+  for (const [file, hash] of source.files) {
+    if (!file.startsWith('src/') || isTest(file)) continue;
+    if (!published.has(file)) problems.push(`not in the published package: ${file}`);
+    else if (published.get(file) !== hash) problems.push(`differs from the published package: ${file}`);
+  }
+  for (const file of published.keys()) {
+    if (!source.files.has(file)) problems.push(`only in the published package: ${file}`);
+  }
+  return problems;
+}
+
+/** checkPublished against the registry's tarball of the version SOURCE records; null when it is not published yet. */
+function checkRegistry(mirror) {
+  const source = readSource(mirror);
+  if (!source?.pkg) return ['SOURCE records no package version'];
+  const work = mkdtempSync(join(tmpdir(), 'shorthand-published-'));
+  try {
+    let packed;
+    try {
+      packed = JSON.parse(execFileSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['pack', source.pkg, '--json', '--pack-destination', work], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        shell: process.platform === 'win32',
+      }));
+    } catch (err) {
+      if (/E404|404 Not Found|No matching version/.test(`${err.stderr ?? ''}${err.message}`)) return null;
+      throw err;
+    }
+    execFileSync('tar', ['xzf', join(work, packed[0].filename), '-C', work]);
+    return checkPublished(mirror, join(work, 'package'));
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
+}
+
 function main(argv) {
   const args = argv.slice(2);
   const check = args.includes('--check');
@@ -235,7 +291,18 @@ function main(argv) {
       return 1;
     }
     const source = readSource(mirror);
-    console.log(`shorthand/ matches SOURCE: ${source.pkg} at ${source.commit} (${source.files.size} files)`);
+    console.log(`shorthand/ matches SOURCE: ${source.pkg} at ${source.commit} (${source.files.size} files)${checkout ? `, and ${checkout}` : ''}`);
+    if (args.includes('--registry')) {
+      const published = checkRegistry(mirror);
+      if (published === null) {
+        console.log(`${source.pkg} is not on the registry yet; nothing published to compare`);
+      } else if (published.length > 0) {
+        console.error(`shorthand/src differs from the published ${source.pkg}:\n  ${published.join('\n  ')}`);
+        return 1;
+      } else {
+        console.log(`shorthand/src matches the published ${source.pkg}`);
+      }
+    }
     return 0;
   }
 

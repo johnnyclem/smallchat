@@ -41,10 +41,25 @@ jobs:
           SMALLCHAT_BROWSER_TESTS: '1'
 
       # shorthand/ is a byte-for-byte mirror of @shorthand/core from the
-      # short-hand repository (scripts/sync-shorthand.mjs). Fail when it
-      # differs from what shorthand/SOURCE records: it is never edited here.
+      # short-hand repository (scripts/sync-shorthand.mjs). SOURCE records
+      # the short-hand commit; check that commit out (this fails when it was
+      # never pushed) and fail when the mirror differs from it or from
+      # SOURCE, or from the published package once that version is on npm.
+      - name: Read the mirrored short-hand commit
+        id: shorthand
+        run: echo "commit=$(sed -n 's/^commit: //p' shorthand/SOURCE)" >> "$GITHUB_OUTPUT"
+
+      - name: Check out short-hand at that commit
+        uses: actions/checkout@v4
+        with:
+          repository: johnnyclem/short-hand
+          ref: ${{ steps.shorthand.outputs.commit }}
+          path: .short-hand-upstream
+
       - name: Check the @shorthand/core mirror
-        run: npm run check:shorthand
+        run: npm run check:shorthand -- --registry
+        env:
+          SHORTHAND_DIR: .short-hand-upstream
 
       # The mirror's own suite (compaction, CRDT properties, importance,
       # truth format v2 conformance) is not globbed by the root vitest config.

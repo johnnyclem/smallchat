@@ -4,14 +4,22 @@
  * @shorthand/core identity). scripts/sync-shorthand.mjs writes it and
  * records every file's sha256 in shorthand/SOURCE; these tests fail when
  * the tree differs from that record.
+ *
+ * Review of XSUITE-17: SOURCE is itself a file here, so a PR that edits a
+ * mirrored file and its hash in SOURCE passed every check, and CI never
+ * compared the mirror with short-hand. CI now checks out short-hand at the
+ * commit SOURCE records and compares the tree with it (that checkout fails
+ * when the commit was never pushed), and --registry compares src/ with the
+ * published package.
  */
 
 import { describe, it, expect } from 'vitest';
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { checkMirror, readSource, DEFAULT_MIRROR } from '../scripts/sync-shorthand.mjs';
+import { checkMirror, checkPublished, readSource, DEFAULT_MIRROR } from '../scripts/sync-shorthand.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
@@ -65,4 +73,59 @@ describe('shorthand/ is an exact mirror of @shorthand/core', () => {
     expect(mirror.exports['./embedding']).toBeUndefined();
     expect(Object.keys(mirror.dependencies ?? {})).toEqual([]);
   });
+
+  /** A stand-in short-hand checkout with the mirrored trees (no git: no commit to compare). */
+  function fakeCheckout(mirror: string): string {
+    const dir = mkdtempSync(join(tmpdir(), 'short-hand-checkout-'));
+    for (const entry of ['src', 'test', 'tsconfig.json', 'vitest.config.ts', 'LICENSE', 'package.json']) {
+      cpSync(join(mirror, entry), join(dir, entry), { recursive: true });
+    }
+    return dir;
+  }
+
+  const sha256 = (text: string) => createHash('sha256').update(text).digest('hex');
+
+  it('an edit whose hash is also edited into SOURCE passes SOURCE, but not the upstream comparison', () => {
+    const dir = copyMirror();
+    const checkout = fakeCheckout(dir);
+    try {
+      expect(checkMirror(dir, checkout)).toEqual([]);
+      const forked = readFileSync(join(dir, 'src', 'utils.ts'), 'utf8') + '\nexport const forked = true;\n';
+      writeFileSync(join(dir, 'src', 'utils.ts'), forked);
+      const source = readFileSync(join(dir, 'SOURCE'), 'utf8');
+      const old = readSource(dir).files.get('src/utils.ts') as string;
+      writeFileSync(join(dir, 'SOURCE'), source.replace(old, sha256(forked)));
+
+      expect(checkMirror(dir)).toEqual([]);
+      expect(checkMirror(dir, checkout)).toContain(`differs from ${checkout}: src/utils.ts`);
+    } finally {
+      rmSync(join(dir, '..'), { recursive: true, force: true });
+      rmSync(checkout, { recursive: true, force: true });
+    }
+  });
+
+  it('compares src/ with a published package (its tarball ships src/ without tests)', () => {
+    const pkg = mkdtempSync(join(tmpdir(), 'shorthand-published-'));
+    try {
+      cpSync(join(DEFAULT_MIRROR, 'src'), join(pkg, 'src'), { recursive: true, filter: (src: string) => !src.endsWith('.test.ts') });
+      expect(checkPublished(DEFAULT_MIRROR, pkg)).toEqual([]);
+      writeFileSync(join(pkg, 'src', 'utils.ts'), readFileSync(join(pkg, 'src', 'utils.ts'), 'utf8') + '\n// patched before publishing\n');
+      mkdirSync(join(pkg, 'src', 'extra'));
+      writeFileSync(join(pkg, 'src', 'extra', 'only-published.ts'), 'export {};\n');
+      expect(checkPublished(DEFAULT_MIRROR, pkg)).toEqual(expect.arrayContaining([
+        'differs from the published package: src/utils.ts',
+        'only in the published package: src/extra/only-published.ts',
+      ]));
+    } finally {
+      rmSync(pkg, { recursive: true, force: true });
+    }
+  });
+
+  it('CI compares the mirror with short-hand at the commit SOURCE records', () => {
+    const ci = readFileSync(join(ROOT, '.github', 'workflows', 'ci.yml'), 'utf8');
+    expect(ci).toContain('repository: johnnyclem/short-hand');
+    expect(ci).toMatch(/ref: \$\{\{ steps\.shorthand\.outputs\.commit \}\}/);
+    expect(ci).toMatch(/run: npm run check:shorthand -- --registry\n\s+env:\n\s+SHORTHAND_DIR: \S+/);
+  });
 });
+

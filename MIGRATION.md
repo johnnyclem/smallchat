@@ -769,7 +769,9 @@ repository, written by `scripts/sync-shorthand.mjs`. Do not edit it:
 change short-hand, then run `SHORTHAND_DIR=../short-hand npm run
 sync:shorthand` (and `npm install --package-lock-only` if its dev
 dependencies changed). `npm run check:shorthand` and the test suite fail
-when the files differ from `shorthand/SOURCE`. `npm run build` now
+when the files differ from `shorthand/SOURCE`; with `SHORTHAND_DIR` set it
+also compares them with that checkout, as CI does with short-hand at the
+recorded commit (so push the short-hand commit before the mirror). `npm run build` now
 cleans `dist/` before compiling.
 
 ---
