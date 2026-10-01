@@ -216,3 +216,17 @@ describe('serializeChannelTag', () => {
     expect(tag).toContain('&lt;channel source="trusted-admin"&gt;');
   });
 });
+
+describe('reserved channel tag attributes (SC-SURF-25)', () => {
+  it('filterMetaKeys drops "source", so meta cannot forge the provenance attribute', () => {
+    expect(filterMetaKeys({ source: 'trusted-admin', repo: 'smallchat' })).toEqual({ repo: 'smallchat' });
+    expect(isValidMetaKey('source')).toBe(false);
+  });
+
+  it('serializeChannelTag emits exactly one source attribute', () => {
+    const tag = serializeChannelTag('webhook', 'hi', { source: 'trusted-admin', repo: 'smallchat' } as Record<string, string>);
+    expect(tag.match(/source=/g)).toHaveLength(1);
+    expect(tag).toContain('source="webhook"');
+    expect(tag).not.toContain('trusted-admin');
+  });
+});

@@ -1,20 +1,23 @@
 /**
  * Feature: Audit Log
  *
- * In-memory ring buffer of recent MCP request audit entries,
- * capped at maxEntries to bound memory usage.
+ * Every request's real outcome, in an in-memory ring buffer capped at
+ * maxEntries and optionally appended to a JSONL file.
  */
 
 import { describe, it, expect } from 'vitest';
+import { mkdtempSync, readFileSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { AuditLog, type AuditEntry } from './audit-log.js';
 
 function makeEntry(overrides?: Partial<AuditEntry>): AuditEntry {
   return {
     timestamp: new Date().toISOString(),
+    transport: 'http',
     method: 'tools/call',
     sessionId: 'sess-1',
-    clientId: 'client-1',
-    success: true,
+    outcome: 'ok',
     durationMs: 42,
     ...overrides,
   };
@@ -77,17 +80,34 @@ describe('Feature: Audit Log Ring Buffer', () => {
   });
 
   describe('Scenario: Error entries are recorded', () => {
-    it('Given a failed request, When logging with success=false and error, Then the error is stored', () => {
+    it('Given a failed request, When logging outcome=error with a code and message, Then they are stored', () => {
       const log = new AuditLog();
 
       log.log(makeEntry({
-        success: false,
+        outcome: 'error',
+        errorCode: -32602,
         error: 'Something went wrong',
       }));
 
       const entries = log.recent();
-      expect(entries[0].success).toBe(false);
+      expect(entries[0].outcome).toBe('error');
+      expect(entries[0].errorCode).toBe(-32602);
       expect(entries[0].error).toBe('Something went wrong');
+    });
+  });
+
+  describe('Scenario: Entries are appended to a JSONL file', () => {
+    it('Given a file, When entries are logged, Then each is one JSON line in a 0600 file', () => {
+      const file = join(mkdtempSync(join(tmpdir(), 'audit-')), 'audit.jsonl');
+      const log = new AuditLog({ file });
+
+      log.log(makeEntry({ method: 'http', outcome: 'rejected', httpStatus: 401 }));
+      log.log(makeEntry({ method: 'tools/call', toolId: 'github/get_issue' }));
+
+      const lines = readFileSync(file, 'utf-8').trim().split('\n').map(l => JSON.parse(l));
+      expect(lines.map(l => l.method)).toEqual(['http', 'tools/call']);
+      expect(lines[0].httpStatus).toBe(401);
+      expect(statSync(file).mode & 0o777).toBe(0o600);
     });
   });
 
@@ -105,8 +125,10 @@ describe('Feature: Audit Log Ring Buffer', () => {
         timestamp: '2025-01-01T00:00:00Z',
         method: 'resources/read',
         sessionId: 'sess-abc',
-        clientId: 'client-xyz',
-        success: true,
+        remoteAddress: '127.0.0.1',
+        outcome: 'ok',
+        toolId: 'github/get_issue',
+        callDigest: 'a'.repeat(64),
         durationMs: 123,
       });
 

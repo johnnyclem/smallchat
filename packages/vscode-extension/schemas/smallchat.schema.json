@@ -110,7 +110,7 @@
     },
     "policy": {
       "type": "object",
-      "description": "Dispatch policy for runtimes loaded by `smallchat serve`. Intent-based dispatch applies all of it; MCP tools/call names a tool exactly, so only argumentCoercion affects it.",
+      "description": "Dispatch policy for runtimes loaded by `smallchat serve` and `smallchat resolve`. Intent resolution (smallchat_resolve, runtime.dispatch) applies all of it; MCP tools/call names a tool exactly, so only argumentCoercion affects it.",
       "properties": {
         "requireLLMForSubHighDispatch": {
           "type": "boolean",

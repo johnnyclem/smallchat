@@ -198,6 +198,12 @@ describe('Feature: Artifact loading', () => {
       const github = tools.find(t => t.description === 'Open a new GitHub issue')!;
       const gitlab = tools.find(t => t.description === 'File a ticket in a GitLab project tracker')!;
 
+      // Serve side (SC-SURF-07): provider-qualified, collision-free names.
+      expect(github.name).toBe('github__create_issue');
+      expect(gitlab.name).toBe('gitlab__create_issue');
+      expect(new Set(tools.map(t => t.name)).size).toBe(tools.length);
+      expect(buildToolList(artifact, { provider: 'gitlab' }).map(t => t.name)).toContain('create_issue');
+
       expect(Object.keys(github.inputSchema.properties)).toEqual(['title', 'repo']);
       expect(Object.keys(gitlab.inputSchema.properties)).toEqual(['projectId']);
       expect(github.title).toBe('Create issue');

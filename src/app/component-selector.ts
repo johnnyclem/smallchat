@@ -54,6 +54,13 @@ export class ComponentSelectorTable {
    * Resolve a UI intent string to a ComponentSelector.
    * Embeds the intent and concatenates any capability tags before embedding
    * so that "show bar chart [chart interactive]" gets a richer vector.
+   *
+   * Returns the interned component selector the intent matches (exact
+   * canonical, or nearest at or above the dedup threshold). An intent that
+   * matches none gets a transient selector that is never added to the
+   * table or its index: resolving intents must not grow the component
+   * index, or later queries would land on a past intent instead of the
+   * component (the core SelectorTable had the same bug).
    */
   async resolve(intent: string, capabilities: string[] = []): Promise<ComponentSelector> {
     const canonical = canonicalizeComponent(intent);
@@ -66,7 +73,14 @@ export class ComponentSelectorTable {
       : intent;
 
     const embedding = await this.embedder.embed(embeddingText);
-    return this.intern(embedding, canonical);
+    const matches = await this.index.search(embedding, 1, this.threshold);
+    if (matches.length > 0) {
+      const match = this.selectors.get(matches[0].id);
+      if (match) return match;
+    }
+
+    const parts = canonical.split(':').filter(Boolean);
+    return { vector: embedding, canonical, parts, arity: Math.max(0, parts.length - 1) };
   }
 
   /** Look up a selector by canonical name */

@@ -21,7 +21,7 @@ export interface UIResourceContent {
  * UIResourceRegistry — stores and serves ui:// resources for MCP Apps.
  *
  * Each MCP App tool that declares a ui:// resource registers an HTML bundle
- * here. The McpRouter delegates resources/read for ui:// URIs to this registry.
+ * here. MCPServer serves resources/read for ui:// URIs from this registry.
  *
  * Obj-C analogy: UIResourceRegistry ≈ NSBundle — it stores the compiled
  * resource bundles (HTML) and serves them on demand. The uri:// scheme is

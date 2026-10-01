@@ -53,7 +53,10 @@ export interface ChannelEvent {
   content: string;
   /** Structured metadata — keys must be identifier-only (letters/digits/underscore) */
   meta?: Record<string, string>;
-  /** Sender identity for gating */
+  /**
+   * Sender identity for gating. Over the HTTP bridge this is the identity
+   * of the credential the request presented, never a body field.
+   */
   sender?: string;
   /** ISO 8601 timestamp */
   timestamp?: string;
@@ -98,6 +101,15 @@ export interface PermissionVerdict {
   behavior: 'allow' | 'deny';
 }
 
+/**
+ * A verdict as the channel server reports it (the `permission-verdict`
+ * event): who decided is part of the record. Never sent to the host.
+ */
+export interface RecordedPermissionVerdict extends PermissionVerdict {
+  /** Authenticated identity of the approver (HTTP bridge), or the caller-supplied one */
+  approver?: string;
+}
+
 // ---------------------------------------------------------------------------
 // Channel provider metadata (for compiled artifacts)
 // ---------------------------------------------------------------------------
@@ -134,14 +146,42 @@ export interface ChannelServerConfig {
   permissionRelay?: boolean;
   /** Channel instructions for the LLM */
   instructions?: string;
-  /** Enable HTTP bridge for inbound webhooks */
+  /**
+   * Enable the HTTP bridge for inbound webhooks. Requires a credential
+   * (httpBridgeSecret and/or httpBridgeTokens): start() refuses otherwise.
+   */
   httpBridge?: boolean;
-  /** HTTP bridge port (default: 3002) */
+  /** HTTP bridge port (default: 3002; 0 picks a free port, see httpBridgeAddress) */
   httpBridgePort?: number;
   /** HTTP bridge host (default: 127.0.0.1) */
   httpBridgeHost?: string;
-  /** Shared secret for HTTP bridge authentication */
+  /**
+   * Shared secret for the HTTP bridge, presented as `X-Channel-Secret` or
+   * `Authorization: Bearer`. Requests carrying it authenticate as
+   * httpBridgeSecretIdentity.
+   */
   httpBridgeSecret?: string;
+  /** Identity of requests authenticated with httpBridgeSecret (default: "bridge") */
+  httpBridgeSecretIdentity?: string;
+  /**
+   * Per-sender credentials: identity → token. A request presenting a token
+   * authenticates as its identity, which is what the sender allowlist and
+   * the permission approver list are checked against.
+   */
+  httpBridgeTokens?: Record<string, string>;
+  /**
+   * Identities allowed to submit permission verdicts over the bridge
+   * (POST /permission). Empty or unset: every verdict is refused.
+   */
+  permissionApprovers?: string[];
+  /**
+   * Hostnames accepted in the Host header (DNS-rebinding defence). Default:
+   * the loopback names for a loopback bind, the bind address otherwise; a
+   * wildcard bind (0.0.0.0) requires this to be set.
+   */
+  httpBridgeAllowedHosts?: string[];
+  /** Max HTTP request body in bytes (default: 256 KiB) */
+  httpBridgeMaxBodyBytes?: number;
   /** Sender allowlist (identity strings) */
   senderAllowlist?: string[];
   /** Path to sender allowlist file (one sender per line) */
@@ -151,7 +191,8 @@ export interface ChannelServerConfig {
   /**
    * Access-Control-Allow-Origin for the HTTP bridge. Omit/null to
    * disable CORS (the safe default for the 127.0.0.1 bind). Set to
-   * '*' or a specific origin to opt in.
+   * '*' or a specific origin to opt in. Requests that carry an Origin
+   * header are refused unless it matches (or this is '*').
    */
   httpBridgeCorsOrigin?: string | null;
 }

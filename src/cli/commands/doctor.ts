@@ -4,6 +4,8 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { diagnoseArtifact, formatDiagnosis } from '../../artifact/doctor.js';
+import { runConformance, type ConformanceOptions, type ConformanceTarget } from '../../mcp/conformance.js';
+import { DEFAULT_TOKEN_FILE } from '../../mcp/http-guard.js';
 
 const EXPECTED_MODEL_SHA256 = 'afdb6f1a0e45b715d0bb9b11772f032c399babd23bfc31fed1c170afc848bdb1';
 
@@ -17,10 +19,15 @@ function getModelsDir(): string {
 }
 
 export const doctorCommand = new Command('doctor')
-  .description('Check system health: model files, dependencies, index, and MCP compliance')
+  .description('Check system health: model files, dependencies, index, compiled artifact, and MCP conformance')
   .option('--db-path <path>', 'Path to sqlite-vec database', 'smallchat.db')
-  .option('--mcp [url]', 'Run MCP compliance check against a running server')
   .option('--artifact <path>', 'Check a compiled artifact against its embedder and index, and report near-duplicate tools (default: ./tools.toolkit.json when present)')
+  .option('--mcp [url]', 'Run the MCP conformance checks against a running `serve --http` (default http://127.0.0.1:3001/mcp)')
+  .option('--token-file <path>', 'Bearer token for --mcp', DEFAULT_TOKEN_FILE)
+  .option('--mcp-source <artifact>', 'Run the MCP conformance checks against `smallchat serve --source <artifact>` over stdio')
+  .option('--mcp-call <tool>', 'With --mcp/--mcp-source: also call this tool end to end')
+  .option('--mcp-args <json>', 'Arguments for --mcp-call', '{}')
+  .option('--mcp-timeout <ms>', 'Per-check timeout', '10000')
   .action(async (options) => {
     let ok = true;
 
@@ -124,11 +131,20 @@ export const doctorCommand = new Command('doctor')
       ok = diagnosis.ok && ok;
     }
 
-    // 7. MCP compliance check
-    if (options.mcp !== undefined) {
-      const baseUrl = typeof options.mcp === 'string' ? options.mcp : 'http://127.0.0.1:3001';
-      console.log(`\nMCP Compliance Check (${baseUrl}):`);
-      ok = (await runMCPComplianceCheck(baseUrl)) && ok;
+    // 7. MCP conformance check
+    const target = mcpTarget(options);
+    if (target) {
+      console.log(`\nMCP conformance (${target.kind === 'http' ? target.url : `stdio: smallchat serve --source ${options.mcpSource}`}):`);
+      let call: { name: string; arguments: Record<string, unknown> } | undefined;
+      if (options.mcpCall) {
+        try {
+          call = { name: options.mcpCall, arguments: JSON.parse(options.mcpArgs) as Record<string, unknown> };
+        } catch {
+          console.log('  --mcp-args is not valid JSON');
+          process.exit(1);
+        }
+      }
+      ok = (await runMcpDoctor(target, { call, timeoutMs: parseInt(options.mcpTimeout, 10) })) && ok;
     }
 
     // Summary
@@ -137,154 +153,41 @@ export const doctorCommand = new Command('doctor')
   });
 
 // ---------------------------------------------------------------------------
-// MCP Compliance checker
+// MCP conformance
 // ---------------------------------------------------------------------------
 
-async function runMCPComplianceCheck(baseUrl: string): Promise<boolean> {
-  let ok = true;
-  const checks: Array<{ name: string; pass: boolean; detail: string }> = [];
-
-  // Helper for JSON-RPC calls
-  async function rpc(method: string, params?: Record<string, unknown>): Promise<unknown> {
-    const response = await fetch(baseUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
-    });
-    const json = (await response.json()) as { result?: unknown; error?: { message: string } };
-    if (json.error) throw new Error(json.error.message);
-    return json.result;
+/** The server `doctor --mcp` / `--mcp-source` should check, if any. */
+function mcpTarget(options: { mcp?: string | boolean; mcpSource?: string; tokenFile: string }): ConformanceTarget | null {
+  if (options.mcpSource) {
+    // Spawn this same CLI as the MCP host would: `smallchat serve --source <artifact>` over stdio.
+    return {
+      kind: 'stdio',
+      command: process.execPath,
+      args: [...process.execArgv, process.argv[1], 'serve', '--source', resolve(options.mcpSource)],
+    };
   }
+  if (options.mcp === undefined) return null;
+  const url = typeof options.mcp === 'string' ? options.mcp : 'http://127.0.0.1:3001/mcp';
+  const tokenFile = resolve(options.tokenFile);
+  const token = existsSync(tokenFile) ? readFileSync(tokenFile, 'utf-8').trim() : undefined;
+  return { kind: 'http', url, ...(token ? { token } : {}) };
+}
 
-  // 1. Discovery endpoint
-  try {
-    const resp = await fetch(`${baseUrl}/.well-known/mcp.json`);
-    const discovery = (await resp.json()) as { mcpVersion?: string; serverInfo?: { name: string } };
-    if (discovery.mcpVersion && discovery.serverInfo) {
-      checks.push({ name: 'Discovery (/.well-known/mcp.json)', pass: true, detail: `version=${discovery.mcpVersion}` });
-    } else {
-      checks.push({ name: 'Discovery (/.well-known/mcp.json)', pass: false, detail: 'Missing required fields' });
-      ok = false;
-    }
-  } catch (e) {
-    checks.push({ name: 'Discovery (/.well-known/mcp.json)', pass: false, detail: (e as Error).message });
-    ok = false;
-  }
-
-  // 2. Health endpoint
-  try {
-    const resp = await fetch(`${baseUrl}/health`);
-    const health = (await resp.json()) as { status: string };
-    checks.push({ name: 'Health (/health)', pass: health.status === 'ok', detail: `status=${health.status}` });
-  } catch (e) {
-    checks.push({ name: 'Health (/health)', pass: false, detail: (e as Error).message });
-    ok = false;
-  }
-
-  // 3. initialize
-  try {
-    const result = (await rpc('initialize', {
-      protocolVersion: '2024-11-05',
-      capabilities: {},
-      clientInfo: { name: 'smallchat-doctor', version: '1.0.0' },
-    })) as { protocolVersion?: string; capabilities?: unknown; serverInfo?: unknown };
-
-    const pass = !!(result.protocolVersion && result.capabilities && result.serverInfo);
-    checks.push({ name: 'initialize', pass, detail: `protocolVersion=${result.protocolVersion}` });
-    if (!pass) ok = false;
-  } catch (e) {
-    checks.push({ name: 'initialize', pass: false, detail: (e as Error).message });
-    ok = false;
-  }
-
-  // 4. ping
-  try {
-    await rpc('ping');
-    checks.push({ name: 'ping', pass: true, detail: 'OK' });
-  } catch (e) {
-    checks.push({ name: 'ping', pass: false, detail: (e as Error).message });
-    ok = false;
-  }
-
-  // 5. tools/list
-  try {
-    const result = (await rpc('tools/list')) as { tools?: unknown[] };
-    const pass = Array.isArray(result.tools);
-    checks.push({ name: 'tools/list', pass, detail: `${result.tools?.length ?? 0} tools` });
-    if (!pass) ok = false;
-  } catch (e) {
-    checks.push({ name: 'tools/list', pass: false, detail: (e as Error).message });
-    ok = false;
-  }
-
-  // 6. tools/call (with a non-existent tool — should handle gracefully)
-  try {
-    await rpc('tools/call', { name: '__compliance_test__', arguments: {} });
-    checks.push({ name: 'tools/call', pass: true, detail: 'Handled gracefully' });
-  } catch {
-    // An error response is acceptable too — it means the server handles unknown tools
-    checks.push({ name: 'tools/call', pass: true, detail: 'Returns error for unknown tools' });
-  }
-
-  // 7. resources/list
-  try {
-    const result = (await rpc('resources/list')) as { resources?: unknown[] };
-    checks.push({ name: 'resources/list', pass: true, detail: `${result.resources?.length ?? 0} resources` });
-  } catch (e) {
-    checks.push({ name: 'resources/list', pass: false, detail: (e as Error).message });
-    ok = false;
-  }
-
-  // 8. prompts/list
-  try {
-    const result = (await rpc('prompts/list')) as { prompts?: unknown[] };
-    checks.push({ name: 'prompts/list', pass: true, detail: `${result.prompts?.length ?? 0} prompts` });
-  } catch (e) {
-    checks.push({ name: 'prompts/list', pass: false, detail: (e as Error).message });
-    ok = false;
-  }
-
-  // 9. SSE endpoint
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 3000);
-    const resp = await fetch(`${baseUrl}/sse`, { signal: controller.signal }).catch(() => null);
-    clearTimeout(timeout);
-    if (resp && resp.headers.get('content-type')?.includes('text/event-stream')) {
-      checks.push({ name: 'SSE (/sse)', pass: true, detail: 'Connected' });
-    } else {
-      checks.push({ name: 'SSE (/sse)', pass: false, detail: 'Not available' });
-      ok = false;
-    }
-  } catch {
-    // AbortError is expected — SSE stays open
-    checks.push({ name: 'SSE (/sse)', pass: true, detail: 'Connected (stream open)' });
-  }
-
-  // 10. Unknown method handling
-  try {
-    await rpc('nonexistent/method');
-    checks.push({ name: 'Unknown method handling', pass: false, detail: 'Should return error' });
-    ok = false;
-  } catch {
-    checks.push({ name: 'Unknown method handling', pass: true, detail: 'Returns METHOD_NOT_FOUND' });
-  }
-
-  // Print results
-  const maxName = Math.max(...checks.map(c => c.name.length));
+/**
+ * Run the shared conformance checks (src/mcp/conformance.ts — the same ones
+ * the test suite runs) and print them. Returns whether every check passed.
+ */
+export async function runMcpDoctor(
+  target: ConformanceTarget,
+  options: ConformanceOptions = {},
+  print: (line: string) => void = line => console.log(line),
+): Promise<boolean> {
+  const checks = await runConformance(target, options);
+  const width = Math.max(...checks.map(c => c.name.length));
   for (const check of checks) {
-    const icon = check.pass ? '\u2713' : '\u2717';
-    const status = check.pass ? 'PASS' : 'FAIL';
-    console.log(`  ${icon} ${check.name.padEnd(maxName + 2)} ${status}  ${check.detail}`);
+    print(`  ${check.pass ? '\u2713' : '\u2717'} ${check.name.padEnd(width + 2)} ${check.pass ? 'PASS' : 'FAIL'}  ${check.detail}`);
   }
-
   const passed = checks.filter(c => c.pass).length;
-  const total = checks.length;
-  console.log(`\n  MCP Compliance: ${passed}/${total} checks passed`);
-
-  if (ok) {
-    console.log('  Status: MCP 2026 compliant');
-  }
-
-  return ok;
+  print(`\n  MCP conformance: ${passed}/${checks.length} checks passed`);
+  return passed === checks.length;
 }

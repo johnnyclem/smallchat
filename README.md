@@ -54,11 +54,11 @@ smallchat setup
 The setup wizard will:
 1. **Discover** your existing MCP server configurations (Claude Code, Gemini CLI, OpenCode, Codex, or any `.mcp.json`)
 2. **Compile** them into an optimized smallchat toolkit with embedded vectors and dispatch tables
-3. **Optionally replace** your `mcpServers` config so all tools are served through smallchat
+3. **Optionally add** a `smallchat` server (stdio, launched as `npx -y @smallchat/core@<version> serve`) next to your existing `mcpServers`. Your servers stay. If you choose to disable them, they move under `smallchatDisabledMcpServers` in the same file instead of being deleted. A timestamped backup is written first, and (unless `--no-verify`) the toolkit is started over stdio before the config is touched.
 
-That's it — your agent now dispatches tools semantically instead of stuffing them all into the context window.
+That's it: your agent can now reach every upstream tool through one server, with exact provider-qualified names and the `smallchat_resolve` tool for intent lookup.
 
-> **Prefer non-interactive mode?** Run `smallchat setup --no-interactive` to auto-detect and compile without prompts.
+> **Prefer non-interactive mode?** `smallchat setup --no-interactive` auto-detects and compiles without prompts. Add `--config <file> --install [--disable-originals]` to also update that config.
 >
 > **Published on npm?** `@smallchat/core` is on the registry, but currently pinned at `0.1.0` — well behind this repo (`0.5.0`, plus the unreleased work in [What's New](#whats-new) below), and missing commands like `setup`, `doctor`, `memex`, and `rtk` entirely. Build from source as shown above until a fresh version ships; watch [CHANGELOG.md](./CHANGELOG.md) for the publish.
 
@@ -96,8 +96,9 @@ smallchat explain tools.toolkit.json "search for code"
 # Pin the decisions that matter: golden traces, exit 1 if one changes
 smallchat replay tools.toolkit.json traces/
 
-# Start an MCP-compatible server
-smallchat serve --source ./manifests --port 3001
+# Serve every tool through one MCP server (stdio; --http for Streamable HTTP)
+# Tools are <provider>__<tool>; each call goes to the upstream server by exact name.
+smallchat serve --source tools.toolkit.json
 
 # Scaffold a new project
 smallchat init my-app --template agent
@@ -185,12 +186,12 @@ See the [Architecture doc](./ARCHITECTURE.md) for the full design and the [Refer
 | `setup` | Auto-detect MCP servers and run an interactive compile wizard |
 | `init` | Scaffold a new project from a template |
 | `compile` | Compile manifests into a dispatch artifact |
-| `serve` | Start an MCP-compatible server |
+| `serve` | Serve a toolkit as one MCP server that forwards each call, by exact name, to its upstream server |
 | `resolve` | Test intent-to-tool resolution |
 | `explain` | Candidate table, tiers, policy verdicts and proof digest for one intent |
 | `replay` | Check golden traces or a decision log against an artifact (exit 0 pass / 1 mismatch / 2 could not run) |
 | `inspect` | Examine a compiled artifact |
-| `doctor` | Check your environment, and an artifact against its embedder and index |
+| `doctor` | Check your environment, and an artifact against its embedder and index; `--mcp` / `--mcp-source` run the MCP conformance checks |
 | `docs` | Generate Markdown docs from a compiled artifact |
 | `repl` | Interactive shell for testing resolution |
 | `channel` | Claude Code channel-protocol bridge |

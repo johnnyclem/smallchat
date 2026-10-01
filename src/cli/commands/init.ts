@@ -1,6 +1,8 @@
 import { Command } from 'commander';
+import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { packageVersion } from '../package-info.js';
 
 // ---------------------------------------------------------------------------
 // Command
@@ -10,7 +12,7 @@ export const initCommand = new Command('init')
   .description('Scaffold a new smallchat project with sample tools and configuration')
   .argument('[directory]', 'Directory to initialize (defaults to current directory)')
   .option('-t, --template <type>', 'Project template: basic, mcp-server, agent', 'basic')
-  .option('--no-git', 'Skip git initialization')
+  .option('--no-git', 'Skip git initialization (git init, unless already inside a repository)')
   .option('--no-install', 'Skip npm install')
   .action(async (directory, options) => {
     const projectDir = resolve(directory ?? '.');
@@ -73,66 +75,135 @@ export const initCommand = new Command('init')
     );
 
     console.log('\nProject scaffolded successfully!\n');
-    console.log('Next steps:');
-    console.log(`  cd ${directory ?? '.'}`);
+
+    if (options.git !== false) {
+      await initGitRepository(projectDir);
+    }
+    let installed = false;
     if (options.install !== false) {
+      installed = await installDependencies(projectDir);
+    }
+
+    console.log('\nNext steps:');
+    console.log(`  cd ${directory ?? '.'}`);
+    if (!installed) {
       console.log('  npm install');
     }
-    console.log('  npx smallchat compile');
-    console.log('  npx smallchat resolve tools.toolkit.json "hello world"');
+    // `npm run` uses the locally installed smallchat bin; never the unscoped
+    // `npx smallchat`, which would fetch an unrelated (unregistered) package.
+    console.log('  npm run compile        # smallchat compile --source ./manifests');
+    if (template === 'basic') {
+      console.log('  npm run build && npm start');
+    }
     console.log('');
     console.log(`Template: ${template}`);
-    console.log('Run "smallchat doctor" to verify your setup.\n');
+    console.log('Run "npm run doctor" to verify your setup.\n');
   });
+
+// ---------------------------------------------------------------------------
+// git / npm
+// ---------------------------------------------------------------------------
+
+/** Run a command; resolves with its exit code (or null if it could not start). */
+function run(command: string, args: string[], cwd: string, quiet = false): Promise<number | null> {
+  return new Promise((resolvePromise) => {
+    const child = spawn(command, args, {
+      cwd,
+      stdio: quiet ? 'ignore' : 'inherit',
+      // npm is a .cmd shim on Windows; the arguments here are fixed literals.
+      shell: process.platform === 'win32',
+    });
+    child.on('error', () => resolvePromise(null));
+    child.on('close', (code) => resolvePromise(code));
+  });
+}
+
+/** `git init`, unless the directory is already inside a git work tree. */
+async function initGitRepository(projectDir: string): Promise<void> {
+  const inside = await run('git', ['rev-parse', '--is-inside-work-tree'], projectDir, true);
+  if (inside === null) {
+    console.log('  git not found; skipped git init');
+    return;
+  }
+  if (inside === 0) {
+    console.log('  Already inside a git repository; skipped git init');
+    return;
+  }
+  const code = await run('git', ['init', '--quiet'], projectDir, true);
+  console.log(code === 0 ? '  Initialized a git repository' : '  ⚠ git init failed; run it yourself');
+}
+
+/** `npm install` in the project; false (with a warning) if it failed. */
+async function installDependencies(projectDir: string): Promise<boolean> {
+  console.log('  Installing dependencies (npm install)...');
+  const code = await run('npm', ['install'], projectDir);
+  if (code === 0) return true;
+  console.log('  ⚠ npm install failed; run it yourself once the problem above is fixed');
+  return false;
+}
 
 // ---------------------------------------------------------------------------
 // Template generators
 // ---------------------------------------------------------------------------
 
 function generateBasicTemplate(projectDir: string): void {
-  // Sample tool definition
+  // The sample tools, implemented in-process ('local' transport in the manifest)
   const toolFile = `import type { ToolResult } from '@smallchat/core';
 
 /**
  * A sample greeting tool that demonstrates the basic tool structure.
  */
-export async function greet(args: { name: string; greeting?: string }): Promise<ToolResult> {
-  const greeting = args.greeting ?? 'Hello';
+export async function greet(args: Record<string, unknown>): Promise<ToolResult> {
+  const greeting = typeof args.greeting === 'string' ? args.greeting : 'Hello';
   return {
-    content: \`\${greeting}, \${args.name}! Welcome to smallchat.\`,
+    content: \`\${greeting}, \${String(args.name)}! Welcome to smallchat.\`,
   };
 }
 
 /**
  * A sample echo tool that returns whatever you send it.
  */
-export async function echo(args: { message: string }): Promise<ToolResult> {
+export async function echo(args: Record<string, unknown>): Promise<ToolResult> {
   return {
-    content: args.message,
+    content: String(args.message),
   };
 }
 `;
-  writeIfNotExists(join(projectDir, 'tools', 'sample-tools.ts'), toolFile);
+  writeIfNotExists(join(projectDir, 'src', 'tools.ts'), toolFile);
 
-  // Entry point
-  const entryPoint = `import { ToolRuntime, MemoryVectorIndex, HashEmbedder } from '@smallchat/core';
+  // Entry point: compile ./manifests, resolve an intent, run the chosen tool
+  const entryPoint = `import { loadRuntime, registerLocalHandler } from '@smallchat/core';
+import { echo, greet } from './tools.js';
+
+// Implementations for the tools declared in manifests/ (transportType 'local').
+registerLocalHandler('greet', greet);
+registerLocalHandler('echo', echo);
 
 async function main() {
-  // Create the runtime with in-memory vector index
-  const vectorIndex = new MemoryVectorIndex();
-  const embedder = new HashEmbedder();
-  const runtime = new ToolRuntime(vectorIndex, embedder);
+  // Compiles ./manifests in-process; point it at tools.toolkit.json
+  // (npm run compile) to load a compiled artifact instead.
+  const { runtime, upstreams } = await loadRuntime('./manifests');
+  try {
+    // Resolution proposes one tool and runs nothing...
+    const resolution = await runtime.resolve('greet a user by name');
+    console.log(\`Resolved: \${resolution.outcome} -> \${resolution.chosen ?? '(none)'} (\${resolution.tier})\`);
 
-  // Compile your tools
-  console.log('Compiling tools...');
-  // Use: npx smallchat compile --source ./manifests
-
-  // Dispatch an intent
-  const result = await runtime.dispatch('greet someone', { name: 'World' });
-  console.log('Result:', result.content);
+    // ...then exactly that tool runs, with arguments checked against its schema.
+    if (resolution.chosen) {
+      const result = await runtime.dispatchById(resolution.chosen, { name: 'World' });
+      console.log('Result:', result.content);
+    } else {
+      console.log('Candidates:', resolution.candidates.map((c) => c.toolId).join(', '));
+    }
+  } finally {
+    await upstreams.close();
+  }
 }
 
-main().catch(console.error);
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
 `;
   writeIfNotExists(join(projectDir, 'src', 'index.ts'), entryPoint);
 }
@@ -140,12 +211,10 @@ main().catch(console.error);
 function generateMcpServerTemplate(projectDir: string): void {
   const serverFile = `import { MCPServer } from '@smallchat/core';
 
-const server = new MCPServer({
-  port: 3001,
-  host: '127.0.0.1',
-  sourcePath: './manifests',
-  dbPath: 'smallchat.db',
-});
+// Serves ./manifests over stdio — point your MCP host at \`node dist/server.js\`.
+// Logs go to stderr: stdout is the protocol channel.
+// For Streamable HTTP (bearer token, Host/Origin checks) run: smallchat serve --http --source ./manifests
+const server = new MCPServer({ sourcePath: './manifests' });
 
 // Graceful shutdown
 process.on('SIGINT', async () => {
@@ -153,10 +222,9 @@ process.on('SIGINT', async () => {
   process.exit(0);
 });
 
-server.start().then(() => {
-  console.log('MCP server running on http://127.0.0.1:3001');
-  console.log('Discovery: http://127.0.0.1:3001/.well-known/mcp.json');
-});
+server.startStdio()
+  .then(() => server.closed())
+  .then(() => server.stop());
 `;
   writeIfNotExists(join(projectDir, 'src', 'server.ts'), serverFile);
 
@@ -269,10 +337,11 @@ function generatePackageJson(name: string, template: string): object {
     scripts: {
       build: 'tsc',
       compile: 'smallchat compile --source ./manifests',
+      doctor: 'smallchat doctor',
       dev: 'tsc --watch',
     },
     dependencies: {
-      '@smallchat/core': '^0.5.0',
+      '@smallchat/core': `^${packageVersion()}`,
     },
     devDependencies: {
       typescript: '^5.7.0',
@@ -290,6 +359,10 @@ function generatePackageJson(name: string, template: string): object {
 
   if (template === 'agent') {
     (base.scripts as Record<string, string>).start = 'node dist/agent.js';
+  }
+
+  if (template === 'basic') {
+    (base.scripts as Record<string, string>).start = 'node dist/index.js';
   }
 
   return base;

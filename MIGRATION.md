@@ -212,11 +212,12 @@ near-duplicate tools and shared tool names are warnings only.
 
 **`smallchat resolve` prints the runtime's decision.** The "✓ Unambiguous"
 / "? Ambiguous" lines (a 90% similarity rule of thumb the runtime never
-used) are replaced by `Decision: <outcome> [→ <tool id>] (tier, decision
-code)` and the proof digest — the same resolution `serve` and `dispatch`
-make, under the nearest smallchat.json policy. Scripts that grepped for
-"Unambiguous" should check for `Decision: resolved`, or use `smallchat
-explain --json`.
+used) are replaced by `Outcome: <outcome> (tier …, decision …)`, the
+chosen tool id with its serve name, the candidate table and the proof
+digest — the same resolution `serve` and `dispatch` make, under the
+nearest smallchat.json policy. Scripts that grepped for "Unambiguous"
+should use `smallchat resolve --json` (`resolution.outcome`,
+`resolution.chosen`) or `smallchat explain --json`.
 
 **Golden traces instead of hand checks.** Record what each important
 intent must resolve to in a JSONL file and run `smallchat replay
@@ -224,7 +225,8 @@ tools.toolkit.json traces/` in CI (exit 0 pass, 1 mismatch, 2 could not
 run); see `examples/traces/` and `docs/REFERENCE.md`.
 
 **Decision log (opt-in).** Set `RuntimeOptions.decisionLog` (a path, options
-or a `DecisionLog`) or pass `--decision-log <file>` to `serve`. Lines are
+or a `DecisionLog`) or pass `--decision-log <file>` to `serve` (every
+`tools/call` and `smallchat_resolve` is recorded), `resolve` or `explain`. Lines are
 written before a tool runs; a write failure throws `DecisionLogError` and
 nothing runs, so put the file on a disk you can append to. One writer per
 file.
@@ -234,6 +236,250 @@ its numbers dropped to what the runtime actually does (see
 `docs/REFERENCE.md#benchmarks`); the `llm` runner is renamed
 `simulated-llm`, `EmbeddingBaseline` takes the embedder to use, and
 `bench/floors.json` holds the regression floors `npm test` enforces.
+## `smallchat serve`: SDK-based, stdio by default, exact aggregate names
+
+**Configure hosts for stdio, or add `--http`.** `smallchat serve --source X`
+now speaks MCP over stdio. This is what `mcpServers` entries launch:
+
+```json
+{ "mcpServers": { "smallchat": { "command": "smallchat", "args": ["serve", "--source", "/abs/tools.toolkit.json"] } } }
+```
+
+For HTTP, add `--http`. The endpoint is `http://127.0.0.1:3001/mcp`. It was
+`POST /` or `/rpc` and `GET /sse`, and those paths, `/.well-known/mcp.json`,
+`/health` and `POST /oauth/token` are gone. HTTP requires
+`Authorization: Bearer <token>`, with the token in `~/.smallchat/serve-token`,
+generated with mode 0600 on first start (`--token-file` to move it,
+`--http-insecure` to opt out). Browsers need `--allowed-origin`. Binding
+`0.0.0.0` needs `--allowed-host <name>`.
+
+| 0.5 flag | 1.0 |
+|---|---|
+| `--auth` (OAuth 2.1) | bearer token by default; OAuth resource-server support is future work |
+| `--db-path`, `--session-ttl <hours>` | sessions are in memory: `--max-sessions`, `--session-idle-timeout <minutes>` |
+| `--cors-origin <o>` | `--allowed-origin <o...>` |
+| `--audit` | `--audit-log <file>` (JSON lines) |
+| `--rate-limit`, `--rate-limit-rpm`, `--rtk*`, `--max-body-bytes` | unchanged (HTTP only, except `--rtk`) |
+
+**Recompile so serve knows how to start each server.** Execution uses the
+provider launch specs recorded by `smallchat compile --source .mcp.json`
+(or a manifest's `launch` / `endpoint`). Environment variables are recorded
+by name: set their values in the environment `serve` runs in. A provider
+without a launch spec lists its tools, but calls to them return an
+`isError` result that says so.
+
+**Call tools by their listed names.** Names are `<providerId>__<toolName>`
+(e.g. `github__create_issue`). Calls by bare upstream name or canonical id
+(`github/create_issue`) now return an `isError` result with close names
+instead of running. To keep upstream names (e.g. for OpenAPPA batteries
+keyed `mcp/<server>/<tool>`), serve each provider separately with
+`--provider <id>`. Tools whose aggregate name would be invalid (dots,
+more than 128 characters, or a provider id containing `__` or ending in `_`)
+are only reachable with `--provider`.
+
+**Intent dispatch is the `smallchat_resolve` tool.** It proposes a tool
+and returns its `name`. The client then calls that name. Nothing executes
+from an intent on the MCP surface any more. When you give `MCPServer` a
+`runtimeOptions.rateLimiter`, a refused intent comes back as `outcome:
+"throttled"` with `retryAfterMs`.
+
+**Read smallchat data from `_meta`.** Results no longer have top-level
+`confidence`, `refinement` or `rtkSavedPct`. Read
+`_meta["dev.smallchat/resolution"]` (`toolId`, `ran`, `tier`, `callDigest`,
+`proofDigest`, …) and `_meta["dev.smallchat/rtk"].savedPct`. Upstream
+results pass through unchanged (`structuredContent`, non-text content,
+`isError`).
+
+**Programmatic `MCPServer`.** Replace `new MCPServer({ port, host, sourcePath, dbPath, … }).start()` with:
+
+```typescript
+const server = new MCPServer({ sourcePath });
+await server.startHttp({ port: 3001, host: '127.0.0.1', token });  // or: await server.startStdio()
+```
+
+`createHttpHandler(options)` needs `await server.load()` first and serves
+`/mcp` only. `McpTool` drops `id`, `tags` and `version`. `title` and
+`description` are optional, and `inputSchema` must be `{ type: 'object', … }`.
+`OAuthManager`, `MCP_SCOPES`, `SessionStore`, `McpRouter`, `SessionManager`,
+`SseBroker`, the `registry.ts` registries, `wire-format`, `MCP_ERROR` and
+`formatContent` (use `toCallToolResult`) are removed. `AuditEntry.success` is
+now `outcome: 'ok' | 'error' | 'rejected'`. `MCP_PROTOCOL_VERSIONS` lists the
+versions the SDK negotiates.
+
+**`loadRuntime()` returns `upstreams`.** MCP tools now execute on their
+upstream servers. Call `await upstreams.close()` when you are done, or stdio
+upstream processes keep your process alive.
+
+**`smallchat resolve --execute` needs a HIGH/EXACT match.** Add `--force`
+to run a weaker match. `--endpoint` is gone: the artifact's launch spec
+decides where the tool runs.
+
+**`doctor --mcp`** checks `http://127.0.0.1:3001/mcp` by default (it was
+`http://127.0.0.1:3001`). Use `--mcp-source <artifact>` to check `serve`
+over stdio.
+
+## Outbound MCP clients, config introspection and the container sandbox
+
+**`McpSseTransport` → `McpHttpTransport`.** The old name still works as a
+deprecated alias. Both now speak real MCP: an initialize handshake, a
+session, Streamable HTTP with a legacy SSE fallback, and per-call timeouts
+that cancel the request upstream. A server that only accepted a bare
+`tools/call` POST, with no handshake, is not an MCP server and will not
+work. `executeStream` yields one final result.
+
+```typescript
+// 0.5
+new McpSseTransport({ url, auth, reconnectDelayMs: 1000 });
+// 1.0
+new McpHttpTransport({ url, auth, transport: 'auto', timeoutMs: 30_000 });
+```
+
+**`MCPTransport` (`transportType: 'mcp'`)** now uses the same client, with
+a 60 s default `timeoutMs`. Close its session with `await transport.close()`
+or `clearTransports()`. It no longer yields token deltas from
+`executeInference`.
+
+**`McpStdioTransport`** drains the server's stderr (read it with
+`stderrTail()`), restarts a server that failed to start on the next call
+(after `restartBackoffMs`), and returns every `tools/list` page. Call
+`await transport.dispose()` to stop the process.
+
+**`smallchat compile` / `setup` with an MCP config.** Remote entries
+(`"type": "http"` / `"sse"`, or a bare `"url"`) are now introspected.
+Before, they made the whole command fail. An entry that cannot be
+introspected is reported (`<id>: skipped — …` or `<id>: FAILED — …`) and
+left out, and the others still compile, so check the output. `${VAR}`
+references are expanded the way Claude Code expands them. The artifact
+keeps the unexpanded templates (`"args": ["${HOME}/server.js"]`), so set
+those variables in the environment `serve` runs in. Remote servers that
+need headers (e.g. `Authorization`) are introspected with them, but the
+artifact records only the URL: pass the headers to `UpstreamPool` /
+`MCPServer` through `upstream.headers`.
+
+**Container sandbox.** `buildDockerArgs()` now returns `-e NAME` without a
+value. If you spawn docker yourself from `buildDockerArgs()`, put the values
+in docker's environment, or use `buildMcpSpawnSpec()`, which returns
+`{ command, args, env }` with both. The docker client no longer inherits
+your whole environment, only the safe allowlist, `DOCKER_*` connection
+settings and the server's variables.
+
+**Behind a proxy.** Spawned servers no longer see `HTTPS_PROXY`,
+`NO_PROXY` or `NODE_EXTRA_CA_CERTS` unless you set
+`SMALLCHAT_FORWARD_PROXY_ENV=1` (or pass `forwardProxyEnv: true`).
+
+## `HttpTransport` retries and uploads
+
+**POST/PATCH are no longer retried by default.** If your API deduplicates
+on an idempotency key, opt back in:
+
+```typescript
+new HttpTransport({
+  baseUrl,
+  retry: { maxRetries: 3, retryNonIdempotent: true },   // sends one Idempotency-Key per call
+});
+```
+
+Or pass your own key in `input.headers['Idempotency-Key']`, which also
+makes the call retryable. GET, HEAD, PUT, DELETE and OPTIONS are retried as
+before. The retry loop now honours `retryableStatuses`.
+
+**Error responses keep their body.** A 4xx/5xx result has the parsed body
+in `content` and `isError: true`, with or without retries. Code that read
+`metadata.body` after exhausted retries should read `content`.
+
+**Streams in `FileUpload.content`** are read into memory, up to
+`maxUploadBytes` (default 50 MiB, configurable on `HttpTransport`). If you
+call `buildMultipartBody` yourself, first pass the files through
+`await bufferFileUploads(files)`. Passing a stream directly now throws
+instead of sending an empty file.
+
+## `smallchat channel --http-bridge`: credentials and identity
+
+**Move the secret off the command line.** `--http-bridge-secret <token>`
+now fails with an error. Use one of these instead:
+
+```json
+{
+  "mcpServers": {
+    "webhook-channel": {
+      "command": "npx",
+      "args": ["-y", "@smallchat/core", "channel", "--name", "webhook", "--http-bridge"],
+      "env": { "SMALLCHAT_CHANNEL_SECRET": "${SMALLCHAT_CHANNEL_SECRET}" }
+    }
+  }
+}
+```
+
+or `--http-bridge-secret-file ~/.smallchat/channel-secret` (mode 0600). The
+secret must be at least 16 characters. A bridge with no credential no
+longer starts. Clients keep sending `X-Channel-Secret: <secret>` or
+`Authorization: Bearer <secret>` to `POST /event`, so stenographer's
+`--objection-channel` and the Swift messenger need no change.
+
+**Sender gating uses the credential's identity.** The body `sender` field
+is ignored. With only the shared secret, every request is the identity
+`bridge` (rename it with `--http-bridge-secret-identity`). To gate
+individual senders, give each one a token:
+
+```bash
+echo '{"alice@corp.example": "<long random token>"}' > ~/.smallchat/channel-tokens.json
+chmod 600 ~/.smallchat/channel-tokens.json
+smallchat channel --name ops --http-bridge \
+  --http-bridge-tokens-file ~/.smallchat/channel-tokens.json \
+  --sender-allowlist alice@corp.example
+```
+
+**Body `channel` is ignored.** Events always carry `--name`. Run one
+channel server per channel name.
+
+**Permission relay needs approvers.** Add `--permission-approvers
+alice@corp.example` (programmatically: `permissionApprovers`). Verdicts
+from anyone else, or from anyone when the list is empty, get `403`. Before,
+a configured sender allowlist was enough. Read the approver from the
+`permission-verdict` event's `approver` field.
+
+**Requests must be JSON, from an allowed Host and Origin.** Send
+`Content-Type: application/json`. Bridges bound to `0.0.0.0` need
+`--http-bridge-allowed-host <name>`. Browser clients need
+`httpBridgeCorsOrigin`. `meta.source` is dropped (the tag's `source` is
+the channel name), so rename that key, e.g. to `origin`.
+
+## `smallchat setup`, `smallchat rtk setup` and `smallchat init`
+
+**`setup` keeps your servers.** Answering "yes" now adds a `smallchat`
+entry next to your existing `mcpServers`. Removing duplicates is a
+separate, optional step (`--disable-originals`): the originals move under
+`smallchatDisabledMcpServers` in the same file. To undo either step, copy
+the newest `<config>.smallchat-backup-<timestamp>` over the config. If an
+earlier version replaced your servers, your original is in
+`<config>.backup`, unless setup ran twice.
+
+**Fix configs written by 0.5 setup.** Replace an entry like
+`{"command": "npx", "args": ["smallchat", "serve", ...]}` with the one
+setup now writes:
+
+```json
+{ "type": "stdio", "command": "npx", "args": ["-y", "@smallchat/core@1.0.0", "serve", "--source", "/abs/tools.toolkit.json"] }
+```
+
+`npx smallchat` refers to an unregistered npm name: anyone could publish a
+package under it, and npx installs without prompting when an MCP host
+starts it. Never use the unscoped name.
+
+**Scripted setup:** `smallchat setup --no-interactive --config .mcp.json
+--install [--disable-originals] [--embedder hash]`. Before, non-interactive
+mode never wrote the config.
+
+**`rtk setup`** stops with an error when `.claude/settings.json` is not
+valid JSON. Fix the file and re-run. Re-running replaces the broken inline
+hook that 0.5 installed with `.claude/hooks/smallchat-rtk-rewrite.mjs`.
+Commit that file with `.claude/settings.json` if your team shares
+settings. The hook rewrites `git status` to `rtk git status`, and your
+permission rules then see the rewritten command, so an allow rule such as
+`Bash(git status:*)` may also need `Bash(rtk git status:*)`.
+
+**`init` runs `git init` and `npm install`** unless you pass `--no-git` /
+`--no-install`.
 
 ---
 

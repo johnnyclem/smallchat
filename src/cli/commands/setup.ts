@@ -1,9 +1,21 @@
 import { Command } from 'commander';
 import { createInterface } from 'node:readline';
-import { readFileSync, writeFileSync, existsSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, statSync, renameSync } from 'node:fs';
 import { resolve, join, dirname, basename } from 'node:path';
 import { homedir } from 'node:os';
-import { isMcpConfigFile, type McpConfigFile } from '../../mcp/client.js';
+import { isMcpConfigFile } from '../../mcp/client.js';
+import { connectMcp, listAllTools } from '../../transport/mcp-connect.js';
+import { PACKAGE_NAME, localCliPath, packageVersion } from '../package-info.js';
+
+/** Name of the entry setup adds to mcpServers. */
+export const SMALLCHAT_SERVER_NAME = 'smallchat';
+
+/**
+ * Sibling key that holds the servers `--disable-originals` set aside, in the
+ * same object as `mcpServers`. Hosts ignore it; setup compiles from it on
+ * later runs.
+ */
+export const DISABLED_SERVERS_KEY = 'smallchatDisabledMcpServers';
 
 // ---------------------------------------------------------------------------
 // Interactive prompt helpers
@@ -174,38 +186,20 @@ function tryExtractMcpServers(filePath: string): DiscoveredConfig | null {
   return null;
 }
 
-/**
- * Extract the raw mcpServers object from a config file.
- */
-function extractMcpServersObject(filePath: string): Record<string, unknown> | null {
-  try {
-    const content = readFileSync(filePath, 'utf-8');
-    const parsed = JSON.parse(content);
-
-    if (isMcpConfigFile(parsed)) {
-      return parsed.mcpServers;
-    }
-
-    for (const key of Object.keys(parsed)) {
-      const val = parsed[key];
-      if (typeof val === 'object' && val !== null && 'mcpServers' in val) {
-        return (val as McpConfigFile).mcpServers;
-      }
-    }
-  } catch {
-    // ignore
-  }
-
-  return null;
-}
-
 // ---------------------------------------------------------------------------
 // Setup command
 // ---------------------------------------------------------------------------
 
 export const setupCommand = new Command('setup')
-  .description('Interactive onboarding: discover MCP servers, compile, and install')
-  .option('--no-interactive', 'Skip interactive prompts (auto-detect only)')
+  .description('Interactive onboarding: discover MCP servers, compile, and add smallchat to your MCP config')
+  .option('--no-interactive', 'Skip interactive prompts (auto-detect, or --config)')
+  .option('--config <path>', 'MCP config file to use (skips discovery)')
+  .option('-o, --output <path>', 'Where to write the compiled toolkit', 'tools.toolkit.json')
+  .option('--embedder <kind>', 'Embedder to compile with: onnx (default; falls back to hash) or hash')
+  .option('--install', 'Non-interactive: add the smallchat server to the config')
+  .option('--disable-originals', 'Move the original servers aside (kept in the file under "smallchatDisabledMcpServers")')
+  .option('--launcher <kind>', `How the config launches smallchat: npx (npx -y ${PACKAGE_NAME}@<version>) or node (absolute path to this install)`, 'npx')
+  .option('--no-verify', 'Do not start the compiled toolkit over stdio before writing the config')
   .action(async (options) => {
     console.log('');
     console.log('  ╔══════════════════════════════════════╗');
@@ -215,16 +209,30 @@ export const setupCommand = new Command('setup')
     console.log('  This wizard will help you:');
     console.log('    1. Find your MCP server configurations');
     console.log('    2. Compile them into a smallchat toolkit');
-    console.log('    3. Optionally replace your mcpServers with the compiled toolkit');
+    console.log('    3. Optionally add smallchat to your mcpServers (your servers stay)');
     console.log('');
 
-    const prompt = createPrompt();
+    if (options.launcher !== 'npx' && options.launcher !== 'node') {
+      console.error(`--launcher must be "npx" or "node" (got "${options.launcher}")`);
+      process.exitCode = 1;
+      return;
+    }
+
+    const interactive = options.interactive !== false;
+    const prompt = interactive ? createPrompt() : null;
 
     try {
       // Step 1: Discover MCP servers
       let configPath: string | null = null;
 
-      if (options.interactive === false) {
+      if (options.config) {
+        configPath = resolve(options.config);
+        if (!tryExtractMcpServers(configPath)) {
+          console.error(`No "mcpServers" configuration found in ${configPath}`);
+          process.exitCode = 1;
+          return;
+        }
+      } else if (!prompt) {
         // Non-interactive: auto-detect only
         configPath = await autoDetect(null);
       } else {
@@ -256,75 +264,110 @@ export const setupCommand = new Command('setup')
         console.log('You can still compile manually:');
         console.log('  smallchat compile --source <path-to-mcp-config>');
         console.log('');
-        prompt.close();
         return;
       }
 
-      // Show what we found
-      const servers = extractMcpServersObject(configPath);
-      const serverNames = servers ? Object.keys(servers) : [];
-      console.log(`\nFound ${serverNames.length} MCP server(s) in ${configPath}:`);
+      // Show what we found (smallchat's own entry is never compiled into itself)
+      const servers = serversToCompile(JSON.parse(readFileSync(configPath, 'utf-8')));
+      const serverNames = Object.keys(servers);
+      console.log(`\nFound ${serverNames.length} MCP server(s) to compile in ${configPath}:`);
       for (const name of serverNames) {
         console.log(`  - ${name}`);
       }
+      if (serverNames.length === 0) {
+        console.log('\nNothing to compile.');
+        return;
+      }
 
       // Step 2: Compile
-      if (options.interactive !== false) {
+      if (prompt) {
         const shouldCompile = await prompt.confirm('\nCompile these servers into a smallchat toolkit?');
         if (!shouldCompile) {
           console.log('\nSetup cancelled.');
-          prompt.close();
           return;
         }
       }
 
       console.log('');
 
-      // Run compile by importing and invoking compile logic
-      const outputPath = resolve('tools.toolkit.json');
-      const compileOk = await runCompileFromConfig(configPath, outputPath);
+      const outputPath = resolve(options.output);
+      const compileOk = await runCompileFromConfig(servers, outputPath, options.embedder);
 
       if (!compileOk) {
         console.log('\nCompilation failed. Run "smallchat doctor" to diagnose issues.');
-        prompt.close();
+        process.exitCode = 1;
         return;
       }
 
-      // Step 3: Offer to replace mcpServers
-      if (options.interactive !== false) {
+      // Step 3: Offer to add smallchat to the config
+      let install = options.install === true;
+      let disableOriginals = options.disableOriginals === true;
+      if (prompt) {
         console.log('');
-        const shouldReplace = await prompt.confirm(
-          'Replace your current mcpServers tool list with the compiled smallchat tool list?',
+        install = await prompt.confirm(
+          `Add a "${SMALLCHAT_SERVER_NAME}" server to ${basename(configPath)}? Your existing servers stay.`,
         );
-
-        if (shouldReplace) {
-          const success = replaceMcpServers(configPath, outputPath);
-          if (success) {
-            console.log('\nDone! Your mcpServers have been updated.');
-            console.log(`Original config backed up to: ${configPath}.backup`);
-            console.log('');
-            console.log('Your tools are now served through smallchat.');
-            console.log('To revert, restore the backup file.');
-          } else {
-            console.log('\nFailed to update config. You can do this manually.');
-          }
-        } else {
-          console.log('\nSkipped. Your compiled toolkit is ready at:');
-          console.log(`  ${outputPath}`);
-          console.log('');
-          console.log('To serve it manually:');
-          console.log(`  smallchat serve --source ${outputPath}`);
+        if (install && !options.disableOriginals) {
+          disableOriginals = await prompt.confirm(
+            `Also disable the original servers, so their tools are not listed twice? (They move to "${DISABLED_SERVERS_KEY}" in the same file.)`,
+          );
         }
       }
 
+      if (!install) {
+        console.log('\nYour compiled toolkit is ready at:');
+        console.log(`  ${outputPath}`);
+        console.log('');
+        console.log('To serve it (stdio, for an MCP host):');
+        console.log(`  npx -y ${PACKAGE_NAME}@${packageVersion()} serve --source ${outputPath}`);
+        console.log('');
+        return;
+      }
+
+      const launch = { launcher: options.launcher as 'npx' | 'node' };
+      if (options.verify !== false) {
+        const cli = localCliPath();
+        if (!cli) {
+          console.log('\nSkipping the serve check (smallchat is running from its TypeScript sources).');
+        } else {
+          console.log('\nChecking that the toolkit serves over stdio...');
+          try {
+            const tools = await verifyServeEntry(smallchatServerEntry(outputPath, { launcher: 'node', cliPath: cli }));
+            console.log(`  ✓ initialize completed; ${tools.length} tool(s) listed`);
+          } catch (err) {
+            console.error(`  ✗ ${(err as Error).message}`);
+            console.error('\nThe config was not changed. Fix the error above, or re-run with --no-verify.');
+            process.exitCode = 1;
+            return;
+          }
+        }
+      }
+
+      let result: InstallResult;
+      try {
+        result = installSmallchatEntry(configPath, outputPath, { ...launch, disableOriginals });
+      } catch (err) {
+        console.error(`\nFailed to update ${configPath}: ${(err as Error).message}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      console.log(`\nDone! Added "${SMALLCHAT_SERVER_NAME}" to ${configPath}:`);
+      console.log(`  ${result.entry.command} ${result.entry.args.join(' ')}`);
+      if (result.disabled.length > 0) {
+        console.log(`Disabled (kept under "${DISABLED_SERVERS_KEY}"): ${result.disabled.join(', ')}`);
+      }
+      console.log(`Original config backed up to: ${result.backupPath}`);
+      console.log('To revert, copy the backup over the config.');
       console.log('');
-      prompt.close();
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ERR_USE_AFTER_CLOSE') {
         // readline closed unexpectedly (e.g. piped input ended)
         return;
       }
       throw err;
+    } finally {
+      prompt?.close();
     }
   });
 
@@ -456,11 +499,12 @@ async function selectCliTool(
 // ---------------------------------------------------------------------------
 
 async function runCompileFromConfig(
-  configPath: string,
+  servers: Record<string, unknown>,
   outputPath: string,
+  embedderKind?: string,
 ): Promise<boolean> {
   // Dynamically import compile dependencies to avoid loading them until needed
-  const { introspectMcpConfigFile } = await import('../../mcp/client.js');
+  const { introspectMcpServers } = await import('../../mcp/client.js');
   const { ToolCompiler } = await import('../../compiler/compiler.js');
   const { MemoryVectorIndex } = await import('../../embedding/memory-vector-index.js');
   const { buildArtifact } = await import('../../artifact/format.js');
@@ -468,10 +512,15 @@ async function runCompileFromConfig(
   const { createEmbedder, describeFingerprint, fingerprintOf, DEFAULT_EMBEDDER_KIND } =
     await import('../../artifact/embedder.js');
 
+  if (embedderKind !== undefined && embedderKind !== 'onnx' && embedderKind !== 'hash') {
+    console.error(`--embedder must be "onnx" or "hash" (got "${embedderKind}")`);
+    return false;
+  }
+
   let manifests;
   try {
     console.log('Introspecting MCP servers...\n');
-    manifests = await introspectMcpConfigFile(configPath);
+    manifests = await introspectMcpServers(servers);
   } catch (err) {
     console.error(`Introspection failed: ${(err as Error).message}`);
     return false;
@@ -489,12 +538,16 @@ async function runCompileFromConfig(
   // the hash embedder. The artifact records whichever was actually used, so
   // `serve` will load it with the same embedder.
   let embedder;
-  try {
-    embedder = await createEmbedder(DEFAULT_EMBEDDER_KIND);
-  } catch (err) {
-    console.warn(`Warning: ${(err as Error).message}`);
-    console.warn('  Falling back to the hash embedder (placeholder vectors; run "smallchat doctor").');
+  if (embedderKind === 'hash') {
     embedder = await createEmbedder('hash');
+  } else {
+    try {
+      embedder = await createEmbedder(DEFAULT_EMBEDDER_KIND);
+    } catch (err) {
+      console.warn(`Warning: ${(err as Error).message}`);
+      console.warn('  Falling back to the hash embedder (placeholder vectors; run "smallchat doctor").');
+      embedder = await createEmbedder('hash');
+    }
   }
   const fingerprint = fingerprintOf(embedder);
 
@@ -524,47 +577,174 @@ async function runCompileFromConfig(
 }
 
 // ---------------------------------------------------------------------------
-// Config replacement
+// Config installation
 // ---------------------------------------------------------------------------
 
-function replaceMcpServers(
-  originalConfigPath: string,
+/** The stdio entry that launches `smallchat serve` for a toolkit. */
+export interface SmallchatServerEntry {
+  type: 'stdio';
+  command: string;
+  args: string[];
+}
+
+export interface LaunchOptions {
+  /**
+   * 'npx' (default): `npx -y @smallchat/core@<version> serve --source <toolkit>`
+   * — the scoped package at this exact version, never the unscoped
+   * `smallchat` name (unregistered on npm, so anyone could claim it).
+   * 'node': this installation's CLI by absolute path.
+   */
+  launcher?: 'npx' | 'node';
+  /** Version to pin with the npx launcher (default: this package's version) */
+  version?: string;
+  /** CLI entry point for the node launcher (default: this installation's dist/cli/index.js) */
+  cliPath?: string;
+}
+
+/** The mcpServers entry that serves `toolkitPath` over stdio. */
+export function smallchatServerEntry(toolkitPath: string, options: LaunchOptions = {}): SmallchatServerEntry {
+  const source = resolve(toolkitPath);
+  if (options.launcher === 'node') {
+    const cliPath = options.cliPath ?? localCliPath();
+    if (!cliPath) {
+      throw new Error('--launcher node needs the compiled CLI (dist/cli/index.js); this smallchat runs from sources');
+    }
+    if (/[\\/]_npx[\\/]/.test(cliPath)) {
+      throw new Error(`${cliPath} is in the npx cache, which npm may delete; use --launcher npx or install ${PACKAGE_NAME}`);
+    }
+    return { type: 'stdio', command: process.execPath, args: [cliPath, 'serve', '--source', source] };
+  }
+  return {
+    type: 'stdio',
+    command: 'npx',
+    args: ['-y', `${PACKAGE_NAME}@${options.version ?? packageVersion()}`, 'serve', '--source', source],
+  };
+}
+
+export interface InstallOptions extends LaunchOptions {
+  /** Move the other servers under DISABLED_SERVERS_KEY (kept, not deleted) */
+  disableOriginals?: boolean;
+  /** Clock for the backup file name (tests) */
+  now?: Date;
+}
+
+export interface InstallResult {
+  /** The backup of the config as it was before this change */
+  backupPath: string;
+  entry: SmallchatServerEntry;
+  /** Servers moved under DISABLED_SERVERS_KEY by this call */
+  disabled: string[];
+}
+
+/**
+ * Add (or update) the smallchat entry in a config's mcpServers, next to
+ * the servers already there. Never deletes a server: with
+ * `disableOriginals`, the others move under DISABLED_SERVERS_KEY in the
+ * same object, verbatim. The config is backed up first to
+ * `<config>.smallchat-backup-<timestamp>`, a new file every time (never
+ * overwritten), and rewritten atomically. A config that is not valid JSON
+ * is left untouched and an error is thrown.
+ */
+export function installSmallchatEntry(
+  configPath: string,
   toolkitPath: string,
-): boolean {
+  options: InstallOptions = {},
+): InstallResult {
+  const content = readFileSync(configPath, 'utf-8');
+  let parsed: Record<string, unknown>;
   try {
-    const content = readFileSync(originalConfigPath, 'utf-8');
-    const parsed = JSON.parse(content);
-
-    // Back up the original
-    writeFileSync(`${originalConfigPath}.backup`, content);
-
-    // Build the smallchat MCP server entry
-    const absoluteToolkitPath = resolve(toolkitPath);
-    const smallchatServer = {
-      command: 'npx',
-      args: ['smallchat', 'serve', '--source', absoluteToolkitPath],
-    };
-
-    // Replace mcpServers at the appropriate level
-    if (isMcpConfigFile(parsed)) {
-      parsed.mcpServers = { smallchat: smallchatServer };
-      writeFileSync(originalConfigPath, JSON.stringify(parsed, null, 2));
-      return true;
-    }
-
-    // Handle nested mcpServers (e.g. VS Code settings)
-    for (const key of Object.keys(parsed)) {
-      const val = parsed[key];
-      if (typeof val === 'object' && val !== null && 'mcpServers' in val) {
-        val.mcpServers = { smallchat: smallchatServer };
-        writeFileSync(originalConfigPath, JSON.stringify(parsed, null, 2));
-        return true;
-      }
-    }
-
-    return false;
+    parsed = JSON.parse(content);
   } catch (err) {
-    console.error(`Error updating config: ${(err as Error).message}`);
-    return false;
+    throw new Error(`${configPath} is not valid JSON (${(err as Error).message}); nothing was changed`);
+  }
+  const container = mcpServersContainer(parsed);
+  if (!container) throw new Error(`${configPath} has no "mcpServers" object; nothing was changed`);
+
+  const entry = smallchatServerEntry(toolkitPath, options);
+  // The backup may hold tokens (env values): give it the config's own mode.
+  const backupPath = writeBackup(configPath, content, options.now ?? new Date(), statSync(configPath).mode & 0o777);
+
+  const current = container.mcpServers as Record<string, unknown>;
+  const disabled: string[] = [];
+  let servers: Record<string, unknown>;
+  if (options.disableOriginals) {
+    const aside = { ...((container[DISABLED_SERVERS_KEY] as Record<string, unknown> | undefined) ?? {}) };
+    for (const [name, server] of Object.entries(current)) {
+      if (name === SMALLCHAT_SERVER_NAME) continue;
+      aside[name] = server;
+      disabled.push(name);
+    }
+    container[DISABLED_SERVERS_KEY] = aside;
+    servers = { [SMALLCHAT_SERVER_NAME]: entry };
+  } else {
+    servers = { ...current, [SMALLCHAT_SERVER_NAME]: entry };
+  }
+  container.mcpServers = servers;
+
+  const tmp = `${configPath}.${process.pid}.tmp`;
+  writeFileSync(tmp, JSON.stringify(parsed, null, 2) + '\n', { mode: statSync(configPath).mode & 0o777 });
+  renameSync(tmp, configPath);
+  return { backupPath, entry, disabled };
+}
+
+/**
+ * The servers setup should compile from a parsed config: its mcpServers
+ * without smallchat's own entry, plus the servers an earlier
+ * `--disable-originals` set aside.
+ */
+export function serversToCompile(parsed: unknown): Record<string, unknown> {
+  const container = mcpServersContainer(parsed);
+  if (!container) return {};
+  const servers: Record<string, unknown> = {
+    ...((container[DISABLED_SERVERS_KEY] as Record<string, unknown> | undefined) ?? {}),
+    ...(container.mcpServers as Record<string, unknown>),
+  };
+  delete servers[SMALLCHAT_SERVER_NAME];
+  return servers;
+}
+
+/**
+ * Start an entry the way an MCP host would (stdio), complete initialize and
+ * list its tools; returns the tool names. Rejects if it does not speak MCP.
+ */
+export async function verifyServeEntry(
+  entry: { command: string; args: string[] },
+  options: { timeoutMs?: number } = {},
+): Promise<string[]> {
+  const connection = await connectMcp(
+    { transport: 'stdio', command: entry.command, args: entry.args },
+    { timeoutMs: options.timeoutMs ?? 60_000 },
+  );
+  try {
+    const tools = await listAllTools(connection.client, { timeoutMs: options.timeoutMs ?? 60_000 });
+    return tools.map(t => t.name);
+  } finally {
+    await connection.close();
+  }
+}
+
+/** The object holding `mcpServers` (top level, or one level down as in editor settings). */
+function mcpServersContainer(parsed: unknown): Record<string, unknown> | null {
+  if (isMcpConfigFile(parsed)) return parsed as unknown as Record<string, unknown>;
+  if (typeof parsed !== 'object' || parsed === null) return null;
+  for (const value of Object.values(parsed)) {
+    if (typeof value === 'object' && value !== null && isMcpConfigFile(value)) {
+      return value as unknown as Record<string, unknown>;
+    }
+  }
+  return null;
+}
+
+/** Write `<config>.smallchat-backup-<timestamp>[-n]`, never replacing an existing file. */
+function writeBackup(configPath: string, content: string, now: Date, mode: number): string {
+  const stamp = now.toISOString().replace(/[:.]/g, '-');
+  for (let n = 0; ; n++) {
+    const path = `${configPath}.smallchat-backup-${stamp}${n === 0 ? '' : `-${n}`}`;
+    try {
+      writeFileSync(path, content, { flag: 'wx', mode });
+      return path;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+    }
   }
 }

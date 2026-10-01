@@ -12,10 +12,12 @@
  *                  "rtk <command>" so RTK processes it at the source.
  *
  *   filter mode  — after the inner transport returns, if the content is a string
- *                  above the threshold, pipes it through "rtk --filter" (stdin→stdout).
+ *                  above the threshold, pipes it through "rtk filter" (stdin→stdout).
  *
- * Fallback: if the RTK binary is missing or fails, the original output is returned
- * unchanged with metadata.rtk.enabled = false. Never throws due to RTK failure.
+ * Fallback: if the RTK binary is missing or fails (non-zero exit, timeout, an
+ * early exit that never reads its input, empty output), the original output
+ * is returned unchanged with metadata.rtk.enabled = false. Never throws due to
+ * RTK failure.
  *
  * See: https://github.com/johnnyclem-rdc/rtk
  */
@@ -123,7 +125,7 @@ export class RtkTransport implements ITransport {
   }
 
   // ---------------------------------------------------------------------------
-  // Filter mode — pipe content through "rtk --filter" after execute
+  // Filter mode — pipe content through "rtk filter" after execute
   // ---------------------------------------------------------------------------
 
   private async applyFilterMode(
@@ -280,10 +282,25 @@ export async function filterContentWithRtk(
   }
 }
 
+/**
+ * Pipe `content` through `rtk filter` and resolve with its output. Rejects
+ * — so callers fall back to the original content — when rtk cannot be
+ * started, exits non-zero, times out, stops reading its input (EPIPE), or
+ * prints nothing for non-empty input.
+ */
 function runFilter(binary: string, content: string, level: 'default' | 'aggressive', timeoutMs: number): Promise<string> {
   return new Promise((resolve, reject) => {
     const args = ['filter'];
     if (level === 'aggressive') args.push('--aggressive');
+
+    let settled = false;
+    const fail = (err: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      proc.kill();
+      reject(err);
+    };
 
     const proc = spawn(binary, args, { stdio: ['pipe', 'pipe', 'pipe'] });
     const outChunks: Buffer[] = [];
@@ -292,17 +309,41 @@ function runFilter(binary: string, content: string, level: 'default' | 'aggressi
     proc.stdout.on('data', (c: Buffer) => outChunks.push(c));
     proc.stderr.on('data', (c: Buffer) => errChunks.push(c));
 
-    const timer = setTimeout(() => { proc.kill(); reject(new Error('RTK timeout')); }, timeoutMs);
+    const timer = setTimeout(() => fail(new Error('RTK timeout')), timeoutMs);
+
+    // Resolve only once rtk has both consumed all of its input and exited 0:
+    // an rtk that exits early (unknown subcommand, crash) must not pass off
+    // a truncated or empty output as the filtered result.
+    let inputWritten = false;
+    let exitOutput: string | null = null;
+    const maybeResolve = () => {
+      if (settled || !inputWritten || exitOutput === null) return;
+      if (exitOutput.length === 0 && content.length > 0) {
+        fail(new Error('RTK produced no output'));
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      resolve(exitOutput);
+    };
 
     proc.on('close', (code) => {
-      clearTimeout(timer);
-      if (code === 0) resolve(Buffer.concat(outChunks).toString('utf8'));
-      else reject(new Error(`RTK exited ${code}: ${Buffer.concat(errChunks).toString('utf8')}`));
+      if (code === 0) {
+        exitOutput = Buffer.concat(outChunks).toString('utf8');
+        maybeResolve();
+      } else {
+        fail(new Error(`RTK exited ${code}: ${Buffer.concat(errChunks).toString('utf8')}`));
+      }
     });
 
-    proc.on('error', (err) => { clearTimeout(timer); reject(err); });
+    proc.on('error', fail);
+    // Without this listener an EPIPE (rtk exited before reading) is an
+    // uncaught exception that kills the whole process.
+    proc.stdin.on('error', fail);
 
-    proc.stdin.write(content, 'utf8');
-    proc.stdin.end();
+    proc.stdin.end(content, 'utf8', () => {
+      inputWritten = true;
+      maybeResolve();
+    });
   });
 }

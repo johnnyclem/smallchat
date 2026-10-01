@@ -3,13 +3,15 @@
  *
  * Wraps any async operation with configurable retry behavior.
  * Only retries on errors marked as retryable (network failures,
- * 5xx responses, rate limits, etc.).
+ * 5xx responses, rate limits, etc.). It does not know whether the
+ * operation is safe to repeat: callers decide that (HttpTransport only
+ * retries idempotent methods unless told otherwise).
  */
 
 import type { RetryConfig } from './types.js';
 import { isRetryable } from './errors.js';
 
-const DEFAULT_RETRY_CONFIG: Required<RetryConfig> = {
+const DEFAULT_RETRY_CONFIG: Required<Omit<RetryConfig, 'retryNonIdempotent' | 'idempotencyKeyHeader'>> = {
   maxRetries: 3,
   baseDelayMs: 1000,
   maxDelayMs: 30_000,

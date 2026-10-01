@@ -73,7 +73,7 @@ Type natural language intents and see which tools they resolve to. Try:
 
 - **Add more tools**: Create manifest JSON files in `manifests/`
 - **Use streaming**: `for await (const event of runtime.dispatchStream('intent')) { ... }`
-- **Start an MCP server**: `npx @smallchat/core serve --source ./manifests`
+- **Serve your tools as one MCP server**: `npx @smallchat/core serve --source tools.toolkit.json` (stdio; add `--http` for Streamable HTTP at `127.0.0.1:3001/mcp` with a bearer token)
 - **Generate docs**: `npx @smallchat/core docs tools.toolkit.json`
 - **Check health**: `npx @smallchat/core doctor`
 
@@ -84,13 +84,19 @@ Type natural language intents and see which tools they resolve to. Try:
 | Template | Use Case |
 |----------|----------|
 | `basic` | Simple tool dispatch (default) |
-| `mcp-server` | MCP 2026 compliant server |
+| `mcp-server` | An MCP server (stdio) for your manifests |
 | `agent` | Streaming agent with dispatch loop |
 
 ```bash
-npx @smallchat/core init my-server --template mcp-server
-npx @smallchat/core init my-agent --template agent
+npx -y @smallchat/core init my-server --template mcp-server
+npx -y @smallchat/core init my-agent --template agent
 ```
+
+`init` runs `git init` (unless the directory is already in a repository)
+and `npm install`; skip them with `--no-git` / `--no-install`. Then
+`npm run compile` compiles `manifests/`, and for the basic template
+`npm run build && npm start` resolves an intent against the sample
+manifest and runs the chosen tool.
 
 ## Example Projects
 

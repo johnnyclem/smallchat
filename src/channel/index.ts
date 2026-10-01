@@ -10,6 +10,7 @@ export type {
   ChannelNotificationParams,
   PermissionRequest,
   PermissionVerdict,
+  RecordedPermissionVerdict,
   ChannelProviderMeta,
   ChannelServerConfig,
 } from './types.js';
@@ -18,6 +19,7 @@ export type {
 export {
   filterMetaKeys,
   isValidMetaKey,
+  RESERVED_META_KEYS,
   parsePermissionReply,
   isValidPermissionId,
   validatePayloadSize,

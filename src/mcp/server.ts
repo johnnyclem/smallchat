@@ -1,121 +1,180 @@
 /**
- * MCPServer — production-grade MCP server for the CLI `serve` command.
+ * MCPServer — `smallchat serve`: an exact MCP aggregator built on the
+ * official SDK (@modelcontextprotocol/sdk).
  *
- * Composes extracted modules rather than inlining concerns:
- *   - artifact.ts    — compiled tool loading & serialization
- *   - session-store  — SQLite session persistence
- *   - oauth          — OAuth 2.1 token management
- *   - resources      — resource registry & handlers
- *   - prompts        — prompt registry & templates
- *   - rate-limiter   — per-client sliding-window rate limiting
- *   - audit-log      — in-memory request audit trail
+ * It serves the tools of a compiled artifact and forwards every
+ * tools/call, by exact name, to the upstream MCP server that owns the
+ * tool (see UpstreamPool). Nothing is resolved fuzzily on the call path:
  *
- * HTTP routing and JSON-RPC dispatch live here as the thin
- * orchestration layer that wires everything together.
+ *   - Aggregate mode (default) lists `<providerId>__<toolName>`; with
+ *     `provider` it lists one provider's tools under their upstream names,
+ *     verbatim (see tool-names.ts). Each tool carries its upstream title,
+ *     description, inputSchema, outputSchema and annotations.
+ *   - tools/call runs exactly the named tool through runtime.dispatchById
+ *     (arguments validated against inputSchema first). An unknown name is
+ *     an isError result listing close names; nothing runs.
+ *   - Semantic resolution is the separate `smallchat_resolve` tool: it
+ *     returns a proposal (tool id, MCP name, tier, candidates, proof
+ *     digest) and never executes.
+ *   - Results carry a compact proof under _meta['dev.smallchat/resolution'].
+ *
+ * Transports: stdio (startStdio) or Streamable HTTP on a single endpoint
+ * (startHttp / createHttpHandler), with Host/Origin validation, a bearer
+ * token, JSON-only bodies and a body cap in front of the SDK transport
+ * (see http-guard.ts). Protocol versions are negotiated by the SDK
+ * (MCP_PROTOCOL_VERSIONS). Authorization is a bearer token only; acting
+ * as an OAuth 2.1 resource server is future work.
+ *
+ * Programmatic tools and MCP Apps views (registerTool / registerApp), and
+ * the resource and prompt registries, are served alongside the artifact.
  */
 
+import { randomUUID } from 'node:crypto';
 import {
   createServer,
   type IncomingMessage,
   type RequestListener,
+  type Server as HttpServer,
   type ServerResponse,
-  type Server,
 } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import type { Readable, Writable } from 'node:stream';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
+import type { RequestHandlerExtra } from '@modelcontextprotocol/sdk/shared/protocol.js';
+import {
+  CallToolRequestSchema,
+  ErrorCode,
+  GetPromptRequestSchema,
+  ListPromptsRequestSchema,
+  ListResourcesRequestSchema,
+  ListResourceTemplatesRequestSchema,
+  ListToolsRequestSchema,
+  McpError,
+  ReadResourceRequestSchema,
+  SubscribeRequestSchema,
+  UnsubscribeRequestSchema,
+  type CallToolRequest,
+  type CallToolResult,
+  type JSONRPCMessage,
+  type ServerNotification,
+  type ServerRequest,
+  type Tool,
+} from '@modelcontextprotocol/sdk/types.js';
 import type { ToolRuntime, RuntimeOptions } from '../runtime/runtime.js';
 import type { ToolResult } from '../core/types.js';
+import type { ResolutionOutcome } from '../core/proof.js';
 import type { McpTool, McpUiResourceMeta } from './types.js';
 import { UIResourceRegistry, type UIContentProvider } from './ui-resources.js';
-import { SessionStore, type MCPSession } from './session-store.js';
-import { OAuthManager } from './oauth.js';
 import { ResourceRegistry, ResourceNotFoundError } from './resources.js';
 import { PromptRegistry, PromptNotFoundError } from './prompts.js';
 import { RateLimiter } from './rate-limiter.js';
-import { AuditLog } from './audit-log.js';
+import { AuditLog, type AuditEntry } from './audit-log.js';
+import { loadRuntime } from './artifact.js';
+import { UpstreamPool, withUpstreamCallContext, type UpstreamPoolOptions } from './upstream.js';
 import {
-  loadRuntime,
-  buildToolList,
-  formatContent,
-} from './artifact.js';
-import type { ArtifactV1 } from '../artifact/types.js';
-import { parseToolId } from '../core/tool-id.js';
+  buildToolTable,
+  closeMatches,
+  RESOLVE_TOOL_NAME,
+  type ToolTable,
+} from './tool-names.js';
+import { compactResolution, errorResult, RESOLUTION_META_KEY, toCallToolResult } from './results.js';
+import {
+  bearerMatches,
+  ClientAbortedError,
+  DEFAULT_MAX_BODY_BYTES,
+  defaultAllowedHostnames,
+  hostAllowed,
+  HttpRejection,
+  isInitializeBody,
+  isJsonContentType,
+  originAllowed,
+  parseJsonRpcBody,
+  readBody,
+} from './http-guard.js';
 import { filterContentWithRtk } from '../transport/rtk-transport.js';
 import type { RtkConfig } from '../transport/types.js';
 
-// ---------------------------------------------------------------------------
-// Protocol constants
-// ---------------------------------------------------------------------------
+export const SERVER_NAME = 'smallchat';
+export const SERVER_VERSION = '1.0.0';
 
-const MCP_PROTOCOL_VERSION = '2024-11-05';
-const SERVER_NAME = 'smallchat';
-const SERVER_VERSION = '0.5.0';
+/** The single Streamable HTTP endpoint path. */
+export const MCP_HTTP_PATH = '/mcp';
 
-// JSON-RPC error codes
-const PARSE_ERROR = -32700;
-const INVALID_REQUEST = -32600;
-const METHOD_NOT_FOUND = -32601;
-const INVALID_PARAMS = -32602;
-const INTERNAL_ERROR = -32603;
+const DEFAULT_MAX_SESSIONS = 100;
+const DEFAULT_SESSION_IDLE_MS = 30 * 60 * 1000;
 
 // ---------------------------------------------------------------------------
-// Server configuration
+// Configuration
 // ---------------------------------------------------------------------------
 
 export interface MCPServerConfig {
-  /** Port to listen on */
-  port: number;
-  /** Host to bind to */
-  host: string;
-  /** Compiled artifact (.json/.db) or a directory of manifests */
-  sourcePath: string;
+  /**
+   * Compiled artifact (.json/.db) or a directory of manifests. Optional:
+   * without it the server serves only programmatically registered tools.
+   */
+  sourcePath?: string;
   /**
    * When `sourcePath` is a manifest directory: keep near-duplicate tools
    * instead of failing to compile (same as `compile --allow-duplicates`).
    */
   allowDuplicates?: boolean;
   /**
-   * Runtime options — the dispatch policy (requireLLMForSubHighDispatch,
-   * strict, intentPins, treatUnannotatedAsDestructive, thresholds,
-   * argumentCoercion) and an optional LLM verifier.
+   * Runtime options — the dispatch policy smallchat_resolve and
+   * dispatchById apply (requireLLMForSubHighDispatch, strict, intentPins,
+   * treatUnannotatedAsDestructive, thresholds, argumentCoercion) and an
+   * optional LLM verifier.
    */
   runtimeOptions?: RuntimeOptions;
-  /** SQLite database path for sessions */
-  dbPath?: string;
-  /** Enable OAuth 2.1 authentication */
-  enableAuth?: boolean;
-  /** Enable rate limiting */
-  enableRateLimit?: boolean;
-  /** Max requests per minute per client */
-  rateLimitRPM?: number;
-  /** Enable audit logging */
-  enableAudit?: boolean;
-  /** Session TTL in milliseconds (default: 24h) */
-  sessionTTLMs?: number;
   /**
-   * RTK (Rust Token Killer) output compression config.
-   *
-   * When set, tool call results are filtered through the RTK binary before
-   * being returned to the MCP client, reducing token consumption by 60–90%
-   * for common dev command outputs.
-   *
+   * Serve only this provider, with upstream tool names verbatim.
+   * Default: every provider, as `<providerId>__<toolName>`.
+   */
+  provider?: string;
+  /** List the smallchat_resolve meta-tool (default true when an artifact is loaded) */
+  resolveTool?: boolean;
+  /** Upstream MCP client options (timeouts, environment, stderr, headers) */
+  upstream?: UpstreamPoolOptions;
+  /**
+   * RTK (Rust Token Killer) output compression for successful text results.
    * Requires rtk to be installed: https://github.com/johnnyclem-rdc/rtk
    */
   rtkConfig?: RtkConfig;
-  /**
-   * Access-Control-Allow-Origin value. When undefined or null no CORS
-   * headers are emitted, which is the safe default for the 127.0.0.1
-   * bind. Set to '*' for permissive cross-origin browser access, or to
-   * a specific scheme://host to whitelist one origin.
-   */
-  corsOrigin?: string | null;
-  /**
-   * Maximum POST body size in bytes. Requests larger than this are
-   * rejected with HTTP 413. Defaults to 4 MiB; raise it only for
-   * trusted clients that legitimately send large JSON-RPC payloads.
-   */
-  maxBodyBytes?: number;
+  /** Audit log (default: an in-memory AuditLog; see `audit`) */
+  auditLog?: AuditLog;
+  /** Operator messages (default: stderr — stdout is the stdio protocol channel) */
+  log?: (line: string) => void;
 }
 
-const DEFAULT_MAX_BODY_BYTES = 4 * 1024 * 1024;
+export interface HttpServeOptions {
+  /** Port to listen on (0 = any free port) */
+  port: number;
+  /** Address to bind (default 127.0.0.1) */
+  host?: string;
+  /**
+   * Bearer token every request must carry (`Authorization: Bearer <token>`),
+   * or null to serve without one (`--http-insecure`).
+   */
+  token: string | null;
+  /**
+   * Hostnames (port-agnostic) accepted in Host. Default: the loopback
+   * names for a loopback bind, the bind address otherwise; required for
+   * a wildcard bind.
+   */
+  allowedHosts?: string[];
+  /** Origins accepted from browsers (exact match; default none) */
+  allowedOrigins?: string[];
+  /** Maximum POST body (default 4 MiB) */
+  maxBodyBytes?: number;
+  /** Requests per minute per session (or per address before a session); off when unset */
+  rateLimitRPM?: number;
+  /** Concurrent sessions (default 100) */
+  maxSessions?: number;
+  /** Close sessions idle this long (default 30 min) */
+  sessionIdleTimeoutMs?: number;
+}
 
 // ---------------------------------------------------------------------------
 // Programmatic tool registration (MCP Apps)
@@ -131,9 +190,6 @@ export type McpToolExecutor = (
  *
  * Passed to MCPServer.registerApp() to atomically register both the tool
  * and its ui:// resource in a single call.
- *
- * Obj-C analogy: McpApp ≈ NSViewController subclass declaration — it bundles
- * the model (tool) with its view (HTML resource) and declares how they connect.
  */
 export interface McpApp {
   tool: McpTool;
@@ -151,103 +207,157 @@ export interface McpApp {
 }
 
 // ---------------------------------------------------------------------------
-// JSON-RPC types (minimal, used only for request/response shaping)
+// smallchat_resolve
 // ---------------------------------------------------------------------------
 
-interface JsonRpcRequest {
-  jsonrpc: '2.0';
-  id?: string | number;
-  method: string;
-  params?: Record<string, unknown>;
+/** What smallchat_resolve returns (its structuredContent). */
+export interface ResolveProposal {
+  outcome: ResolutionOutcome;
+  intent: string;
+  /** Canonical tool id proposed (only when outcome is 'resolved') */
+  toolId: string | null;
+  /** Name to call it by on this server */
+  name: string | null;
+  tier: string;
+  confidence: number | null;
+  reason: string | null;
+  candidates: Array<{ toolId: string; name: string | null; score: number; tier: string }>;
+  proofDigest: string;
+  /** With outcome 'throttled' (RuntimeOptions.rateLimiter): when to ask again */
+  retryAfterMs?: number;
 }
 
-interface JsonRpcResponse {
-  jsonrpc: '2.0';
-  id: string | number | null;
-  result?: unknown;
-  error?: { code: number; message: string; data?: unknown };
-}
+const RESOLVE_TOOL: Tool = {
+  name: RESOLVE_TOOL_NAME,
+  title: 'Resolve an intent to a tool',
+  description:
+    'Propose the tool on this server that matches a natural-language intent. Returns the tool name, ' +
+    'canonical id, confidence tier, ranked candidates and a proof digest. It never runs anything: ' +
+    'call the proposed tool by name to execute it.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      intent: { type: 'string', minLength: 1, description: 'What you want to do, in plain language' },
+      args: { type: 'object', description: 'The arguments you intend to pass, if known (used to choose among overloads)' },
+    },
+    required: ['intent'],
+    additionalProperties: false,
+  },
+  outputSchema: {
+    type: 'object',
+    properties: {
+      outcome: { type: 'string', enum: ['resolved', 'needs-disambiguation', 'unresolved', 'throttled'] },
+      intent: { type: 'string' },
+      toolId: { type: ['string', 'null'] },
+      name: { type: ['string', 'null'] },
+      tier: { type: 'string' },
+      confidence: { type: ['number', 'null'] },
+      reason: { type: ['string', 'null'] },
+      candidates: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            toolId: { type: 'string' },
+            name: { type: ['string', 'null'] },
+            score: { type: 'number' },
+            tier: { type: 'string' },
+          },
+          required: ['toolId', 'name', 'score', 'tier'],
+        },
+      },
+      proofDigest: { type: 'string' },
+      retryAfterMs: { type: 'number', minimum: 0 },
+    },
+    required: ['outcome', 'intent', 'toolId', 'name', 'tier', 'candidates', 'proofDigest'],
+  },
+  annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+};
 
 // ---------------------------------------------------------------------------
-// SSE client tracker
+// Connections
 // ---------------------------------------------------------------------------
 
-interface SSEClient {
+interface Connection {
   id: string;
-  response: ServerResponse;
+  kind: 'stdio' | 'http';
+  sdk: McpServer;
+  transport: Transport;
+  /** HTTP session id (assigned at initialize) */
   sessionId?: string;
+  remoteAddress?: string;
+  /** resources/subscribe: uri → registry subscription id */
+  subscriptions: Map<string, string>;
+  /** tools/call details for the audit entry, keyed by JSON-RPC request id */
+  callDetails: Map<string | number, Pick<AuditEntry, 'toolName' | 'toolId' | 'callDigest'> & { isError?: boolean }>;
+  lastSeen: number;
 }
 
 // ---------------------------------------------------------------------------
-// MCPServer class
+// MCPServer
 // ---------------------------------------------------------------------------
 
 export class MCPServer {
-  private server: Server | null = null;
-  private runtime: ToolRuntime | null = null;
-  private artifact: ArtifactV1 | null = null;
-  /** Upstream tool name → canonical tool ids carrying it (for tools/call by listed name) */
-  private toolIdsByName = new Map<string, string[]>();
-  private readonly sessionStore: SessionStore;
-  private readonly oauthManager: OAuthManager;
-  private readonly resourceRegistry: ResourceRegistry;
-  private readonly promptRegistry: PromptRegistry;
-  private readonly rateLimiter: RateLimiter;
-  /**
-   * Dedicated, always-on limiter for POST /oauth/token, independent of
-   * `config.enableRateLimit`. Credential-guessing protection on the token
-   * endpoint should not be opt-in the way general API throttling is.
-   */
-  private readonly oauthRateLimiter: RateLimiter;
-  private readonly auditLog: AuditLog;
-  private readonly sseClients = new Map<string, SSEClient>();
   private readonly config: MCPServerConfig;
-  private sseCounter = 0;
+  private readonly log: (line: string) => void;
+  private runtime: ToolRuntime | null = null;
+  private upstreams: UpstreamPool | null = null;
+  private table: ToolTable | null = null;
+  private loading: Promise<void> | null = null;
+
+  private readonly connections = new Map<string, Connection>();
+  /** HTTP sessions by Mcp-Session-Id */
+  private readonly sessions = new Map<string, Connection>();
+  private httpServer: HttpServer | null = null;
+  private httpOptions: HttpServeOptions | null = null;
+  private rateLimiter: RateLimiter | null = null;
+  private idleTimer: NodeJS.Timeout | null = null;
+  private stdioClosed: Promise<void> | null = null;
+  private stopped = false;
+
+  private readonly resourceRegistry = new ResourceRegistry();
+  private readonly promptRegistry = new PromptRegistry();
+  private readonly auditLog: AuditLog;
   /** Registry for MCP Apps ui:// resources */
   readonly uiResources = new UIResourceRegistry(SERVER_NAME);
   /** Programmatically registered tools (beyond the compiled artifact), keyed by name */
-  private readonly registeredTools = new Map<
-    string,
-    { tool: McpTool; executor?: McpToolExecutor }
-  >();
+  private readonly registeredTools = new Map<string, { tool: McpTool; executor?: McpToolExecutor }>();
 
-  constructor(config: MCPServerConfig) {
+  constructor(config: MCPServerConfig = {}) {
     this.config = config;
-    this.oauthManager = new OAuthManager();
-    this.resourceRegistry = new ResourceRegistry();
-    this.promptRegistry = new PromptRegistry();
-    this.rateLimiter = new RateLimiter(config.rateLimitRPM ?? 600);
-    this.oauthRateLimiter = new RateLimiter(20);
-    this.auditLog = new AuditLog();
-    this.sessionStore = new SessionStore(config.dbPath ?? 'smallchat.db');
+    this.log = config.log ?? (line => process.stderr.write(`${line}\n`));
+    this.auditLog = config.auditLog ?? new AuditLog();
   }
 
   get resources(): ResourceRegistry { return this.resourceRegistry; }
   get prompts(): PromptRegistry { return this.promptRegistry; }
-  get oauth(): OAuthManager { return this.oauthManager; }
+  get audit(): AuditLog { return this.auditLog; }
+  /** The name table of the loaded artifact (null before load()). */
+  get toolTable(): ToolTable | null { return this.table; }
+  /** The runtime serving the artifact (null before load() or without an artifact). */
+  get toolRuntime(): ToolRuntime | null { return this.runtime; }
 
   // -------------------------------------------------------------------------
-  // Programmatic registration (beyond the compiled artifact)
+  // Programmatic registration
   // -------------------------------------------------------------------------
 
   /**
-   * Register a tool directly on the server (in addition to any tools loaded
-   * from the compiled artifact). The optional executor handles tools/call;
-   * without one, calls to this tool return an error explaining it has no
-   * server-side implementation.
+   * Register a tool directly on the server, in addition to the artifact's.
+   * The optional executor handles tools/call; without one, calls return an
+   * isError result. A name that is already served is refused.
    */
   registerTool(tool: McpTool, executor?: McpToolExecutor): void {
+    if (tool.name === RESOLVE_TOOL_NAME || this.table?.byName.has(tool.name)) {
+      throw new Error(`Tool name "${tool.name}" is already served`);
+    }
+    const isNew = !this.registeredTools.has(tool.name);
     this.registeredTools.set(tool.name, { tool, executor });
+    if (isNew) this.broadcastListChanged('tools');
   }
 
   /**
-   * Register a tool together with its MCP Apps interactive view.
-   *
-   * Atomically registers the McpTool (with _meta.ui populated) and its
-   * ui:// HTML resource so both are available to clients in a single call.
-   *
-   * Obj-C analogy: registerApp() ≈ [UIViewController class] + NIB registration —
-   * it binds the controller (tool) to its view (HTML resource).
+   * Register a tool together with its MCP Apps interactive view: the
+   * McpTool (with _meta.ui populated) and its ui:// HTML resource.
    */
   registerApp(app: McpApp): void {
     const uri = this.uiResources.register(app.tool.name, app.uiContent, {
@@ -256,7 +366,6 @@ export class MCPServer {
       customUri: app.uiUri,
     });
 
-    // Stamp the tool with _meta.ui so clients can discover the view
     const toolWithMeta: McpTool = {
       ...app.tool,
       _meta: {
@@ -269,6 +378,7 @@ export class MCPServer {
     };
 
     this.registerTool(toolWithMeta, app.executor);
+    this.broadcastListChanged('resources');
   }
 
   /**
@@ -283,82 +393,228 @@ export class MCPServer {
     return this.uiResources.register(toolName, content, options);
   }
 
+  // -------------------------------------------------------------------------
+  // Loading
+  // -------------------------------------------------------------------------
+
   /**
-   * Returns a Node.js http.RequestListener for embedding this server in an
-   * existing HTTP server (instead of calling start()).
+   * Load the artifact and build the tool name table. Idempotent; the
+   * start methods call it. Rejects on any load error (pre-1.0 artifact,
+   * embedder mismatch, unknown provider, name clash).
    */
-  createHttpHandler(): RequestListener {
-    return (req, res) => {
-      void this.handleRequest(req, res);
-    };
+  load(): Promise<void> {
+    this.loading ??= this.doLoad();
+    return this.loading;
+  }
+
+  private async doLoad(): Promise<void> {
+    if (!this.config.sourcePath) return;
+    const { runtime, artifact, upstreams } = await loadRuntime(this.config.sourcePath, {
+      compilerOptions: { allowDuplicates: this.config.allowDuplicates },
+      runtimeOptions: this.config.runtimeOptions,
+      providers: this.config.provider !== undefined ? [this.config.provider] : undefined,
+      upstream: { log: this.log, ...this.config.upstream },
+    });
+    const table = buildToolTable(artifact, { provider: this.config.provider });
+
+    const clash = table.entries.find(e => this.registeredTools.has(e.name) || (this.resolveToolEnabled() && e.name === RESOLVE_TOOL_NAME));
+    if (clash) {
+      await upstreams.close();
+      throw new Error(
+        `Tool name "${clash.name}" (${clash.toolId}) is already served` +
+        (clash.name === RESOLVE_TOOL_NAME ? '; disable the resolve tool (--no-resolve-tool) to serve it' : ''),
+      );
+    }
+
+    this.runtime = runtime;
+    this.upstreams = upstreams;
+    this.table = table;
+
+    const mode = this.config.provider !== undefined ? `provider ${this.config.provider}, upstream names` : 'aggregate names <provider>__<tool>';
+    this.log(`  ${table.entries.length} tools across ${this.config.provider !== undefined ? 1 : artifact.stats.providerCount} provider(s) (${mode})`);
+    for (const skipped of table.skipped) {
+      this.log(`  not served: ${skipped.toolId} — ${skipped.reason}`);
+    }
+    if (this.config.rtkConfig && this.config.rtkConfig.enabled !== false) {
+      const level = this.config.rtkConfig.filterLevel ?? 'default';
+      const threshold = this.config.rtkConfig.filterThresholdBytes ?? 512;
+      this.log(`  RTK compression enabled (level=${level}, threshold=${threshold}B)`);
+    }
+  }
+
+  private resolveToolEnabled(): boolean {
+    return (this.config.resolveTool ?? true) && this.config.sourcePath !== undefined;
+  }
+
+  /** Exactly what tools/list returns. */
+  listTools(): Tool[] {
+    const tools: Tool[] = [];
+    for (const { name, tool } of this.table?.entries ?? []) {
+      tools.push({
+        name,
+        ...(tool.title !== undefined ? { title: tool.title } : {}),
+        description: tool.description,
+        inputSchema: tool.inputSchema as Tool['inputSchema'],
+        ...(tool.outputSchema !== undefined ? { outputSchema: tool.outputSchema as Tool['outputSchema'] } : {}),
+        ...(tool.annotations !== undefined ? { annotations: tool.annotations } : {}),
+      });
+    }
+    if (this.resolveToolEnabled() && this.runtime) tools.push(RESOLVE_TOOL);
+    for (const { tool } of this.registeredTools.values()) {
+      tools.push({
+        name: tool.name,
+        ...(tool.title !== undefined ? { title: tool.title } : {}),
+        ...(tool.description !== undefined ? { description: tool.description } : {}),
+        inputSchema: tool.inputSchema as Tool['inputSchema'],
+        ...(tool.outputSchema !== undefined ? { outputSchema: tool.outputSchema as Tool['outputSchema'] } : {}),
+        ...(tool.annotations !== undefined ? { annotations: tool.annotations } : {}),
+        ...(tool._meta !== undefined ? { _meta: tool._meta } : {}),
+      });
+    }
+    return tools;
   }
 
   // -------------------------------------------------------------------------
-  // Lifecycle
+  // Transports
   // -------------------------------------------------------------------------
 
-  async start(): Promise<void> {
-    const { runtime, artifact } = await loadRuntime(this.config.sourcePath, {
-      compilerOptions: { allowDuplicates: this.config.allowDuplicates },
-      runtimeOptions: this.config.runtimeOptions,
-    });
-    this.runtime = runtime;
-    this.artifact = artifact;
-    this.toolIdsByName.clear();
-    for (const id of runtime.toolIds()) {
-      const { toolName } = parseToolId(id);
-      this.toolIdsByName.set(toolName, [...(this.toolIdsByName.get(toolName) ?? []), id]);
-    }
+  /**
+   * Serve one client over stdio (default: this process's stdin/stdout).
+   * Resolves once connected; `closed()` resolves when the client goes away.
+   */
+  async startStdio(stdin: Readable = process.stdin, stdout: Writable = process.stdout): Promise<void> {
+    await this.load();
+    const transport = new StdioServerTransport(stdin, stdout);
+    let onClosed!: () => void;
+    this.stdioClosed = new Promise<void>(resolve => { onClosed = resolve; });
+    const connection = await this.connect(transport, 'stdio');
+    const previous = transport.onclose;
+    transport.onclose = () => {
+      previous?.();
+      this.connections.delete(connection.id);
+      this.releaseSubscriptions(connection);
+      onClosed();
+    };
+    // StdioServerTransport does not notice the end of stdin, or a client
+    // that went away while we were writing, by itself.
+    stdin.once('end', () => { void transport.close(); });
+    stdout.on('error', () => { void transport.close(); });
+  }
 
-    const ttl = this.config.sessionTTLMs ?? 24 * 60 * 60 * 1000;
-    this.sessionStore.prune(ttl);
+  /** Resolves when the stdio client disconnects (after startStdio). */
+  closed(): Promise<void> {
+    return this.stdioClosed ?? Promise.resolve();
+  }
 
-    console.log(`  ${artifact.stats.toolCount} tools across ${artifact.stats.providerCount} providers`);
-    console.log(`  ${this.sessionStore.count()} active sessions`);
-    if (this.config.rtkConfig?.enabled !== false && this.config.rtkConfig) {
-      const level = this.config.rtkConfig.filterLevel ?? 'default';
-      const threshold = this.config.rtkConfig.filterThresholdBytes ?? 512;
-      console.log(`  RTK compression enabled (level=${level}, threshold=${threshold}B)`);
-    }
-
-    this.server = createServer((req, res) => this.handleRequest(req, res));
-
-    return new Promise((resolve) => {
-      this.server!.listen(this.config.port, this.config.host, () => {
-        console.log(`\nsmallchat MCP server listening on http://${this.config.host}:${this.config.port}`);
-        console.log(`  POST /                    JSON-RPC 2.0 (all MCP methods)`);
-        console.log(`  GET  /.well-known/mcp.json  Discovery endpoint`);
-        console.log(`  GET  /sse                 SSE event stream`);
-        console.log(`  GET  /health              Health check`);
-        console.log(`  POST /oauth/token         OAuth 2.1 token endpoint`);
-        console.log(`\nMCP Protocol Version: ${MCP_PROTOCOL_VERSION}`);
+  /** Serve Streamable HTTP on `MCP_HTTP_PATH`. Resolves with the endpoint URL. */
+  async startHttp(options: HttpServeOptions): Promise<{ url: string }> {
+    await this.load();
+    const handler = this.createHttpHandler(options);
+    const host = options.host ?? '127.0.0.1';
+    this.httpServer = createServer(handler);
+    await new Promise<void>((resolve, reject) => {
+      this.httpServer!.once('error', reject);
+      this.httpServer!.listen(options.port, host, () => {
+        this.httpServer!.off('error', reject);
         resolve();
       });
     });
+    const address = this.httpServer.address() as AddressInfo;
+    const shownHost = address.family === 'IPv6' ? `[${address.address}]` : address.address;
+    return { url: `http://${shownHost}:${address.port}${MCP_HTTP_PATH}` };
   }
 
-  async stop(): Promise<void> {
-    for (const client of this.sseClients.values()) {
-      client.response.end();
+  /**
+   * A Node request listener serving MCP Streamable HTTP at MCP_HTTP_PATH,
+   * for embedding in an existing http.Server. Call load() first.
+   */
+  createHttpHandler(options: HttpServeOptions): RequestListener {
+    const allowedHosts = (options.allowedHosts ?? defaultAllowedHostnames(options.host ?? '127.0.0.1'))?.map(h => h.toLowerCase());
+    if (!allowedHosts) {
+      throw new Error(
+        `Binding ${options.host} accepts any Host header; pass the hostnames clients use (--allowed-host) ` +
+        'so DNS-rebinding requests can be refused',
+      );
     }
-    this.sseClients.clear();
-    this.sessionStore.close();
+    this.httpOptions = { ...options, allowedHosts };
+    this.rateLimiter = options.rateLimitRPM ? new RateLimiter(options.rateLimitRPM) : null;
+    if (!this.idleTimer) {
+      const idleMs = options.sessionIdleTimeoutMs ?? DEFAULT_SESSION_IDLE_MS;
+      this.idleTimer = setInterval(() => this.closeIdleSessions(idleMs), Math.min(idleMs, 60_000));
+      this.idleTimer.unref();
+    }
+    return (req, res) => {
+      this.handleHttp(req, res).catch(err => {
+        // handleHttp answers every error itself; this is the last resort.
+        this.log(`http: ${(err as Error).message}`);
+        if (!res.headersSent) sendRpcError(res, 500, ErrorCode.InternalError, 'Internal error');
+        else res.destroy();
+      });
+    };
+  }
 
-    return new Promise((resolve) => {
-      if (this.server) {
-        this.server.close(() => resolve());
-      } else {
-        resolve();
-      }
-    });
+  /** Stop serving: close every session and upstream client. */
+  async stop(): Promise<void> {
+    if (this.stopped) return;
+    this.stopped = true;
+    if (this.idleTimer) clearInterval(this.idleTimer);
+    for (const connection of [...this.connections.values()]) {
+      await this.closeConnection(connection);
+    }
+    await this.upstreams?.close();
+    if (this.httpServer) {
+      const server = this.httpServer;
+      server.closeAllConnections?.();
+      await new Promise<void>(resolve => server.close(() => resolve()));
+    }
+  }
+
+  /** Tell every connected client that a list changed. */
+  broadcastListChanged(type: 'tools' | 'resources' | 'prompts'): void {
+    for (const connection of this.connections.values()) {
+      if (!connection.sdk.isConnected()) continue;
+      const server = connection.sdk.server;
+      const send = type === 'tools'
+        ? server.sendToolListChanged()
+        : type === 'resources'
+          ? server.sendResourceListChanged()
+          : server.sendPromptListChanged();
+      // A client that went away just misses the notification.
+      send.catch(() => {});
+    }
   }
 
   // -------------------------------------------------------------------------
-  // HTTP request router
+  // HTTP
   // -------------------------------------------------------------------------
 
-  private async handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    setCorsHeaders(res, this.config.corsOrigin);
+  private async handleHttp(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const options = this.httpOptions!;
+    const started = Date.now();
+    const remoteAddress = req.socket.remoteAddress;
+    const reject = (status: number, message: string, code: number = -32000, headers: Record<string, string> = {}) => {
+      this.audit.log({
+        timestamp: new Date().toISOString(), transport: 'http', method: 'http', remoteAddress,
+        outcome: 'rejected', httpStatus: status, errorCode: code, error: message, durationMs: Date.now() - started,
+      });
+      sendRpcError(res, status, code, message, headers);
+    };
+
+    const path = (req.url ?? '/').split('?')[0];
+    if (path !== MCP_HTTP_PATH) {
+      reject(404, `Not found: the MCP endpoint is ${MCP_HTTP_PATH}`);
+      return;
+    }
+    if (!hostAllowed(req.headers.host, options.allowedHosts!)) {
+      reject(403, `Forbidden: Host "${req.headers.host ?? ''}" is not allowed`);
+      return;
+    }
+    const origin = req.headers.origin;
+    if (!originAllowed(origin, options.allowedOrigins ?? [])) {
+      reject(403, `Forbidden: Origin "${origin}" is not allowed`);
+      return;
+    }
+    if (origin !== undefined) setCorsHeaders(res, origin);
 
     if (req.method === 'OPTIONS') {
       res.writeHead(204);
@@ -366,634 +622,454 @@ export class MCPServer {
       return;
     }
 
-    const url = req.url ?? '/';
-
-    if (req.method === 'GET') {
-      if (url === '/.well-known/mcp.json') return this.handleDiscovery(res);
-      if (url === '/health')               return this.handleHealth(res);
-      if (url === '/sse')                  return this.handleSSE(req, res);
-    }
-
-    if (req.method === 'POST' && url === '/oauth/token') {
-      return this.handleOAuthToken(req, res);
-    }
-
-    if (req.method === 'POST' && (url === '/' || url === '/rpc')) {
-      return this.handleJsonRpc(req, res);
-    }
-
-    res.writeHead(404, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'Not found' }));
-  }
-
-  // -------------------------------------------------------------------------
-  // GET endpoints
-  // -------------------------------------------------------------------------
-
-  private handleDiscovery(res: ServerResponse): void {
-    sendJson(res, 200, {
-      mcpVersion: MCP_PROTOCOL_VERSION,
-      serverInfo: { name: SERVER_NAME, version: SERVER_VERSION },
-      capabilities: getCapabilities(),
-      endpoints: { jsonrpc: '/', sse: '/sse', health: '/health', oauth: '/oauth/token' },
-    });
-  }
-
-  private handleHealth(res: ServerResponse): void {
-    sendJson(res, 200, {
-      status: 'ok',
-      version: SERVER_VERSION,
-      protocolVersion: MCP_PROTOCOL_VERSION,
-      tools: this.artifact?.stats.toolCount ?? 0,
-      providers: this.artifact?.stats.providerCount ?? 0,
-      sessions: this.sessionStore.count(),
-      sseClients: this.sseClients.size,
-    });
-  }
-
-  private handleSSE(req: IncomingMessage, res: ServerResponse): void {
-    if (this.config.enableAuth) {
-      const auth = this.oauthManager.extractBearerToken(req.headers.authorization);
-      if (!auth.active) {
-        sendJson(res, 401, { error: 'Authentication required' });
-        return;
-      }
-    }
-
-    const clientId = `sse_${++this.sseCounter}`;
-    const sessionId = req.headers['mcp-session-id'] as string | undefined;
-
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      Connection: 'keep-alive',
-    });
-
-    sendSSE(res, 'connected', { clientId, timestamp: Date.now(), sessionId });
-    this.sseClients.set(clientId, { id: clientId, response: res, sessionId });
-
-    const keepAlive = setInterval(() => { res.write(': keepalive\n\n'); }, 15_000);
-
-    req.on('close', () => {
-      clearInterval(keepAlive);
-      this.sseClients.delete(clientId);
-    });
-  }
-
-  // -------------------------------------------------------------------------
-  // POST /oauth/token
-  // -------------------------------------------------------------------------
-
-  private async handleOAuthToken(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const clientKey = req.socket.remoteAddress ?? 'unknown';
-    if (!this.oauthRateLimiter.check(clientKey)) {
-      sendJson(res, 429, { error: 'rate_limited' });
-      return;
-    }
-
-    let body: string;
-    try {
-      body = await readBody(req, this.config.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES);
-    } catch (err) {
-      if (err instanceof PayloadTooLargeError) {
-        sendJson(res, 413, { error: 'payload_too_large', limit: err.limit });
-        return;
-      }
-      throw err;
-    }
-    let params: Record<string, string>;
-
-    try {
-      params = req.headers['content-type']?.includes('application/json')
-        ? JSON.parse(body)
-        : Object.fromEntries(new URLSearchParams(body));
-    } catch {
-      sendJson(res, 400, { error: 'invalid_request' });
-      return;
-    }
-
-    if (params.grant_type === 'client_credentials') {
-      const token = this.oauthManager.issueToken(params.client_id, params.client_secret, params.scope?.split(' '));
-      if (!token) { sendJson(res, 401, { error: 'invalid_client' }); return; }
-      sendJson(res, 200, { access_token: token.accessToken, token_type: token.tokenType, expires_in: token.expiresIn, scope: token.scope, refresh_token: token.refreshToken });
-      return;
-    }
-
-    if (params.grant_type === 'refresh_token') {
-      const token = this.oauthManager.refreshAccessToken(params.refresh_token);
-      if (!token) { sendJson(res, 401, { error: 'invalid_grant' }); return; }
-      sendJson(res, 200, { access_token: token.accessToken, token_type: token.tokenType, expires_in: token.expiresIn, scope: token.scope, refresh_token: token.refreshToken });
-      return;
-    }
-
-    sendJson(res, 400, { error: 'unsupported_grant_type' });
-  }
-
-  // -------------------------------------------------------------------------
-  // POST / — JSON-RPC 2.0
-  // -------------------------------------------------------------------------
-
-  private async handleJsonRpc(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const startTime = Date.now();
-    let body: string;
-    try {
-      body = await readBody(req, this.config.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES);
-    } catch (err) {
-      if (err instanceof PayloadTooLargeError) {
-        res.writeHead(413, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({
-          jsonrpc: '2.0',
-          id: null,
-          error: { code: PARSE_ERROR, message: 'Payload too large', data: { limit: err.limit } },
-        } satisfies JsonRpcResponse));
-        return;
-      }
-      throw err;
-    }
-    let rpcReq: JsonRpcRequest;
-
-    try {
-      rpcReq = JSON.parse(body);
-    } catch {
-      sendRpcError(res, null, PARSE_ERROR, 'Parse error');
-      return;
-    }
-
-    if (rpcReq.jsonrpc !== '2.0') {
-      sendRpcError(res, null, INVALID_REQUEST, 'Invalid JSON-RPC version');
-      return;
-    }
-
-    const id = rpcReq.id ?? null;
-    const sessionId = req.headers['mcp-session-id'] as string | undefined;
-
-    // Auth guard
-    if (this.config.enableAuth) {
-      const auth = this.oauthManager.extractBearerToken(req.headers.authorization);
-      if (!auth.active && rpcReq.method !== 'initialize') {
-        sendRpcError(res, id, -32000, 'Authentication required');
-        return;
-      }
-    }
-
-    // Rate limit guard
-    if (this.config.enableRateLimit) {
-      // The Mcp-Session-Id header is client-supplied and unverified; only
-      // key the limiter on it once we know it names a real session,
-      // otherwise a client can mint a fresh limiter bucket on every
-      // request by sending an arbitrary new header value. Falling back to
-      // the socket's remote address keeps unauthenticated/pre-session
-      // traffic bounded too.
-      const clientKey = (sessionId && this.sessionStore.get(sessionId))
-        ? sessionId
-        : req.socket.remoteAddress ?? 'unknown';
-      if (!this.rateLimiter.check(clientKey)) {
-        sendRpcError(res, id, -32000, 'Rate limit exceeded');
-        return;
-      }
-    }
-
-    // Touch session
-    if (sessionId) this.sessionStore.touch(sessionId);
-
-    const wantsStream = req.headers.accept?.includes('text/event-stream');
-
-    try {
-      await this.dispatch(rpcReq, id, sessionId, wantsStream ?? false, res);
-    } catch (err) {
-      sendRpcError(res, id, INTERNAL_ERROR, (err as Error).message);
-    }
-
-    // Audit trail
-    if (this.config.enableAudit) {
-      this.auditLog.log({
-        timestamp: new Date().toISOString(),
-        method: rpcReq.method,
-        sessionId,
-        success: true,
-        durationMs: Date.now() - startTime,
+    if (options.token !== null && !bearerMatches(req.headers.authorization, options.token)) {
+      reject(401, 'Unauthorized: a valid bearer token is required', -32000, {
+        'WWW-Authenticate': 'Bearer realm="smallchat", error="invalid_token"',
       });
-    }
-  }
-
-  // -------------------------------------------------------------------------
-  // Method dispatch
-  // -------------------------------------------------------------------------
-
-  private async dispatch(
-    rpcReq: JsonRpcRequest,
-    id: string | number | null,
-    sessionId: string | undefined,
-    wantsStream: boolean,
-    res: ServerResponse,
-  ): Promise<void> {
-    switch (rpcReq.method) {
-      case 'initialize':              return this.rpcInitialize(rpcReq, id, res);
-      case 'ping':                    return void sendRpcOk(res, id, {});
-      case 'shutdown':                return this.rpcShutdown(id, sessionId, res);
-      case 'notifications/initialized':
-        if (id === null) return;
-        return void sendRpcOk(res, id, {});
-
-      case 'tools/list':              return this.rpcToolsList(rpcReq, id, res);
-      case 'tools/call':              return this.rpcToolsCall(rpcReq, id, wantsStream, res);
-
-      case 'resources/list':          return this.rpcResourcesList(rpcReq, id, res);
-      case 'resources/read':          return this.rpcResourcesRead(rpcReq, id, res);
-      case 'resources/templates/list':return this.rpcResourcesTemplatesList(id, res);
-      case 'resources/subscribe':     return this.rpcResourcesSubscribe(rpcReq, id, sessionId, res);
-      case 'resources/unsubscribe':   return this.rpcResourcesUnsubscribe(rpcReq, id, res);
-
-      case 'prompts/list':            return this.rpcPromptsList(rpcReq, id, res);
-      case 'prompts/get':             return this.rpcPromptsGet(rpcReq, id, res);
-
-      default:
-        sendRpcError(res, id, METHOD_NOT_FOUND, `Unknown method: ${rpcReq.method}`);
-    }
-  }
-
-  // ---- Lifecycle ----------------------------------------------------------
-
-  private rpcInitialize(rpcReq: JsonRpcRequest, id: string | number | null, res: ServerResponse): void {
-    const clientInfo = rpcReq.params?.clientInfo as Record<string, unknown> | undefined;
-    const requestedVersion = rpcReq.params?.protocolVersion as string | undefined;
-
-    const session = this.sessionStore.create({
-      protocolVersion: requestedVersion ?? MCP_PROTOCOL_VERSION,
-      clientInfo: clientInfo ?? {},
-    });
-
-    res.setHeader('Mcp-Session-Id', session.id);
-    sendRpcOk(res, id, {
-      protocolVersion: MCP_PROTOCOL_VERSION,
-      capabilities: getCapabilities(),
-      serverInfo: { name: SERVER_NAME, version: SERVER_VERSION },
-      sessionId: session.id,
-    });
-  }
-
-  private rpcShutdown(id: string | number | null, sessionId: string | undefined, res: ServerResponse): void {
-    if (sessionId) this.sessionStore.delete(sessionId);
-    sendRpcOk(res, id, { status: 'shutdown' });
-  }
-
-  // ---- Tools --------------------------------------------------------------
-
-  private rpcToolsList(rpcReq: JsonRpcRequest, id: string | number | null, res: ServerResponse): void {
-    const artifactTools = this.artifact ? buildToolList(this.artifact) : [];
-    const registered = [...this.registeredTools.values()].map(({ tool }) => ({
-      name: tool.name,
-      description: tool.description,
-      inputSchema: tool.inputSchema,
-      ...(tool._meta ? { _meta: tool._meta } : {}),
-    }));
-    const allTools = [...artifactTools, ...registered];
-    const cursor = rpcReq.params?.cursor as string | undefined;
-    const pageSize = 100;
-    const startIndex = cursor ? parseInt(cursor, 10) : 0;
-    const page = allTools.slice(startIndex, startIndex + pageSize);
-    const nextCursor = startIndex + pageSize < allTools.length ? String(startIndex + pageSize) : undefined;
-
-    sendRpcOk(res, id, { tools: page, nextCursor });
-  }
-
-  private async rpcToolsCall(
-    rpcReq: JsonRpcRequest,
-    id: string | number | null,
-    wantsStream: boolean,
-    res: ServerResponse,
-  ): Promise<void> {
-    const toolName = rpcReq.params?.name as string;
-    const args = (rpcReq.params?.arguments ?? {}) as Record<string, unknown>;
-
-    if (!toolName) {
-      sendRpcError(res, id, INVALID_PARAMS, 'Missing tool name');
       return;
     }
 
-    const registered = this.registeredTools.get(toolName);
+    const sessionHeader = req.headers['mcp-session-id'];
+    const sessionId = typeof sessionHeader === 'string' ? sessionHeader : undefined;
+    const session = sessionId ? this.sessions.get(sessionId) : undefined;
 
-    if (!registered && !this.runtime) {
-      sendRpcError(res, id, INTERNAL_ERROR, 'Runtime not initialized');
-      return;
-    }
-
-    // tools/call names a tool exactly; it is never resolved semantically.
-    let toolId: string | undefined;
-    if (!registered) {
-      const lookup = this.toolIdForName(toolName);
-      if ('error' in lookup) {
-        sendRpcError(res, id, INVALID_PARAMS, lookup.error);
+    if (this.rateLimiter) {
+      // Only a session the server issued keys its own bucket; anything else
+      // shares its peer address's.
+      const key = session ? `session:${session.sessionId}` : `addr:${remoteAddress ?? 'unknown'}`;
+      if (!this.rateLimiter.check(key)) {
+        reject(429, 'Too Many Requests: rate limit exceeded', -32000, { 'Retry-After': '60' });
         return;
       }
-      toolId = lookup.toolId;
     }
 
-    // Streaming applies only to runtime-dispatched tools; registered tools
-    // respond with a plain JSON-RPC result regardless of the Accept header.
-    if (wantsStream && toolId) {
-      return this.rpcToolsCallStreaming(toolId, args, id, res);
+    if (sessionId && !session) {
+      reject(404, 'Session not found', -32001);
+      return;
     }
 
-    try {
-      let result: ToolResult;
-      if (registered) {
-        if (!registered.executor) {
-          sendRpcError(res, id, INVALID_PARAMS, `Tool "${toolName}" is registered without a server-side executor`);
+    if (req.method === 'POST') {
+      if (!isJsonContentType(req.headers['content-type'])) {
+        reject(415, 'Unsupported Media Type: Content-Type must be application/json');
+        return;
+      }
+      let body: unknown;
+      try {
+        body = parseJsonRpcBody(await readBody(req, options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES));
+      } catch (err) {
+        if (err instanceof ClientAbortedError) {
+          this.audit.log({
+            timestamp: new Date().toISOString(), transport: 'http', method: 'http', remoteAddress, sessionId,
+            outcome: 'rejected', error: err.message, durationMs: Date.now() - started,
+          });
+          res.destroy();
           return;
         }
-        result = await registered.executor(args);
-      } else {
-        result = await this.runtime!.dispatchById(toolId!, args);
-      }
-      let formattedContent = formatContent(result);
-
-      if (this.config.rtkConfig && this.config.rtkConfig.enabled !== false && !result.isError) {
-        const contentStr = typeof formattedContent === 'string'
-          ? formattedContent
-          : JSON.stringify(formattedContent);
-        const { compressed, savedPct, enabled } = await filterContentWithRtk(contentStr, this.config.rtkConfig);
-        if (enabled) {
-          formattedContent = [{ type: 'text', text: compressed }];
-          result.metadata = { ...result.metadata, rtkSavedPct: savedPct };
+        if (err instanceof HttpRejection) {
+          reject(err.status, err.message, err.rpcCode, err.status === 413 ? { Connection: 'close' } : {});
+          return;
         }
+        throw err;
       }
 
-      const response: Record<string, unknown> = {
-        content: formattedContent,
-        isError: result.isError ?? false,
-      };
-      // 0.4.0: Surface refinement protocol as a distinct result type
-      if (result.refinement) {
-        response.refinement = result.refinement;
+      let target = session;
+      if (!target) {
+        if (!isInitializeBody(body)) {
+          reject(400, 'Bad Request: Mcp-Session-Id header is required');
+          return;
+        }
+        if (this.sessions.size + this.pendingSessions >= (options.maxSessions ?? DEFAULT_MAX_SESSIONS)) {
+          reject(503, 'Service Unavailable: too many sessions');
+          return;
+        }
+        target = await this.newHttpSession(remoteAddress);
       }
-      // 0.4.0: Include confidence tier in response metadata
-      if (result.metadata?.tier) {
-        response.confidence = result.metadata.tier;
+      target.lastSeen = Date.now();
+      await (target.transport as StreamableHTTPServerTransport).handleRequest(req, res, body);
+      if (!session && !target.sessionId) {
+        // initialize failed before a session id was issued
+        await this.closeConnection(target);
       }
-      if (result.metadata?.rtkSavedPct !== undefined) {
-        response.rtkSavedPct = result.metadata.rtkSavedPct;
-      }
-      sendRpcOk(res, id, response);
-    } catch (err) {
-      sendRpcError(res, id, INTERNAL_ERROR, (err as Error).message);
+      return;
     }
+
+    if (req.method === 'GET' || req.method === 'DELETE') {
+      if (!session) {
+        reject(400, 'Bad Request: Mcp-Session-Id header is required');
+        return;
+      }
+      session.lastSeen = Date.now();
+      await (session.transport as StreamableHTTPServerTransport).handleRequest(req, res);
+      return;
+    }
+
+    reject(405, 'Method Not Allowed', -32000, { Allow: 'GET, POST, DELETE, OPTIONS' });
+  }
+
+  private pendingSessions = 0;
+
+  private async newHttpSession(remoteAddress: string | undefined): Promise<Connection> {
+    this.pendingSessions++;
+    try {
+      let connection!: Connection;
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => randomUUID(),
+        onsessioninitialized: (id) => {
+          connection.sessionId = id;
+          this.sessions.set(id, connection);
+        },
+        onsessionclosed: (id) => {
+          const closed = this.sessions.get(id);
+          if (closed) void this.closeConnection(closed);
+        },
+      });
+      connection = await this.connect(transport, 'http', remoteAddress);
+      const previous = transport.onclose;
+      transport.onclose = () => {
+        previous?.();
+        void this.closeConnection(connection);
+      };
+      return connection;
+    } finally {
+      this.pendingSessions--;
+    }
+  }
+
+  private closeIdleSessions(idleMs: number): void {
+    const cutoff = Date.now() - idleMs;
+    for (const connection of this.sessions.values()) {
+      if (connection.lastSeen < cutoff) void this.closeConnection(connection);
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Connections
+  // -------------------------------------------------------------------------
+
+  /** Connect a fresh SDK server for one client over `transport`. */
+  private async connect(transport: Transport, kind: 'stdio' | 'http', remoteAddress?: string): Promise<Connection> {
+    const sdk = new McpServer(
+      { name: SERVER_NAME, version: SERVER_VERSION },
+      {
+        capabilities: {
+          tools: { listChanged: true },
+          resources: { subscribe: true, listChanged: true },
+          prompts: { listChanged: true },
+        },
+        instructions: this.instructions(),
+      },
+    );
+    const connection: Connection = {
+      id: randomUUID(),
+      kind,
+      sdk,
+      transport,
+      remoteAddress,
+      subscriptions: new Map(),
+      callDetails: new Map(),
+      lastSeen: Date.now(),
+    };
+    this.installHandlers(connection);
+    await sdk.connect(transport);
+    this.auditTransport(connection);
+    this.connections.set(connection.id, connection);
+    return connection;
+  }
+
+  private async closeConnection(connection: Connection): Promise<void> {
+    if (!this.connections.delete(connection.id)) return;
+    if (connection.sessionId) this.sessions.delete(connection.sessionId);
+    this.releaseSubscriptions(connection);
+    try {
+      await connection.sdk.close();
+    } catch {
+      // already closed
+    }
+  }
+
+  private releaseSubscriptions(connection: Connection): void {
+    for (const subscriptionId of connection.subscriptions.values()) {
+      this.resourceRegistry.unsubscribe(subscriptionId);
+    }
+    connection.subscriptions.clear();
   }
 
   /**
-   * Map a tools/call name to exactly one canonical tool id: the id itself
-   * (`<providerId>/<toolName>`), or a listed upstream tool name that only
-   * one provider has. Anything else is an error — never a guess.
+   * Record every JSON-RPC request with its real outcome, observed where
+   * messages cross the transport.
    */
-  private toolIdForName(name: string): { toolId: string } | { error: string } {
-    if (this.runtime!.getTool(name)) return { toolId: name };
-    const ids = this.toolIdsByName.get(name) ?? [];
-    if (ids.length === 1) return { toolId: ids[0] };
-    if (ids.length > 1) {
-      return { error: `Tool name "${name}" is ambiguous: it is provided by ${ids.join(', ')}. Call it by tool id.` };
-    }
-    return { error: `Unknown tool: ${name}` };
-  }
-
-  private async rpcToolsCallStreaming(
-    toolId: string,
-    args: Record<string, unknown>,
-    id: string | number | null,
-    res: ServerResponse,
-  ): Promise<void> {
-    res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
-
-    sendSSE(res, 'message', {
-      jsonrpc: '2.0', method: 'notifications/progress',
-      params: { progressToken: id, progress: 0, total: 1, status: 'started', tool: toolId },
-    });
-
-    try {
-      let chunkIndex = 0;
-      for await (const event of this.runtime!.dispatchStreamById(toolId, args)) {
-        switch (event.type) {
-          case 'tool-start':
-            sendSSE(res, 'message', {
-              jsonrpc: '2.0', method: 'notifications/progress',
-              params: { progressToken: id, progress: 0, total: 1, status: 'executing', tool: event.toolName, provider: event.providerId, confidence: event.confidence },
-            });
-            break;
-          case 'inference-delta':
-            sendSSE(res, 'message', {
-              jsonrpc: '2.0', method: 'notifications/progress',
-              params: { progressToken: id, status: 'streaming', delta: event.delta, tokenIndex: event.tokenIndex },
-            });
-            break;
-          case 'chunk':
-            sendSSE(res, 'message', {
-              jsonrpc: '2.0', method: 'notifications/progress',
-              params: { progressToken: id, status: 'streaming', chunk: chunkIndex++, content: event.content },
-            });
-            break;
-          case 'done':
-            sendSSE(res, 'message', {
-              jsonrpc: '2.0', id, result: { content: formatContent(event.result), isError: event.result.isError ?? false },
-            });
-            break;
-          case 'error':
-            sendSSE(res, 'message', {
-              jsonrpc: '2.0', id, error: { code: INTERNAL_ERROR, message: event.error },
-            });
-            break;
+  private auditTransport(connection: Connection): void {
+    const transport = connection.transport;
+    const pending = new Map<string | number, { method: string; started: number }>();
+    const onmessage = transport.onmessage;
+    transport.onmessage = (message, extra) => {
+      if ('method' in message && 'id' in message) {
+        pending.set(message.id, { method: message.method, started: Date.now() });
+      } else if ('method' in message && message.method === 'notifications/cancelled') {
+        // A cancelled request gets no response; record it as cancelled.
+        const requestId = (message.params as { requestId?: string | number } | undefined)?.requestId;
+        const request = requestId !== undefined ? pending.get(requestId) : undefined;
+        if (request && requestId !== undefined) {
+          pending.delete(requestId);
+          this.recordRequest(connection, request, requestId, { outcome: 'error', error: 'cancelled by the client' });
         }
       }
-    } catch (err) {
-      sendSSE(res, 'message', {
-        jsonrpc: '2.0', id, error: { code: INTERNAL_ERROR, message: (err as Error).message },
-      });
-    }
-
-    res.end();
-  }
-
-  // ---- Resources ----------------------------------------------------------
-
-  private async rpcResourcesList(rpcReq: JsonRpcRequest, id: string | number | null, res: ServerResponse): Promise<void> {
-    const cursor = rpcReq.params?.cursor as string | undefined;
-    const result = await this.resourceRegistry.list(cursor);
-    // ui:// resources are appended to the first page only (the set is small
-    // and not paginated by the UIResourceRegistry).
-    const uiList = cursor ? [] : this.uiResources.list();
-    sendRpcOk(res, id, uiList.length > 0
-      ? { ...result, resources: [...result.resources, ...uiList] }
-      : result);
-  }
-
-  private async rpcResourcesRead(rpcReq: JsonRpcRequest, id: string | number | null, res: ServerResponse): Promise<void> {
-    const uri = rpcReq.params?.uri as string;
-    if (!uri) { sendRpcError(res, id, INVALID_PARAMS, 'Missing resource URI'); return; }
-
-    if (uri.startsWith('ui://')) {
-      const content = await this.uiResources.read(uri);
-      if (!content) { sendRpcError(res, id, INVALID_PARAMS, `Unknown ui:// resource: ${uri}`); return; }
-      sendRpcOk(res, id, { contents: [content] });
-      return;
-    }
-
-    try {
-      const content = await this.resourceRegistry.read(uri);
-      sendRpcOk(res, id, { contents: [content] });
-    } catch (err) {
-      if (err instanceof ResourceNotFoundError) {
-        sendRpcError(res, id, INVALID_PARAMS, err.message);
-      } else {
-        sendRpcError(res, id, INTERNAL_ERROR, (err as Error).message);
+      onmessage?.(message, extra);
+    };
+    const send = transport.send.bind(transport);
+    transport.send = async (message: JSONRPCMessage, options) => {
+      if (!('method' in message) && 'id' in message && message.id !== undefined) {
+        const request = pending.get(message.id);
+        if (request) {
+          pending.delete(message.id);
+          const error = 'error' in message ? message.error : undefined;
+          this.recordRequest(connection, request, message.id, error
+            ? { outcome: 'error', errorCode: error.code, error: error.message }
+            : { outcome: 'ok' });
+        }
       }
-    }
+      return send(message, options);
+    };
   }
 
-  private async rpcResourcesTemplatesList(id: string | number | null, res: ServerResponse): Promise<void> {
-    const templates = await this.resourceRegistry.listTemplates();
-    sendRpcOk(res, id, { resourceTemplates: templates });
-  }
-
-  private rpcResourcesSubscribe(
-    rpcReq: JsonRpcRequest, id: string | number | null,
-    sessionId: string | undefined, res: ServerResponse,
+  /** Audit one JSON-RPC request (with tools/call details, when recorded). */
+  private recordRequest(
+    connection: Connection,
+    request: { method: string; started: number },
+    requestId: string | number,
+    result: Pick<AuditEntry, 'outcome' | 'errorCode' | 'error'>,
   ): void {
-    const uri = rpcReq.params?.uri as string;
-    if (!uri) { sendRpcError(res, id, INVALID_PARAMS, 'Missing resource URI'); return; }
+    const details = connection.callDetails.get(requestId);
+    connection.callDetails.delete(requestId);
+    this.audit.log({
+      timestamp: new Date().toISOString(),
+      transport: connection.kind,
+      method: request.method,
+      requestId,
+      ...(connection.sessionId ? { sessionId: connection.sessionId } : {}),
+      ...(connection.remoteAddress ? { remoteAddress: connection.remoteAddress } : {}),
+      ...result,
+      ...(result.outcome === 'ok' && details?.isError ? { outcome: 'error' as const } : {}),
+      ...(details?.toolName !== undefined ? { toolName: details.toolName } : {}),
+      ...(details?.toolId !== undefined ? { toolId: details.toolId } : {}),
+      ...(details?.callDigest !== undefined ? { callDigest: details.callDigest } : {}),
+      durationMs: Date.now() - request.started,
+    });
+  }
 
-    const subId = this.resourceRegistry.subscribe(uri, (event) => {
-      for (const client of this.sseClients.values()) {
-        // Only fan out to SSE connections belonging to the subscribing
-        // session — matching only on equality (rather than treating a
-        // missing sessionId as "broadcast to everyone") prevents one
-        // client's resource-update notifications from leaking to every
-        // other connected client.
-        if (client.sessionId === sessionId) {
-          sendSSE(client.response, 'message', {
-            jsonrpc: '2.0', method: 'notifications/resources/updated', params: { uri: event.uri },
-          });
+  private instructions(): string | undefined {
+    if (!this.table) return undefined;
+    const naming = this.table.mode === 'aggregate'
+      ? 'Tools are named <provider>__<tool> and run exactly the named upstream tool.'
+      : `Tools are the upstream tools of provider "${this.table.mode.provider}", under their own names.`;
+    const resolve = this.resolveToolEnabled()
+      ? ` ${RESOLVE_TOOL_NAME} proposes a tool for a plain-language intent without running it.`
+      : '';
+    return `${naming}${resolve}`;
+  }
+
+  // -------------------------------------------------------------------------
+  // MCP handlers
+  // -------------------------------------------------------------------------
+
+  private installHandlers(connection: Connection): void {
+    // Tools are served through the low-level handlers: upstream schemas
+    // are JSON Schema documents, passed through verbatim.
+    const server = connection.sdk.server;
+
+    server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: this.listTools() }));
+    server.setRequestHandler(CallToolRequestSchema, (request, extra) => this.callTool(request, extra, connection));
+
+    server.setRequestHandler(ListResourcesRequestSchema, async (request) => {
+      const cursor = request.params?.cursor;
+      const result = await this.resourceRegistry.list(cursor);
+      // ui:// resources are appended to the first page only.
+      const ui = cursor ? [] : this.uiResources.list();
+      return { ...result, resources: [...result.resources, ...ui] };
+    });
+    server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
+      const uri = request.params.uri;
+      if (uri.startsWith('ui://')) {
+        const content = await this.uiResources.read(uri);
+        if (!content) throw new McpError(-32002, `Resource not found: ${uri}`, { uri });
+        return { contents: [content] };
+      }
+      try {
+        return { contents: [await this.resourceRegistry.read(uri)] };
+      } catch (err) {
+        if (err instanceof ResourceNotFoundError) throw new McpError(-32002, err.message, { uri });
+        throw err;
+      }
+    });
+    server.setRequestHandler(ListResourceTemplatesRequestSchema, async () => ({
+      resourceTemplates: await this.resourceRegistry.listTemplates(),
+    }));
+    server.setRequestHandler(SubscribeRequestSchema, (request) => {
+      const uri = request.params.uri;
+      if (!connection.subscriptions.has(uri)) {
+        const subscriptionId = this.resourceRegistry.subscribe(uri, (event) => {
+          void connection.sdk.server.sendResourceUpdated({ uri: event.uri }).catch(() => {});
+        });
+        connection.subscriptions.set(uri, subscriptionId);
+      }
+      return {};
+    });
+    server.setRequestHandler(UnsubscribeRequestSchema, (request) => {
+      const subscriptionId = connection.subscriptions.get(request.params.uri);
+      if (subscriptionId) {
+        this.resourceRegistry.unsubscribe(subscriptionId);
+        connection.subscriptions.delete(request.params.uri);
+      }
+      return {};
+    });
+
+    server.setRequestHandler(ListPromptsRequestSchema, async (request) => this.promptRegistry.list(request.params?.cursor));
+    server.setRequestHandler(GetPromptRequestSchema, async (request) => {
+      try {
+        return await this.promptRegistry.get(request.params.name, request.params.arguments) as never;
+      } catch (err) {
+        if (err instanceof PromptNotFoundError) throw new McpError(ErrorCode.InvalidParams, err.message);
+        throw err;
+      }
+    });
+  }
+
+  private async callTool(
+    request: CallToolRequest,
+    extra: RequestHandlerExtra<ServerRequest, ServerNotification>,
+    connection: Connection,
+  ): Promise<CallToolResult> {
+    const name = request.params.name;
+    const args = (request.params.arguments ?? {}) as Record<string, unknown>;
+    const details: Pick<AuditEntry, 'toolName' | 'toolId' | 'callDigest'> & { isError?: boolean } = { toolName: name };
+    connection.callDetails.set(extra.requestId, details);
+
+    let result: CallToolResult;
+    if (this.resolveToolEnabled() && this.runtime && name === RESOLVE_TOOL_NAME) {
+      result = await this.resolveIntent(args);
+    } else if (this.registeredTools.has(name)) {
+      const { executor } = this.registeredTools.get(name)!;
+      result = executor
+        ? toCallToolResult(await executor(args))
+        : errorResult(`Tool "${name}" has no server-side implementation; nothing was executed.`);
+    } else {
+      const entry = this.table?.byName.get(name);
+      if (!entry || !this.runtime) {
+        result = this.unknownTool(name);
+      } else {
+        const progressToken = request.params._meta?.progressToken;
+        const onprogress = progressToken === undefined
+          ? undefined
+          : (progress: { progress: number; total?: number; message?: string }) => {
+            void extra.sendNotification({ method: 'notifications/progress', params: { ...progress, progressToken } }).catch(() => {});
+          };
+        const runtime = this.runtime;
+        try {
+          const ran: ToolResult = await withUpstreamCallContext(
+            { signal: extra.signal, ...(onprogress ? { onprogress } : {}) },
+            () => runtime.dispatchById(entry.toolId, args),
+          );
+          const proof = ran.metadata?.proof as { ran?: string | null; callDigest?: string | null } | undefined;
+          if (proof?.ran) details.toolId = proof.ran;
+          if (proof?.callDigest) details.callDigest = proof.callDigest;
+          result = await this.applyRtk(toCallToolResult(ran));
+        } catch (err) {
+          result = errorResult(`${entry.name} failed: ${(err as Error).message}`);
         }
       }
-    });
-
-    sendRpcOk(res, id, { subscriptionId: subId });
-  }
-
-  private rpcResourcesUnsubscribe(rpcReq: JsonRpcRequest, id: string | number | null, res: ServerResponse): void {
-    const subId = rpcReq.params?.subscriptionId as string;
-    if (!subId) { sendRpcError(res, id, INVALID_PARAMS, 'Missing subscription ID'); return; }
-    sendRpcOk(res, id, { success: this.resourceRegistry.unsubscribe(subId) });
-  }
-
-  // ---- Prompts ------------------------------------------------------------
-
-  private async rpcPromptsList(rpcReq: JsonRpcRequest, id: string | number | null, res: ServerResponse): Promise<void> {
-    const cursor = rpcReq.params?.cursor as string | undefined;
-    const result = await this.promptRegistry.list(cursor);
-    sendRpcOk(res, id, result);
-  }
-
-  private async rpcPromptsGet(rpcReq: JsonRpcRequest, id: string | number | null, res: ServerResponse): Promise<void> {
-    const name = rpcReq.params?.name as string;
-    if (!name) { sendRpcError(res, id, INVALID_PARAMS, 'Missing prompt name'); return; }
-
-    const args = rpcReq.params?.arguments as Record<string, string> | undefined;
-
-    try {
-      const result = await this.promptRegistry.get(name, args);
-      sendRpcOk(res, id, result);
-    } catch (err) {
-      if (err instanceof PromptNotFoundError) {
-        sendRpcError(res, id, INVALID_PARAMS, err.message);
-      } else {
-        sendRpcError(res, id, INTERNAL_ERROR, (err as Error).message);
-      }
     }
+    details.isError = result.isError === true;
+    return result;
   }
 
-  // ---- Notifications ------------------------------------------------------
+  private unknownTool(name: string): CallToolResult {
+    const names = this.listTools().map(t => t.name);
+    const close = closeMatches(name, names);
+    const hint = close.length > 0 ? ` Close names: ${close.join(', ')}.` : '';
+    const resolve = this.resolveToolEnabled() && this.runtime
+      ? ` To find a tool from a description, call ${RESOLVE_TOOL_NAME}.`
+      : '';
+    return errorResult(`Unknown tool "${name}"; nothing was executed.${hint}${resolve}`);
+  }
 
-  broadcastListChanged(type: 'tools' | 'resources' | 'prompts'): void {
-    const notification = { jsonrpc: '2.0', method: `notifications/${type}/list_changed` };
-    for (const client of this.sseClients.values()) {
-      sendSSE(client.response, 'message', notification);
+  private async resolveIntent(args: Record<string, unknown>): Promise<CallToolResult> {
+    const intent = args.intent;
+    if (typeof intent !== 'string' || intent.trim().length === 0) {
+      return errorResult(`${RESOLVE_TOOL_NAME} needs an "intent" string.`);
     }
+    const callArgs = args.args;
+    if (callArgs !== undefined && (typeof callArgs !== 'object' || callArgs === null || Array.isArray(callArgs))) {
+      return errorResult(`${RESOLVE_TOOL_NAME}: "args" must be an object.`);
+    }
+
+    const resolution = await this.runtime!.resolve(intent, callArgs ? { args: callArgs as Record<string, unknown> } : undefined);
+    const nameOf = (toolId: string) => this.table?.byToolId.get(toolId)?.name ?? null;
+    const proposal: ResolveProposal = {
+      outcome: resolution.outcome,
+      intent,
+      toolId: resolution.chosen ?? null,
+      name: resolution.chosen ? nameOf(resolution.chosen) : null,
+      tier: resolution.tier,
+      confidence: resolution.confidence ?? null,
+      reason: resolution.reason ?? null,
+      candidates: resolution.candidates.slice(0, 5).map(c => ({ toolId: c.toolId, name: nameOf(c.toolId), score: c.score, tier: c.tier })),
+      proofDigest: resolution.proof.proofDigest,
+      ...(resolution.retryAfterMs !== undefined ? { retryAfterMs: resolution.retryAfterMs } : {}),
+    };
+
+    const summary = proposal.outcome === 'resolved'
+      ? `Proposed ${proposal.name ?? proposal.toolId} (${proposal.toolId}, tier ${proposal.tier}). Nothing was executed; call ${proposal.name ?? proposal.toolId} to run it.`
+      : `No single tool proposed (${proposal.outcome}${proposal.reason ? `: ${proposal.reason}` : ''}). Nothing was executed.` +
+        (proposal.candidates.length > 0 ? ` Candidates: ${proposal.candidates.map(c => c.name ?? c.toolId).join(', ')}.` : '');
+
+    return {
+      content: [{ type: 'text', text: `${summary}\n${JSON.stringify(proposal)}` }],
+      structuredContent: proposal as unknown as Record<string, unknown>,
+      _meta: { [RESOLUTION_META_KEY]: compactResolution(resolution.proof) },
+    };
+  }
+
+  private async applyRtk(result: CallToolResult): Promise<CallToolResult> {
+    const config = this.config.rtkConfig;
+    if (!config || config.enabled === false || result.isError) return result;
+    let savedTotal = 0;
+    let filtered = false;
+    const content = await Promise.all(result.content.map(async block => {
+      if (block.type !== 'text') return block;
+      const { compressed, savedPct, enabled } = await filterContentWithRtk(block.text, config);
+      if (!enabled) return block;
+      filtered = true;
+      savedTotal = Math.max(savedTotal, savedPct);
+      return { ...block, text: compressed };
+    }));
+    if (!filtered) return result;
+    return { ...result, content, _meta: { ...result._meta, 'dev.smallchat/rtk': { savedPct: savedTotal } } };
   }
 }
 
 // ---------------------------------------------------------------------------
-// Standalone helpers (no class state needed)
+// Helpers
 // ---------------------------------------------------------------------------
 
-function getCapabilities(): Record<string, unknown> {
-  return {
-    tools: { listChanged: true },
-    resources: { subscribe: true, listChanged: true },
-    prompts: { listChanged: true },
-    logging: {},
-  };
-}
-
-function setCorsHeaders(res: ServerResponse, origin: string | null | undefined): void {
-  if (!origin) return;
+function setCorsHeaders(res: ServerResponse, origin: string): void {
   res.setHeader('Access-Control-Allow-Origin', origin);
-  res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Accept, Authorization, Mcp-Session-Id');
+  res.setHeader('Vary', 'Origin');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Accept, Authorization, Mcp-Session-Id, Mcp-Protocol-Version, Last-Event-ID');
   res.setHeader('Access-Control-Expose-Headers', 'Mcp-Session-Id');
-  if (origin !== '*') res.setHeader('Vary', 'Origin');
 }
 
-function sendJson(res: ServerResponse, status: number, body: unknown): void {
-  res.writeHead(status, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify(body, null, status === 200 ? 2 : undefined));
-}
-
-function sendRpcOk(res: ServerResponse, id: string | number | null, result: unknown): void {
-  sendJson(res, 200, { jsonrpc: '2.0', id, result } satisfies JsonRpcResponse);
-}
-
-function sendRpcError(res: ServerResponse, id: string | number | null, code: number, message: string): void {
-  sendJson(res, 200, { jsonrpc: '2.0', id, error: { code, message } } satisfies JsonRpcResponse);
-}
-
-function sendSSE(res: ServerResponse, event: string, data: unknown): void {
-  try {
-    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-  } catch {
-    // Client may have disconnected
+function sendRpcError(
+  res: ServerResponse,
+  status: number,
+  code: number,
+  message: string,
+  headers: Record<string, string> = {},
+): void {
+  if (res.headersSent) {
+    res.end();
+    return;
   }
-}
-
-class PayloadTooLargeError extends Error {
-  readonly limit: number;
-  constructor(limit: number) {
-    super(`Request body exceeds ${limit} bytes`);
-    this.name = 'PayloadTooLargeError';
-    this.limit = limit;
-  }
-}
-
-function readBody(req: IncomingMessage, maxBytes = DEFAULT_MAX_BODY_BYTES): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let received = 0;
-    let aborted = false;
-    req.on('data', (chunk: Buffer) => {
-      if (aborted) return;
-      received += chunk.length;
-      if (received > maxBytes) {
-        aborted = true;
-        // Keep the socket alive so the handler can respond with 413;
-        // pause the stream so we stop buffering further chunks.
-        req.pause();
-        reject(new PayloadTooLargeError(maxBytes));
-        return;
-      }
-      chunks.push(chunk);
-    });
-    req.on('end', () => {
-      if (!aborted) resolve(Buffer.concat(chunks).toString());
-    });
-    req.on('error', (err) => {
-      if (!aborted) reject(err);
-    });
-  });
+  res.writeHead(status, { 'Content-Type': 'application/json', ...headers });
+  res.end(JSON.stringify({ jsonrpc: '2.0', id: null, error: { code, message } }));
 }

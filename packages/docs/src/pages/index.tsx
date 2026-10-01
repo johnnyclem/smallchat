@@ -18,9 +18,9 @@ const TERMINAL_LINES: Array<{ type: 'comment' | 'prompt' | 'output' | 'blank'; t
   { type: 'prompt', text: 'npx @smallchat/core resolve tools.json "search for code"' },
   { type: 'output', text: 'Matched: github.search_code (confidence: 0.98)' },
   { type: 'blank' },
-  { type: 'comment', text: '# Spin up the built-in MCP server' },
-  { type: 'prompt', text: 'npx @smallchat/core serve tools.json --port 3000' },
-  { type: 'output', text: 'smallchat server running on http://localhost:3000 ✓' },
+  { type: 'comment', text: '# Serve every tool through one MCP server' },
+  { type: 'prompt', text: 'npx @smallchat/core serve --source tools.json --http' },
+  { type: 'output', text: 'smallchat MCP server (Streamable HTTP) at http://127.0.0.1:3001/mcp' },
 ];
 
 function TerminalWindow() {
@@ -291,7 +291,7 @@ export default function Home(): JSX.Element {
       {/* Hero */}
       <section className="hero-section">
         <div className="hero-badge">
-          <span style={{ fontSize: '0.9em' }}>&#x25CF;</span> v0.1.0 — MCP 2025-11-25 compliant
+          <span style={{ fontSize: '0.9em' }}>&#x25CF;</span> v0.1.0 — MCP 2025-11-25 via the official SDK
         </div>
 
         <h1 className="hero-title">object oriented inference</h1>

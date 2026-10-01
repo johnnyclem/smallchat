@@ -110,13 +110,13 @@ The agent never sees `loom_get_topology`, `loom_focus`, or `loom_search_refs` in
 
 ## Serve as a single MCP endpoint
 
-If you want a single MCP server that fronts LoomMCP through smallchat dispatch, run:
+To serve the compiled toolkit as one MCP server that forwards each call to LoomMCP, run:
 
 ```bash
-npx @smallchat/core serve --source ./loom.mcp.json --port 3001
+npx @smallchat/core serve --source loom.toolkit.json
 ```
 
-Point Claude Code, Cursor, or any other MCP client at `http://localhost:3001`. The client sees one tool — smallchat's dispatch tool — and gets LoomMCP's full surface area through it.
+Configure your MCP client to launch that command over stdio, or add `--http` and point it at `http://127.0.0.1:3001/mcp` with the bearer token from `~/.smallchat/serve-token`. The client sees LoomMCP's tools as `loom__loom_focus`, `loom__loom_search_refs` and so on, each with its upstream schema, plus `smallchat_resolve`, which proposes a tool for a plain-language intent without running it. To keep LoomMCP's own tool names, add `--provider loom`. The artifact records `LOOM_PROJECT_ROOT` by name only, so `serve` passes it on from its own environment: set it there.
 
 ## Further reading
 
