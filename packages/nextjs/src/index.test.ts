@@ -3,6 +3,10 @@
  * `export const POST = createDispatchHandler();` made a public route that
  * resolved and executed any intent for anyone: no authorization hook, no
  * body limit, raw error messages in responses.
+ *
+ * Review of SAT-25: the handlers read the body before calling authorize, so
+ * a hook that verifies a signature over the raw body ("Body is unusable:
+ * Body has already been read") refused every request.
  */
 
 import { describe, it, expect, vi } from 'vitest';
@@ -57,7 +61,8 @@ describe('createDispatchHandler', () => {
     const res = await handler(req);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ content: 'ran list files', isError: false });
-    expect(authorize).toHaveBeenCalledWith(req, { kind: 'dispatch', intent: 'list files', args: { path: '/' } });
+    expect(authorize).toHaveBeenCalledWith(expect.any(Request), { kind: 'dispatch', intent: 'list files', args: { path: '/' } });
+    expect(authorize.mock.calls[0][0].headers.get('authorization')).toBe('Bearer admin');
     expect(dispatch).toHaveBeenCalledWith('list files', { path: '/' }, { signal: req.signal });
   });
 
@@ -102,6 +107,33 @@ describe('createDispatchHandler', () => {
     expect(res.status).toBe(500);
     expect(JSON.stringify(await res.json())).not.toMatch(/hunter2|ECONNREFUSED/);
     expect(onError).toHaveBeenCalledOnce();
+  });
+});
+
+describe('authorize can read the request body', () => {
+  // A webhook-style hook: HMAC over the exact raw body.
+  const signed = (body: string) => post(body, { 'x-signature': `sig:${body.length}:${body}` });
+  const verifySignature = async (request: Request) => {
+    const raw = await request.text();
+    return request.headers.get('x-signature') === `sig:${raw.length}:${raw}`;
+  };
+
+  it('createDispatchHandler hands authorize an unread request with the exact body', async () => {
+    const { runtime, dispatch } = fakeRuntime();
+    const body = JSON.stringify({ intent: 'list files', args: { path: '/' } });
+    const res = await createDispatchHandler({ runtime, authorize: verifySignature })(signed(body));
+    expect(res.status).toBe(200);
+    expect(dispatch).toHaveBeenCalledWith('list files', { path: '/' }, expect.anything());
+    // A tampered body is still refused.
+    const forged = post(body.replace('/', '/etc'), { 'x-signature': `sig:${body.length}:${body}` });
+    expect((await createDispatchHandler({ runtime, authorize: verifySignature })(forged)).status).toBe(403);
+  });
+
+  it('createStreamHandler does too', async () => {
+    const { runtime } = fakeRuntime();
+    const res = await createStreamHandler({ runtime, authorize: verifySignature })(signed(JSON.stringify({ intent: 'x' })));
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain('data: [DONE]');
   });
 });
 

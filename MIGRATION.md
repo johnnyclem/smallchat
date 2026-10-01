@@ -653,7 +653,8 @@ export const POST = createDispatchHandler({
 ```
 
 Pass `unsafePublic: true` instead only for a route that should run tools
-for anyone. `call` is `{ kind: 'dispatch' | 'stream', intent, args }`, or
+for anyone. `authorize` gets an unread copy of the request, so it may read
+the body (for example to check a webhook signature). `call` is `{ kind: 'dispatch' | 'stream', intent, args }`, or
 `{ kind: 'list' }` for the tool list. Requests over `maxBodyBytes` (64 KiB
 by default) get 413; errors go to `onError` and the response body is a
 generic `{ error: 'Dispatch failed.' }`. The handlers refuse a runtime
@@ -693,7 +694,10 @@ lets a same-origin view remove its sandbox).
 `node packages/playground/dist/index.js tools.toolkit.json [port]`). Its
 `/api/resolve` returns the runtime's `{ outcome, tier, chosen, confidence,
 reason, candidates, proofDigest }` instead of `{ resolvedSelector, matches }`,
-and it listens on 127.0.0.1.
+and it listens on 127.0.0.1. Requests must name a loopback Host (pass
+`allowedHosts` to `createPlaygroundServer(path, { allowedHosts })` or
+`startPlayground` for other names), carry no Origin or the playground's own,
+and POST `application/json`.
 
 **`smallchat dream` no longer excludes tools on its own.** Tools the
 heuristics would exclude are listed as "Proposed exclusions" (and in

@@ -44,7 +44,9 @@ export type HandlerCall =
 /**
  * Decides whether a request may proceed: return `true` to allow, `false` to
  * refuse with 403, or a `Response` (e.g. a 401) to send as-is. Runs before
- * the runtime does any work.
+ * the runtime does any work. `request` is an unread copy of the request, so
+ * the hook may read its body (e.g. to verify a signature over the raw
+ * bytes); `call` carries the parsed intent and arguments.
  */
 export type Authorize = (request: Request, call: HandlerCall) => boolean | Response | Promise<boolean | Response>;
 
@@ -187,11 +189,13 @@ export function createDispatchHandler(options?: HandlerOptions) {
   return async function POST(request: Request): Promise<Response> {
     const runtime = opts.runtime ?? getRuntime();
 
+    // authorize gets an unread copy: reading the body here consumes it.
+    const forAuthorize = opts.authorize ? request.clone() : request;
     const body = await readBody(request, maxBytes);
     if (body instanceof Response) return body;
     const args = body.args ?? {};
 
-    const refused = await checkAuthorization(opts, request, { kind: 'dispatch', intent: body.intent, args });
+    const refused = await checkAuthorization(opts, forAuthorize, { kind: 'dispatch', intent: body.intent, args });
     if (refused) return refused;
     const misconfigured = subHighRefusal(opts, runtime);
     if (misconfigured) return misconfigured;
@@ -222,11 +226,13 @@ export function createStreamHandler(options?: HandlerOptions) {
   return async function POST(request: Request): Promise<Response> {
     const runtime = opts.runtime ?? getRuntime();
 
+    // authorize gets an unread copy: reading the body here consumes it.
+    const forAuthorize = opts.authorize ? request.clone() : request;
     const body = await readBody(request, maxBytes);
     if (body instanceof Response) return body;
     const args = body.args ?? {};
 
-    const refused = await checkAuthorization(opts, request, { kind: 'stream', intent: body.intent, args });
+    const refused = await checkAuthorization(opts, forAuthorize, { kind: 'stream', intent: body.intent, args });
     if (refused) return refused;
     const misconfigured = subHighRefusal(opts, runtime);
     if (misconfigured) return misconfigured;

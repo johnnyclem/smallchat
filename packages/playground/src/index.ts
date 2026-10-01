@@ -15,19 +15,68 @@ interface PlaygroundConfig {
   toolkitPath: string;
   /** Interface to listen on (default 127.0.0.1). */
   host?: string;
+  /** Hostnames accepted in the Host header (default: the loopback names, plus `host` when it is a specific address). */
+  allowedHosts?: string[];
 }
 
 const MAX_BODY_BYTES = 64 * 1024;
+const LOOPBACK_HOSTNAMES = ['localhost', '127.0.0.1', '[::1]'];
+
+export interface PlaygroundServerOptions {
+  /** Hostnames accepted in the Host header (default: the loopback names). */
+  allowedHosts?: string[];
+}
+
+/** The hostname of a Host header value (port stripped, IPv6 bracketed), or null. */
+function hostnameOf(hostHeader: string | undefined): string | null {
+  if (!hostHeader) return null;
+  try {
+    return new URL(`http://${hostHeader}`).hostname.toLowerCase() || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Why a request is refused before any route runs, as `serve --http` does
+ * (SC-SURF-09): a Host that is not an allowed name (DNS rebinding), an
+ * Origin other than the playground's own (cross-site requests), or a POST
+ * body that is not JSON.
+ */
+function refusal(req: IncomingMessage, allowedHosts: readonly string[]): { status: number; error: string } | null {
+  const hostname = hostnameOf(req.headers.host);
+  if (hostname === null || !allowedHosts.includes(hostname)) return { status: 403, error: 'Host not allowed' };
+  const origin = req.headers.origin;
+  if (origin !== undefined && origin !== `http://${req.headers.host}`) return { status: 403, error: 'Origin not allowed' };
+  if (req.method === 'POST') {
+    const mediaType = (req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase();
+    if (mediaType !== 'application/json') return { status: 415, error: 'Content-Type must be application/json' };
+  }
+  return null;
+}
 
 /**
  * Build the playground server for a compiled artifact (not listening yet).
  * The artifact's embedder fingerprint decides which embedder resolves
  * intents; loading refuses a pre-1.0 artifact or an unavailable embedder.
+ * Requests must name an allowed Host, come from the playground's own origin
+ * (or carry no Origin) and POST JSON.
  */
-export async function createPlaygroundServer(toolkitPath: string): Promise<{ server: Server; close: () => Promise<void> }> {
+export async function createPlaygroundServer(
+  toolkitPath: string,
+  options: PlaygroundServerOptions = {},
+): Promise<{ server: Server; close: () => Promise<void> }> {
   const { runtime, artifact } = await loadRuntime(toolkitPath);
+  const allowedHosts = (options.allowedHosts ?? LOOPBACK_HOSTNAMES).map((h) => h.toLowerCase());
 
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
+    const refused = refusal(req, allowedHosts);
+    if (refused) {
+      res.writeHead(refused.status, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: refused.error }));
+      return;
+    }
+
     if (req.method === 'GET' && (req.url === '/' || req.url === '/index.html')) {
       res.writeHead(200, { 'Content-Type': 'text/html' });
       res.end(PLAYGROUND_HTML);
@@ -114,7 +163,13 @@ export async function startPlayground(config: PlaygroundConfig): Promise<void> {
     process.exit(1);
   }
 
-  const { server } = await createPlaygroundServer(toolkitPath);
+  const wildcard = host === '0.0.0.0' || host === '::' || host === '[::]';
+  if (wildcard && !config.allowedHosts) {
+    console.error(`Listening on ${host} needs allowedHosts: the Host names clients use to reach the playground.`);
+    process.exit(1);
+  }
+  const allowedHosts = config.allowedHosts ?? [...LOOPBACK_HOSTNAMES, ...(hostnameOf(host) ? [hostnameOf(host)!] : [])];
+  const { server } = await createPlaygroundServer(toolkitPath, { allowedHosts });
   server.listen(port, host, () => {
     console.log(`smallchat playground running at http://${host}:${port}`);
   });
