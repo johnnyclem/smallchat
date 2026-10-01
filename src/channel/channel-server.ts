@@ -43,6 +43,7 @@ import type {
 import { ClaudeCodeChannelAdapter } from './adapter.js';
 import { SenderGate } from './sender-gate.js';
 import { filterMetaKeys, validatePayloadSize, parsePermissionReply } from './utils.js';
+import { PACKAGE_VERSION } from '../core/version.js';
 import {
   ClientAbortedError,
   HttpRejection,
@@ -336,7 +337,7 @@ export class ChannelServer extends EventEmitter {
       capabilities,
       serverInfo: {
         name: `smallchat-channel-${this.config.channelName}`,
-        version: '0.5.0',
+        version: PACKAGE_VERSION,
       },
       ...(this.config.instructions
         ? { instructions: this.config.instructions }

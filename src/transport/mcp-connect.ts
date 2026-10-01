@@ -24,8 +24,9 @@ import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import type { Transport, FetchLike } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { ErrorCode, McpError, type Tool } from '@modelcontextprotocol/sdk/types.js';
 import { buildMcpSpawnSpec, type SpawnMcpProcessOptions } from './container-sandbox.js';
+import { PACKAGE_VERSION } from '../core/version.js';
 
-export const DEFAULT_CLIENT_INFO = { name: 'smallchat', version: '1.0.0' };
+export const DEFAULT_CLIENT_INFO = { name: 'smallchat', version: PACKAGE_VERSION };
 
 /** Where and how to reach one MCP server. */
 export type McpConnectSpec =

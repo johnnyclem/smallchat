@@ -14,6 +14,7 @@ import { StdioClientTransport, getDefaultEnvironment } from '@modelcontextprotoc
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { McpError, SUPPORTED_PROTOCOL_VERSIONS, type CallToolResult, type Tool } from '@modelcontextprotocol/sdk/types.js';
 import { RESOLVE_TOOL_NAME } from './tool-names.js';
+import { PACKAGE_VERSION } from '../core/version.js';
 
 export type ConformanceTarget =
   | { kind: 'stdio'; command: string; args?: string[]; env?: Record<string, string>; cwd?: string }
@@ -75,7 +76,7 @@ export async function runConformance(
     setVersion?.(version);
   };
 
-  const client = new Client({ name: 'smallchat-conformance', version: '1.0.0' }, { capabilities: {} });
+  const client = new Client({ name: 'smallchat-conformance', version: PACKAGE_VERSION }, { capabilities: {} });
 
   const connected = await check('initialize', async () => {
     await client.connect(transport, { timeout: timeoutMs });

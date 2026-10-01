@@ -1,6 +1,7 @@
 import { Command } from 'commander';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { resolve, basename } from 'node:path';
+import { PACKAGE_VERSION } from '../../core/version.js';
 
 /**
  * `smallchat app` — subcommand group for MCP Apps Extension operations.
@@ -67,7 +68,7 @@ const appCompileCommand = new Command('compile')
 
     // Serialize artifact to JSON
     const artifact = {
-      version: '0.5.0',
+      version: PACKAGE_VERSION,
       type: 'app-artifact',
       timestamp: result.appArtifact.compiledAt,
       stats: {

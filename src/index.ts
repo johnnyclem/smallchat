@@ -1,5 +1,5 @@
 // smallchat — Semantic Tool Inference
-// v0.5.0 — message-passing dispatch from intent to tool.
+// v1.0 — message-passing dispatch from intent to tool.
 //
 // This package is organized in two tiers:
 //
@@ -217,6 +217,7 @@ export type { SignatureViolation } from './core/sc-types.js';
 export { compileArgumentValidator, createSchemaConstraints, InputSchemaError } from './core/argument-validator.js';
 export type { ArgumentCheck, ArgumentCoercion, ArgumentValidationOptions, ArgumentValidator, SchemaDialect } from './core/argument-validator.js';
 export { callDigest, CALL_DIGEST_DOMAIN } from './core/call-digest.js';
+export { PACKAGE_VERSION } from './core/version.js';
 export { canonicalJson } from './core/jcs.js';
 
 // 0.4.0: Pluggable LLM Interface

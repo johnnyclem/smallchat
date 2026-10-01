@@ -3,21 +3,16 @@
  * write configs or scaffold projects referring back to it.
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { PACKAGE_VERSION } from '../core/version.js';
 
 /** The npm package that ships the `smallchat` bin. Never the unscoped `smallchat` name. */
 export const PACKAGE_NAME = '@smallchat/core';
 
-/** This package's version (from its package.json), or '0.0.0' if unreadable. */
+/** This package's version (PACKAGE_VERSION, kept equal to package.json's). */
 export function packageVersion(): string {
-  try {
-    // src/cli/ or dist/cli/ → package root
-    const pkg = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf-8')) as { version?: string };
-    return pkg.version ?? '0.0.0';
-  } catch {
-    return '0.0.0';
-  }
+  return PACKAGE_VERSION;
 }
 
 /**

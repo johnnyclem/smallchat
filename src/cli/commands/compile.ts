@@ -1,5 +1,5 @@
 import { Command } from 'commander';
-import { readFileSync, readdirSync, writeFileSync, statSync, existsSync, watch } from 'node:fs';
+import { readFileSync, readdirSync, writeFileSync, statSync, existsSync, realpathSync, watch } from 'node:fs';
 import { join, resolve, dirname, relative, isAbsolute } from 'node:path';
 import type { Embedder, VectorIndex, ProviderManifest } from '../../core/types.js';
 import type { SmallChatManifest } from '../../core/manifest.js';
@@ -30,7 +30,7 @@ import {
 
 type SourceType = 'directory' | 'mcp-config' | 'auto-detect';
 
-function detectSourceType(sourcePath: string | undefined): { type: SourceType; path: string } {
+export function detectSourceType(sourcePath: string | undefined): { type: SourceType; path: string } {
   // No source given → auto-detect from cwd
   if (!sourcePath) {
     return { type: 'auto-detect', path: process.cwd() };
@@ -67,9 +67,31 @@ function detectSourceType(sourcePath: string | undefined): { type: SourceType; p
 // Manifest resolution
 // ---------------------------------------------------------------------------
 
+/**
+ * Manifest files already loaded in one compile run, by real path. A file
+ * reached twice — through --source (or auto-detection) and again through
+ * smallchat.json "manifests" or "dependencies", as in every `smallchat init`
+ * project — is compiled once.
+ */
+type LoadedFiles = Set<string>;
+
+/** Record `file` as loaded; false when it already was. */
+function firstLoad(file: string, loaded: LoadedFiles): boolean {
+  let key: string;
+  try {
+    key = realpathSync(file);
+  } catch {
+    key = resolve(file);
+  }
+  if (loaded.has(key)) return false;
+  loaded.add(key);
+  return true;
+}
+
 async function resolveManifests(
   source: { type: SourceType; path: string },
-  options?: { timeoutMs?: number },
+  options: { timeoutMs?: number } = {},
+  loaded: LoadedFiles = new Set(),
 ): Promise<ProviderManifest[]> {
   switch (source.type) {
     case 'mcp-config': {
@@ -85,7 +107,7 @@ async function resolveManifests(
         const files = findManifestFiles(source.path);
         if (files.length > 0) {
           console.log(`Found ${files.length} manifest file(s) in ${source.path}`);
-          return loadManifestFiles(files);
+          return loadManifestFiles(files, loaded);
         }
 
         console.error('No MCP server project detected and no manifest files found.');
@@ -104,14 +126,15 @@ async function resolveManifests(
     case 'directory': {
       console.log(`Parsing manifests from ${source.path}...`);
       const files = findManifestFiles(source.path);
-      return loadManifestFiles(files);
+      return loadManifestFiles(files, loaded);
     }
   }
 }
 
-function loadManifestFiles(files: string[]): ProviderManifest[] {
+function loadManifestFiles(files: string[], loaded: LoadedFiles): ProviderManifest[] {
   const manifests: ProviderManifest[] = [];
   for (const file of files) {
+    if (!firstLoad(file, loaded)) continue;
     try {
       const content = readFileSync(file, 'utf-8');
       const manifest = safeJsonParse(content) as ProviderManifest;
@@ -193,6 +216,7 @@ export function findSmallChatManifest(startDir: string): { manifest: SmallChatMa
 function resolvePackageDependencies(
   manifest: SmallChatManifest,
   manifestDir: string,
+  loaded: LoadedFiles = new Set(),
 ): ProviderManifest[] {
   const manifests: ProviderManifest[] = [];
 
@@ -206,8 +230,8 @@ function resolvePackageDependencies(
       }
       if (existsSync(resolved)) {
         if (statSync(resolved).isDirectory()) {
-          manifests.push(...loadManifestFiles(findManifestFiles(resolved)));
-        } else if (resolved.endsWith('.json')) {
+          manifests.push(...loadManifestFiles(findManifestFiles(resolved), loaded));
+        } else if (resolved.endsWith('.json') && firstLoad(resolved, loaded)) {
           try {
             const content = readFileSync(resolved, 'utf-8');
             const m = safeJsonParse(content) as ProviderManifest;
@@ -235,7 +259,7 @@ function resolvePackageDependencies(
           console.warn(`  Warning: skipping dependency "${_name}" — path "${specifier}" escapes the smallchat.json directory`);
           continue;
         }
-        if (existsSync(resolved) && resolved.endsWith('.json')) {
+        if (existsSync(resolved) && resolved.endsWith('.json') && firstLoad(resolved, loaded)) {
           try {
             const content = readFileSync(resolved, 'utf-8');
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -274,6 +298,27 @@ function resolvePackageDependencies(
   }
 
   return manifests;
+}
+
+/**
+ * Every manifest one compile run sees: the source's (a directory, an MCP
+ * config, or auto-detected from the source path), then the project's
+ * smallchat.json "manifests" and local "dependencies". Each manifest file
+ * is loaded once, however many of those reach it.
+ */
+export async function collectManifests(
+  source: { type: SourceType; path: string },
+  project: { manifest: SmallChatManifest; path: string } | null,
+  options: { timeoutMs?: number } = {},
+): Promise<ProviderManifest[]> {
+  const loaded: LoadedFiles = new Set();
+  const manifests = await resolveManifests(source, options, loaded);
+  if (!project) return manifests;
+  const depManifests = resolvePackageDependencies(project.manifest, dirname(project.path), loaded);
+  if (depManifests.length > 0) {
+    console.log(`\nResolved ${depManifests.length} manifest(s) from smallchat.json dependencies`);
+  }
+  return [...manifests, ...depManifests];
 }
 
 // ---------------------------------------------------------------------------
@@ -438,17 +483,8 @@ export const compileCommand = new Command('compile')
     const dbPath = resolve(options.dbPath);
     const format = (options.format === 'sqlite' ? 'sqlite' : 'json') as OutputFormat;
 
-    // Resolve manifests from source + smallchat.json dependencies
-    let manifests = await resolveManifests(source, { timeoutMs });
-
-    if (projectResult && projectManifest) {
-      const manifestDir = dirname(projectResult.path);
-      const depManifests = resolvePackageDependencies(projectManifest, manifestDir);
-      if (depManifests.length > 0) {
-        console.log(`\nResolved ${depManifests.length} manifest(s) from smallchat.json dependencies`);
-        manifests = [...manifests, ...depManifests];
-      }
-    }
+    // Resolve manifests from source + smallchat.json dependencies (each file once)
+    const manifests = await collectManifests(source, projectResult, { timeoutMs });
 
     const ok = await runCompile(manifests, outputPath, embedderKind, dbPath, source.type, format, projectManifest, allowDuplicates);
 
@@ -472,11 +508,7 @@ export const compileCommand = new Command('compile')
       if (debounceTimer) clearTimeout(debounceTimer);
       debounceTimer = setTimeout(async () => {
         console.log(`\n--- Recompiling (${filename} changed) ---\n`);
-        let newManifests = await resolveManifests(source, { timeoutMs });
-        if (projectResult && projectManifest) {
-          const manifestDir = dirname(projectResult.path);
-          newManifests = [...newManifests, ...resolvePackageDependencies(projectManifest, manifestDir)];
-        }
+        const newManifests = await collectManifests(source, projectResult, { timeoutMs });
         await runCompile(newManifests, outputPath, embedderKind, dbPath, source.type, format, projectManifest, allowDuplicates);
         console.log(`\nWatching ${watchPath} for changes...`);
       }, 200);
@@ -487,6 +519,7 @@ export const compileCommand = new Command('compile')
 // Helpers
 // ---------------------------------------------------------------------------
 
+/** Manifest JSON files under `dir`, skipping node_modules and dot-directories. */
 function findManifestFiles(dir: string): string[] {
   const files: string[] = [];
   try {
@@ -495,7 +528,7 @@ function findManifestFiles(dir: string): string[] {
       const stat = statSync(fullPath);
       if (stat.isFile() && entry.endsWith('.json')) {
         files.push(fullPath);
-      } else if (stat.isDirectory()) {
+      } else if (stat.isDirectory() && entry !== 'node_modules' && !entry.startsWith('.')) {
         files.push(...findManifestFiles(fullPath));
       }
     }

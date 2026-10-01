@@ -451,7 +451,7 @@ function generateSmallChatJson(name: string, template: string): object {
     manifests: ['./manifests'],
     compiler: {
       embedder: 'onnx',
-      deduplicationThreshold: 0.95,
+      duplicateThreshold: 0.95,
       collisionThreshold: 0.89,
     },
     output: {

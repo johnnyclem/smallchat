@@ -24,13 +24,17 @@ function tmp(): string {
   return dir;
 }
 
-function init(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+function cli(args: string[], cwd?: string): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolvePromise) => {
-    execFile(process.execPath, [VITE_NODE, '--root', REPO, CLI, '--', 'init', ...args], { timeout: 60_000 }, (err, stdout, stderr) => {
+    execFile(process.execPath, [VITE_NODE, '--root', REPO, CLI, '--', ...args], { timeout: 60_000, ...(cwd ? { cwd } : {}) }, (err, stdout, stderr) => {
       const exit = (err as { code?: unknown } | null)?.code;
       resolvePromise({ code: err ? (typeof exit === 'number' ? exit : 1) : 0, stdout, stderr });
     });
   });
+}
+
+function init(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+  return cli(['init', ...args]);
 }
 
 describe('smallchat init', () => {
@@ -63,4 +67,25 @@ describe('smallchat init', () => {
     // Next steps run the locally installed CLI, never the unscoped npm name.
     expect(stdout).not.toMatch(/npx smallchat/);
   }, 60_000);
+
+  it('compiles the scaffold it wrote, with and without --source (each manifest once)', async () => {
+    const project = join(tmp(), 'compiles');
+    expect((await init([project, '--no-git', '--no-install'])).code).toBe(0);
+    const pkg = JSON.parse(readFileSync(join(project, 'package.json'), 'utf-8'));
+    expect(pkg.scripts.compile).toBe('smallchat compile --source ./manifests');
+    // The scaffold depends on the 1.x line it was written for, with current config keys.
+    expect(pkg.dependencies['@smallchat/core']).toMatch(/^\^1\./);
+    const project_ = JSON.parse(readFileSync(join(project, 'smallchat.json'), 'utf-8'));
+    expect(project_.compiler).toMatchObject({ duplicateThreshold: 0.95 });
+    expect(project_.compiler.deduplicationThreshold).toBeUndefined();
+
+    // What `npm run compile` runs (hash embedder: no model download in tests).
+    const withSource = await cli(['compile', '--source', './manifests', '--embedder', 'hash'], project);
+    expect(withSource.code, withSource.stdout + withSource.stderr).toBe(0);
+    const artifact = JSON.parse(readFileSync(join(project, 'tools.toolkit.json'), 'utf-8'));
+    expect(Object.keys(artifact.tools).sort()).toEqual(['compiles/echo', 'compiles/greet']);
+
+    const autoDetected = await cli(['compile', '--embedder', 'hash'], project);
+    expect(autoDetected.code, autoDetected.stdout + autoDetected.stderr).toBe(0);
+  }, 120_000);
 });

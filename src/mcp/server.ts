@@ -83,6 +83,7 @@ import {
   type ToolTable,
 } from './tool-names.js';
 import { compileArgumentValidator, InputSchemaError } from '../core/argument-validator.js';
+import { PACKAGE_VERSION } from '../core/version.js';
 import { compactResolution, errorResult, RESOLUTION_META_KEY, toCallToolResult } from './results.js';
 import {
   bearerMatches,
@@ -101,7 +102,7 @@ import { filterContentWithRtk } from '../transport/rtk-transport.js';
 import type { RtkConfig } from '../transport/types.js';
 
 export const SERVER_NAME = 'smallchat';
-export const SERVER_VERSION = '1.0.0';
+export const SERVER_VERSION = PACKAGE_VERSION;
 
 /** The single Streamable HTTP endpoint path. */
 export const MCP_HTTP_PATH = '/mcp';
