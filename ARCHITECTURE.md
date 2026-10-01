@@ -99,7 +99,7 @@ async function* smallchat_dispatchStream(
   intent: string,
   args?: Record<string, unknown>,
 ) {
-  // Resolve once (semantic match, cache hit, fallback chain)
+  // Resolve once (semantic match or cache hit; a refusal runs nothing)
   yield { type: "tool-start", intent };
 
   // Open the native provider stream

@@ -60,13 +60,19 @@ Watching ./tools for changes...
 [12:03:18] Compiled 15 tools. Wrote tools.json.
 ```
 
-The `--watch` flag pairs well with the hot-reload API in `ToolRuntime`:
+The runtime does not watch the file. To pick up a recompiled artifact, load
+it again and swap the runtime (or re-register its classes):
 
 ```typescript
-// In your application
-await runtime.load('./tools.json');
+import { watch } from 'node:fs';
+import { loadRuntime } from '@smallchat/core';
 
-// The compiler in watch mode rewrites tools.json → runtime detects and reloads
+let { runtime, upstreams } = await loadRuntime('./tools.json');
+watch('./tools.json', async () => {
+  const next = await loadRuntime('./tools.json');
+  await upstreams.close();
+  ({ runtime, upstreams } = next);
+});
 ```
 
 ### Multiple source directories

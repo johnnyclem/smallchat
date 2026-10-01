@@ -79,18 +79,10 @@ If a confidence score lands in the MEDIUM tier (smallchat 0.4.0+ confidence-tier
 ## Use it in code
 
 ```typescript
-import {
-  ToolRuntime,
-  LocalEmbedder,
-  MemoryVectorIndex,
-} from '@smallchat/core';
+import { loadRuntime } from '@smallchat/core';
 
-const runtime = new ToolRuntime({
-  embedder: new LocalEmbedder(),
-  vectorIndex: new MemoryVectorIndex(),
-});
-
-await runtime.load('./loom.toolkit.json');
+// The artifact records LoomMCP's launch spec; its tools run on that server.
+const { runtime, upstreams } = await loadRuntime('./loom.toolkit.json');
 
 // Three-step LoomMCP workflow expressed as natural-language intents
 const topology = await runtime.dispatch('scan the src directory', {
@@ -104,9 +96,17 @@ const symbol = await runtime.dispatch('focus on the loginUser function', {
 const refs = await runtime.dispatch('find every caller of loginUser', {
   symbol: 'loginUser',
 });
+
+// A result that ran nothing is isError with metadata.outcome
+// ('needs-disambiguation', 'unresolved', ...) and the candidates' tool ids.
+for (const r of [topology, symbol, refs]) {
+  if (r.isError) console.log(r.metadata?.outcome, r.content);
+}
+
+await upstreams.close();
 ```
 
-The agent never sees `loom_get_topology`, `loom_focus`, or `loom_search_refs` in its context — smallchat resolves each intent to the right LoomMCP tool and forwards the call.
+The agent never sees `loom_get_topology`, `loom_focus`, or `loom_search_refs` in its context — smallchat resolves each intent to a LoomMCP tool and forwards the call when the dispatch policy allows it; below HIGH confidence (without an LLM verifier) it returns the candidates instead, and the agent calls the one it means by id (`runtime.dispatchById('loom/loom_focus', args)`).
 
 ## Serve as a single MCP endpoint
 

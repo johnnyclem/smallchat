@@ -217,36 +217,32 @@ For programmatic use in your application:
 <TabItem value="typescript" label="TypeScript">
 
 ```typescript
-import {
-  ToolRuntime,
-  ToolCompiler,
-  LocalEmbedder,
-  MemoryVectorIndex,
-} from '@smallchat/core';
-import type { RuntimeOptions } from '@smallchat/core';
+import { loadRuntime } from '@smallchat/core';
 
-// Configure the runtime
-const options: RuntimeOptions = {
-  selectorThreshold: 0.95,  // deduplication threshold for similar selectors
-  cacheSize: 1024,           // LRU cache entries
-  minConfidence: 0.85,       // minimum match confidence
-};
+// Load a compiled artifact. It records the embedder its vectors came from;
+// loadRuntime builds that embedder (or refuses a different one).
+const { runtime, upstreams } = await loadRuntime('./tools.toolkit.json');
 
-const embedder = new LocalEmbedder();
-const vectorIndex = new MemoryVectorIndex();
-const runtime = new ToolRuntime({ ...options, embedder, vectorIndex });
+// Propose one tool for an intent; nothing runs.
+const resolution = await runtime.resolve('search for code');
+console.log(resolution.outcome, resolution.chosen, resolution.tier);
 
-// Load a compiled artifact
-await runtime.load('./tools.json');
+// Run exactly that tool. Arguments are validated against its inputSchema.
+if (resolution.outcome === 'resolved') {
+  const result = await runtime.dispatchById(resolution.chosen!, {
+    query: 'typescript generics',
+    language: 'typescript',
+  });
+  console.log(result.content);
+}
 
-// Single-shot dispatch
-const result = await runtime.dispatch('search for code', {
-  query: 'typescript generics',
-  language: 'typescript',
-});
-console.log(result.output);
+// Or resolve and run in one call. A match the dispatch policy does not
+// allow (below HIGH without an LLM verifier, a destructive tool below
+// EXACT, ...) runs nothing and returns isError with metadata.outcome.
+const result = await runtime.dispatch('search for code', { query: 'typescript generics' });
+if (result.isError) console.log(result.metadata?.outcome, result.content);
 
-// Streaming dispatch — tokens arrive as they are generated
+// Streaming dispatch
 for await (const event of runtime.dispatchStream('file that new issue', {
   title: 'Add dark mode',
   repo: 'myorg/myapp',
@@ -256,16 +252,18 @@ for await (const event of runtime.dispatchStream('file that new issue', {
       console.log(`Resolving: ${event.intent}`);
       break;
     case 'tool-start':
-      console.log(`Calling: ${event.tool}`);
+      console.log(`Calling: ${event.toolId}`);
       break;
     case 'chunk':
-      process.stdout.write(event.content);
+      console.log(event.content);
       break;
     case 'done':
-      console.log('\nComplete.');
+      console.log(event.result.isError ? `Nothing ran: ${event.result.metadata?.outcome}` : 'Complete.');
       break;
   }
 }
+
+await upstreams.close(); // stops stdio upstream MCP servers
 ```
 
 </TabItem>
@@ -274,21 +272,16 @@ for await (const event of runtime.dispatchStream('file that new issue', {
 ```swift
 import SmallChat
 
-// Configure the runtime
-let runtime = ToolRuntime(
-    vectorIndex: MemoryVectorIndex(),
-    embedder: LocalEmbedder()
-)
-
-// Load a compiled artifact
-try await runtime.load("./tools.json")
+// Load a toolkit (a compiled artifact or a manifest directory)
+let toolkit = try await MCPToolkit.load(source: "./tools.toolkit.json")
+let runtime = toolkit.runtime
 
 // Single-shot dispatch
 let result = try await runtime.dispatch("search for code", args: [
     "query": "typescript generics",
     "language": "typescript",
 ])
-print(result.output)
+print(result.content)
 
 // Streaming dispatch — tokens arrive as they are generated
 for try await event in runtime.dispatchStream("file that new issue", args: [

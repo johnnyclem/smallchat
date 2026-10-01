@@ -235,19 +235,18 @@ Three tools make a decision checkable after the fact (`src/runtime/replay.ts`,
   decomposition, the rate limiter's window) are reported as skipped. One
   writer per file.
 
-## Selector Table: Tools vs. Intents
+## Selector Table: Tools Only
 
-`SelectorTable` interns two different things into the same table: compiled
-tool selectors (from `ToolCompiler`) and runtime intent selectors (from
-`SelectorTable.resolve()`, called on every dispatch). Intent selectors have
-no owning `ToolClass` and are tagged `provenance: 'intent'` — they're
-excluded from `selectorTable.all()` and from `searchTools()` by default, so
-a user's own previously-resolved query never comes back as a phantom "tool"
-or a refinement "did you mean?" suggestion. Pass `{ includeIntents: true }`
-to `all()` for diagnostics. Intent selectors are also LRU-bounded
-(`RuntimeOptions.maxIntentEntries`, default 500) since a long-lived process
-resolves an unbounded number of distinct intents over its lifetime; compiled
-tool selectors are never evicted.
+`SelectorTable` holds the compiled tool selectors (from `ToolCompiler` or an
+artifact) and nothing else. A runtime intent is embedded on its own
+(`intentSelector()`, keyed by `intentKey()`) and compared against the tool
+selectors; it is never interned into the table. So an intent cannot become
+a phantom "tool", shadow a real one in "did you mean?" suggestions, or change
+how a later intent ranks, and a long-lived process does not accumulate
+intent entries. `selectorTable.all()` and `searchTools()` return tool
+selectors only. (0.x interned intents, tagged them `provenance: 'intent'`,
+and bounded them with `RuntimeOptions.maxIntentEntries`; that option and
+`all({ includeIntents })` are removed.)
 
 ## Embeddings & Vector Search
 
@@ -476,13 +475,13 @@ LLM. `npm test` fails if the runtime falls below the floors in
 | SEL | ToolSelector (semantic fingerprint of intent) |
 | IMP | ToolIMP (concrete implementation) |
 | Method = SEL + IMP | ToolMethod |
-| Message send | `smallchat_dispatch(context, intent, args)` |
-| Message stream | `smallchat_dispatchStream(context, intent, args)` |
+| Message send | `runtime.dispatch(intent, args)` (or `resolve` + `dispatchById`) |
+| Message stream | `runtime.dispatchStream(intent, args)` |
 | Method cache | Resolution cache (intent → resolved tool, version-tagged) |
 | Protocol | ToolProtocol (capability interface) |
 | Category | ToolCategory (capability extension) |
 | `respondsToSelector:` | `canHandle(selector)` |
-| `forwardInvocation:` | Fallback chain (superclass → broadened → LLM) |
+| `forwardInvocation:` | Refinement: when no tool is chosen, the outcome is `needs-disambiguation` / `unresolved` with options to pick by tool id (nothing is forwarded or executed on a guess) |
 | NSProxy | ToolProxy (lazy schema loading) |
 | NSObject | SCObject (typed parameter hierarchy) |
 

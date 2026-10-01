@@ -21,7 +21,7 @@ smallchat models LLM tool use as message dispatch. The LLM expresses intent. The
 ├─────────────────────────────────────────┤
 │           DispatchContext               │
 │  selector table · resolution cache     │
-│  overload tables · forwarding chain    │
+│  overload tables · pins · policy       │
 ├─────────────────────────────────────────┤
 │             ToolClass                   │
 │  dispatch table (selector → IMP)       │
@@ -108,7 +108,7 @@ smallchat opens the actual provider stream. Dispatch resolves the intent once, t
 async function* smallchat_dispatchStream(context, intent, args) {
   yield { type: 'resolving', intent };
 
-  // Resolve once — semantic match, cache hit, or fallback chain
+  // Resolve once — semantic match or cache hit; a refusal runs nothing
   const resolved = await resolveIntent(context, intent);
   yield { type: 'tool-start', tool: resolved.name };
 
@@ -172,11 +172,11 @@ smallchat applies each of these directly:
 - `ToolSelector` = SEL, but resolved by semantic embedding rather than exact string
 - `ToolClass.dispatchTable` = objc class dispatch table
 - `ResolutionCache` = inline method cache
-- Fallback chain = `forwardInvocation:`
+- Refinement (no tool chosen → choose one by tool id) = `forwardInvocation:`
 
-### Zero dependencies
+### No external services
 
-`@smallchat/core` ships under 5 MB with zero runtime dependencies. Embedding runs in-process. You add what you need.
+Embedding runs in-process with the bundled ONNX model (all-MiniLM-L6-v2); resolution needs no network or LLM API. `@smallchat/core` does have runtime dependencies (the MCP SDK, Ajv, ONNX Runtime, SQLite, `@shorthand/core`; see its package.json).
 
 ### MCP native
 

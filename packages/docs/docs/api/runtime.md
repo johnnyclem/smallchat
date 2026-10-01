@@ -3,573 +3,183 @@ title: ToolRuntime
 sidebar_label: ToolRuntime
 ---
 
-import Tabs from '@theme/Tabs';
-import TabItem from '@theme/TabItem';
-
 # ToolRuntime API Reference
 
-`ToolRuntime` is the top-level class. It owns the `DispatchContext`, manages the lifecycle of `ToolClass` objects, and provides the public dispatch API.
+`ToolRuntime` is the top-level class of `@smallchat/core`. It owns the
+`DispatchContext` (selector table, resolution cache, registered tool classes,
+intent pins, dispatch policy) and exposes resolution and execution.
+
+This page documents the TypeScript package. smallchat-swift 1.0 follows the
+same resolve and dispatch semantics (the shared conformance vectors are in
+`spec/`); see its repository for the Swift API.
+
+## Loading a runtime
+
+Most programs start from a compiled artifact (or a directory of manifests)
+with `loadRuntime`:
+
+```typescript
+import { loadRuntime } from '@smallchat/core';
+
+const { runtime, artifact, embedder, upstreams } = await loadRuntime('./tools.toolkit.json');
+// ...
+await upstreams.close(); // stops stdio upstream MCP servers
+```
+
+- A `.json` or `.db` artifact is validated (schema, consistency, content
+  hash) and its tools are registered. The artifact records the embedder that
+  produced its vectors; `loadRuntime` constructs that embedder, and refuses
+  an `options.embedder` whose fingerprint differs.
+- A directory of provider manifests is compiled in-process with the default
+  (ONNX) embedder, as `smallchat compile` would.
+- Tools of MCP providers execute on the upstream server recorded in the
+  artifact (`upstreams` holds those clients; they connect lazily).
+
+Options: `embedder`, `runtimeOptions` (below), `providers` (load only these
+provider ids), `compilerOptions` (directory sources), `upstream`.
 
 ## Constructor
 
-<Tabs groupId="language">
-<TabItem value="typescript" label="TypeScript">
-
 ```typescript
-import { ToolRuntime } from '@smallchat/core';
+import { ToolRuntime, MemoryVectorIndex, HashEmbedder } from '@smallchat/core';
 import type { RuntimeOptions } from '@smallchat/core';
 
-const runtime = new ToolRuntime(options: RuntimeOptions);
+const runtime = new ToolRuntime(new MemoryVectorIndex(), new HashEmbedder(), options);
 ```
 
-</TabItem>
-<TabItem value="swift" label="Swift">
-
-```swift
-import SmallChat
-
-let runtime = ToolRuntime(
-    vectorIndex: MemoryVectorIndex(),
-    embedder: LocalEmbedder()
-)
-```
-
-</TabItem>
-</Tabs>
+`new ToolRuntime(vectorIndex, embedder, options?)` builds an empty runtime;
+register tool classes yourself (`registerClass`). `loadRuntime` does this
+for you.
 
 ### `RuntimeOptions`
 
-<Tabs groupId="language">
-<TabItem value="typescript" label="TypeScript">
+| Option | Default | Meaning |
+|---|---|---|
+| `thresholds` | EXACT 0.95, HIGH 0.85, MEDIUM 0.75, LOW 0.60 | Confidence tiers (`spec/ranking/`) |
+| `requireLLMForSubHighDispatch` | `true` | Below HIGH, run a tool only when `llmClient.microCheck` approved it; otherwise the outcome is `needs-disambiguation` |
+| `llmClient` | none | Verifier, decomposer and refinement provider |
+| `strict` | `false` | Verify every match below EXACT and raise the search floor to MEDIUM |
+| `intentPins` | none | `IntentPinRegistry` or a list of pins (`exact` / `elevated`) |
+| `treatUnannotatedAsDestructive` | `false` | Tools without MCP annotations run only by id, a pinned phrase or EXACT similarity |
+| `argumentCoercion` | `'none'` | `'primitives'` coerces scalars before JSON Schema validation |
+| `decisionLog` | off | Path, options or `DecisionLog`: one hash-chained JSONL line per decision, written before anything runs |
+| `rateLimiter` | off | Semantic rate limiting of novel intents, per principal |
+| `semanticMap` / `semanticMapOptions` | empty map | Learned refinement preferences |
+| `observerOptions` | — | Dispatch observer (implicit correction inference is opt-in) |
+| `maxDecompositionDepth` / `maxSubDispatches` | 2 / 16 | Bounds on LOW-tier decomposition |
+| `cacheSize`, `minConfidence`, `modelVersion` | 1024, 0.85, `''` | Resolution cache |
+| `artifactHash` | set by `loadRuntime` | Recorded in every proof |
+| `selectorNamespace` | new | Core selector protection |
+
+`runtimeOptionsFromPolicy(policy)` builds these from a smallchat.json
+`"policy"` block, as `smallchat serve` does.
+
+## Resolving and executing
+
+### `runtime.resolve(intent, options?)`
+
+Choose at most one tool for an intent. Nothing executes, and by default
+nothing in the runtime changes (no caching).
 
 ```typescript
-interface RuntimeOptions {
-  embedder: Embedder;           // Required — embedding provider
-  vectorIndex: VectorIndex;     // Required — vector similarity index
-
-  selectorThreshold?: number;   // Default: 0.95 — deduplication threshold
-  cacheSize?: number;           // Default: 1024 — LRU cache size
-  minConfidence?: number;       // Default: 0.85 — minimum match confidence
-  modelVersion?: string;        // Optional — version tag for cache keys
-}
+const r = await runtime.resolve('file a bug about the login page', { args });
+// r.outcome: 'resolved' | 'needs-disambiguation' | 'unresolved' | 'throttled'
+// r.chosen (when resolved), r.tier, r.candidates, r.reason, r.refinement, r.proof
 ```
 
-</TabItem>
-<TabItem value="swift" label="Swift">
+`options`: `args` (used to choose among overloads), `principal`, `learn`.
 
-```swift
-// In Swift, RuntimeOptions is not a separate type.
-// Parameters are passed directly to the ToolRuntime initializer:
-let runtime = ToolRuntime(
-    vectorIndex: MemoryVectorIndex(),
-    embedder: LocalEmbedder(),
-    selectorThreshold: 0.95,   // Default: 0.95 — deduplication threshold
-    cacheSize: 1024,           // Default: 1024 — LRU cache size
-    minConfidence: 0.85,       // Default: 0.85 — minimum match confidence
-    modelVersion: "gpt-4o"     // Optional — version tag for cache keys
-)
-```
+### `runtime.dispatchById(toolId, args, options?)`
 
-</TabItem>
-</Tabs>
-
-## Loading artifacts
-
-### `runtime.load(path)`
-
-Load a compiled artifact from disk:
-
-<Tabs groupId="language">
-<TabItem value="typescript" label="TypeScript">
+Run exactly the tool named by its canonical id `<providerId>/<toolName>`:
+no embedding, no ranking. Arguments are validated against the tool's
+`inputSchema`; invalid arguments return `isError` with
+`metadata.outcome: 'invalid-arguments'` and nothing runs.
 
 ```typescript
-await runtime.load('./tools.json');
+const result = await runtime.dispatchById(r.chosen!, args, { resolutionDigest: r.proof.proofDigest });
 ```
 
-</TabItem>
-<TabItem value="swift" label="Swift">
+`options`: `resolutionDigest` (links the call to the resolution it acts
+on), `signal`, `principal`.
 
-```swift
-try await runtime.load("./tools.json")
-```
+### `runtime.dispatch(intent, args, options?)`
 
-</TabItem>
-</Tabs>
-
-Parses the artifact, populates the `SelectorTable`, builds `ToolClass` objects, and computes the `schemaFingerprint` for the `ResolutionCache`.
-
-### `runtime.reload(path)`
-
-Hot-reload a compiled artifact without restarting:
-
-<Tabs groupId="language">
-<TabItem value="typescript" label="TypeScript">
+Resolve and run in one call. A tool runs only when the dispatch policy
+allows it; otherwise the result is `isError: true` with
+`metadata.outcome` (`DispatchOutcome`: `needs-disambiguation`,
+`unresolved`, `throttled`, `invalid-arguments`, `aborted`) and the
+candidates' tool ids. `metadata.proof` names the tool that ran (`ran`) and
+the call digest.
 
 ```typescript
-await runtime.reload('./tools.json');
+const result = await runtime.dispatch('search for code', { query: 'typescript generics' });
+if (result.isError) console.log(result.metadata?.outcome, result.content);
 ```
 
-</TabItem>
-<TabItem value="swift" label="Swift">
+`options`: `signal` (aborts; the running tool receives it), `principal`.
 
-```swift
-try await runtime.reload("./tools.json")
-```
-
-</TabItem>
-</Tabs>
-
-Flushes stale cache entries, replaces the current artifact, and rebuilds the dispatch tables.
-
-## Registration
-
-### `runtime.registerClass(toolClass)`
-
-Register a `ToolClass` directly without loading from an artifact:
-
-<Tabs groupId="language">
-<TabItem value="typescript" label="TypeScript">
+### Fluent builder: `runtime.intent(intent)` / `runtime.dispatch(intent)`
 
 ```typescript
-import { ToolClass } from '@smallchat/core';
-
-const cls = new ToolClass('my-provider');
-cls.addMethod(selector, implementation);
-runtime.registerClass(cls);
+const content = await runtime
+  .intent<{ query: string }>('search for code')
+  .withArgs({ query: 'generics' })
+  .withTimeout(5_000)
+  .execContent<SearchResult>();
 ```
 
-</TabItem>
-<TabItem value="swift" label="Swift">
+`exec()` returns the `ToolResult`. `execContent()` returns its content, or
+throws `DispatchError` (`outcome`, `candidates`, `result`) when the result
+is an error. Also `withSignal()`, `withPrincipal()`, `withMetadata()`,
+`stream()`, `inferStream()` / `tokens()`, `collect()`.
 
-```swift
-import SmallChat
+### `runtime.dispatchStream(intent, args?, options?)` / `dispatchStreamById(toolId, args, options?)`
 
-let cls = ToolClass("my-provider", superclass: nil, protocols: [])
-cls.addMethod(selector, implementation: { args in
-    // ...
-})
-runtime.registerClass(cls)
-```
-
-</TabItem>
-</Tabs>
-
-### `runtime.registerProtocol(protocol)`
-
-Register a `ToolProtocol` for conformance checks:
-
-<Tabs groupId="language">
-<TabItem value="typescript" label="TypeScript">
-
-```typescript
-import type { ToolProtocol } from '@smallchat/core';
-
-const searchable: ToolProtocol = {
-  name: 'searchable',
-  requiredSelectors: ['search', 'find'],
-};
-runtime.registerProtocol(searchable);
-```
-
-</TabItem>
-<TabItem value="swift" label="Swift">
-
-```swift
-import SmallChat
-
-let searchable = ToolProtocol(name: "searchable", requiredSelectors: ["search", "find"])
-runtime.registerProtocol(searchable)
-```
-
-</TabItem>
-</Tabs>
-
-### `runtime.loadCategory(category)`
-
-Extend an existing `ToolClass` with additional methods:
-
-<Tabs groupId="language">
-<TabItem value="typescript" label="TypeScript">
-
-```typescript
-import type { ToolCategory } from '@smallchat/core';
-
-const loggingCategory: ToolCategory = {
-  targetClass: 'github',
-  methods: [{ selector: 'audit_log', implementation: auditImpl }],
-};
-runtime.loadCategory(loggingCategory);
-```
-
-</TabItem>
-<TabItem value="swift" label="Swift">
-
-```swift
-import SmallChat
-
-let loggingCategory = ToolCategory(
-    targetClass: "github",
-    methods: [/* ... */]
-)
-runtime.loadCategory(loggingCategory)
-```
-
-</TabItem>
-</Tabs>
-
-## Dispatch
-
-### `runtime.dispatch(intent, args?)`
-
-Single-shot dispatch. Resolves the intent, invokes the tool, and returns the result:
-
-<Tabs groupId="language">
-<TabItem value="typescript" label="TypeScript">
-
-```typescript
-const result = await runtime.dispatch('search for code', {
-  query: 'typescript generics',
-});
-// result: ToolResult { output: ..., metadata: ... }
-```
-
-</TabItem>
-<TabItem value="swift" label="Swift">
-
-```swift
-let result = try await runtime.dispatch("search for code", args: [
-    "query": "typescript generics"
-])
-// result: ToolResult { output: ..., metadata: ... }
-```
-
-</TabItem>
-</Tabs>
-
-### `runtime.dispatchStream(intent, args?, options?)`
-
-Streaming dispatch. Yields `DispatchEvent` values as execution proceeds:
-
-<Tabs groupId="language">
-<TabItem value="typescript" label="TypeScript">
-
-```typescript
-for await (const event of runtime.dispatchStream('summarize document', args)) {
-  if (event.type === 'chunk') process.stdout.write(event.content);
-}
-```
-
-</TabItem>
-<TabItem value="swift" label="Swift">
-
-```swift
-for try await event in runtime.dispatchStream("summarize document", args: args) {
-    switch event {
-    case .chunk(let content, _):
-        print(content, terminator: "")
-    case .done(let result):
-        break
-    }
-}
-```
-
-</TabItem>
-</Tabs>
-
-Options:
-
-<Tabs groupId="language">
-<TabItem value="typescript" label="TypeScript">
-
-```typescript
-{
-  signal?: AbortSignal;  // Cancellation
-}
-```
-
-</TabItem>
-<TabItem value="swift" label="Swift">
-
-```swift
-// In Swift, use Task cancellation instead of AbortSignal:
-let task = Task {
-    for try await event in runtime.dispatchStream("summarize document", args: args) {
-        // ...
-    }
-}
-// Cancel with:
-task.cancel()
-```
-
-</TabItem>
-</Tabs>
+Yield `DispatchEvent`s: `resolving` → `tool-start` (`toolId`, `confidence`)
+→ `chunk`* / `inference-delta`* → `done` (`result`). An intent that runs
+nothing goes straight to `done` with an `isError` result.
 
 ### `runtime.inferenceStream(intent, args?, options?)`
 
-Token-level inference stream. Yields `inference-delta` events with individual tokens:
-
-<Tabs groupId="language">
-<TabItem value="typescript" label="TypeScript">
-
-```typescript
-for await (const event of runtime.inferenceStream('explain this', args)) {
-  if (event.type === 'inference-delta') process.stdout.write(event.token);
-}
-```
-
-</TabItem>
-<TabItem value="swift" label="Swift">
-
-```swift
-for try await token in runtime.inferenceStream("explain this", args: args) {
-    print(token, terminator: "")
-}
-```
-
-</TabItem>
-</Tabs>
-
-## Method swizzling
-
-### `runtime.swizzle(toolClass, selector, implementation)`
-
-Replace a tool implementation at runtime:
-
-<Tabs groupId="language">
-<TabItem value="typescript" label="TypeScript">
-
-```typescript
-const sel = runtime.intern('search for code');
-const original = runtime.getImplementation('github', sel);
-
-runtime.swizzle('github', sel, async (args) => {
-  console.log('intercepted');
-  return original?.(args) ?? { output: null };
-});
-```
-
-</TabItem>
-<TabItem value="swift" label="Swift">
-
-```swift
-let sel = runtime.intern("search for code")
-let original = runtime.getImplementation("github", sel)
-
-runtime.swizzle("github", sel) { args in
-    print("intercepted")
-    return original?(args) ?? ToolResult(output: nil)
-}
-```
-
-</TabItem>
-</Tabs>
-
-### `runtime.getImplementation(toolClass, selector)`
-
-Retrieve the current implementation for a class + selector:
-
-<Tabs groupId="language">
-<TabItem value="typescript" label="TypeScript">
-
-```typescript
-const impl = runtime.getImplementation('github', sel);
-```
-
-</TabItem>
-<TabItem value="swift" label="Swift">
-
-```swift
-let impl = runtime.getImplementation("github", sel)
-```
-
-</TabItem>
-</Tabs>
-
-Returns `null` if not registered.
-
-## Selector interning
-
-### `runtime.intern(intent)`
-
-Register or retrieve the canonical selector for an intent string:
-
-<Tabs groupId="language">
-<TabItem value="typescript" label="TypeScript">
-
-```typescript
-const sel = runtime.intern('search for code');
-// → 'sel_search_code' (or the canonical selector ID)
-```
-
-</TabItem>
-<TabItem value="swift" label="Swift">
-
-```swift
-let sel = runtime.intern("search for code")
-// → "sel_search_code" (or the canonical selector ID)
-```
-
-</TabItem>
-</Tabs>
-
-## Header generation
-
-### `runtime.generateHeader()`
-
-Generate a TypeScript declaration file from the loaded artifact — analogous to `objc/runtime.h`:
-
-<Tabs groupId="language">
-<TabItem value="typescript" label="TypeScript">
-
-```typescript
-const header = runtime.generateHeader();
-fs.writeFileSync('./tools.d.ts', header);
-```
-
-</TabItem>
-</Tabs>
-
-The generated header contains typed function signatures for each registered tool.
-
-## Version management
-
-### `runtime.setProviderVersion(version)`
-
-Update the provider version tag. Invalidates cache entries with a different provider version:
-
-<Tabs groupId="language">
-<TabItem value="typescript" label="TypeScript">
-
-```typescript
-runtime.setProviderVersion('1.2.0');
-```
-
-</TabItem>
-<TabItem value="swift" label="Swift">
-
-```swift
-runtime.setProviderVersion("1.2.0")
-```
-
-</TabItem>
-</Tabs>
-
-### `runtime.setModelVersion(version)`
-
-Update the model version tag:
-
-<Tabs groupId="language">
-<TabItem value="typescript" label="TypeScript">
-
-```typescript
-runtime.setModelVersion('gpt-4o');
-```
-
-</TabItem>
-<TabItem value="swift" label="Swift">
-
-```swift
-runtime.setModelVersion("gpt-4o")
-```
-
-</TabItem>
-</Tabs>
-
-### `runtime.updateSchemaFingerprint(fingerprint)`
-
-Update the schema fingerprint. Usually called automatically by `load()` / `reload()`:
-
-<Tabs groupId="language">
-<TabItem value="typescript" label="TypeScript">
-
-```typescript
-const fingerprint = computeSchemaFingerprint(artifact);
-runtime.updateSchemaFingerprint(fingerprint);
-```
-
-</TabItem>
-<TabItem value="swift" label="Swift">
-
-```swift
-let fingerprint = computeSchemaFingerprint(artifact)
-runtime.updateSchemaFingerprint(fingerprint)
-```
-
-</TabItem>
-</Tabs>
-
-### `runtime.invalidateOn(hook)`
-
-Register an invalidation hook:
-
-<Tabs groupId="language">
-<TabItem value="typescript" label="TypeScript">
-
-```typescript
-import type { InvalidationHook } from '@smallchat/core';
-
-runtime.invalidateOn({
-  on: 'provider-update',
-  flush: (event) => event.affectedProviders.map(p => `${p}.*`),
-});
-```
-
-</TabItem>
-<TabItem value="swift" label="Swift">
-
-```swift
-import SmallChat
-
-runtime.invalidateOn(InvalidationHook(on: .providerUpdate) { event in
-    event.affectedProviders.map { "\($0).*" }
-})
-```
-
-</TabItem>
-</Tabs>
+Yield only token text (inference deltas, or the chunk content when the tool
+does not stream tokens).
+
+### `runtime.explain(intent, options?)`
+
+Resolve without learning and explain the decision: every candidate with its
+tier, MCP hints, pin state and the dispatch policy's verdict. Nothing runs.
+
+## Refinement and feedback
+
+- `runtime.resolveRefinement(originalIntent, choice, args?)` runs the option
+  the user chose (by tool id) and teaches the semantic map, so the same
+  intent resolves to that tool next time.
+- `runtime.reinforceRefinement(intent, selectorId, toolId?)` records a
+  preference without running anything.
+- `runtime.feedback({ intent, toolId, correct, principal? })` records (or
+  clears) a negative example.
+
+## Registering tools
+
+- `registerClass(toolClass)` / `unregisterClass(name)` — add, replace (same
+  name: hot reload) or remove a provider. Cached resolutions are flushed.
+- `registerCoreClass(toolClass, { swizzlable? })` — register and protect its
+  selectors from shadowing.
+- `registerProtocol(protocol)`, `loadCategory(category)`,
+  `addOverload(toolClass, selector, signature, imp)`.
+- `swizzle(toolClass, selector, newImp)` — replace an implementation
+  (aliases included); returns the original IMP.
+- `getTool(toolId)`, `toolIds()` — the registered tools by canonical id.
+
+## Cache versioning
+
+`setProviderVersion(providerId, version)`, `setModelVersion(version)`,
+`updateSchemaFingerprint(toolClass)` and `invalidateOn(hook)` expire or
+observe cached resolutions.
 
 ## Accessors
 
-### `runtime.getClass(id)`
-
-Return the `ToolClass` registered under the given ID, or `null`:
-
-<Tabs groupId="language">
-<TabItem value="typescript" label="TypeScript">
-
-```typescript
-const cls = runtime.getClass('github');
-```
-
-</TabItem>
-<TabItem value="swift" label="Swift">
-
-```swift
-let cls = runtime.getClass("github")
-```
-
-</TabItem>
-</Tabs>
-
-### `runtime.getCache()`
-
-Return the `ResolutionCache` for direct inspection or manipulation:
-
-<Tabs groupId="language">
-<TabItem value="typescript" label="TypeScript">
-
-```typescript
-const cache = runtime.getCache();
-console.log(cache.stats);
-```
-
-</TabItem>
-<TabItem value="swift" label="Swift">
-
-```swift
-let cache = runtime.getCache()
-print(cache.stats)
-```
-
-</TabItem>
-</Tabs>
+`intentPins`, `observer`, `semanticMap`, `decisionLog`, `strict`,
+`selectorTable`, `cache`, `context`; `generateHeader()` returns an
+LLM-readable capability summary.

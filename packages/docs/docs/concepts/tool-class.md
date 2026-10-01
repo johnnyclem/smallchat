@@ -61,12 +61,15 @@ You can extend a class's dispatch table at runtime:
 <TabItem value="typescript" label="TypeScript">
 
 ```typescript
-// Add a new method to an existing class
-const runtime = new ToolRuntime({ ... });
-await runtime.load('./tools.json');
+import { loadRuntime } from '@smallchat/core';
 
-const cls = runtime.getClass('github');
-cls.addMethod(newSelector, newImpl);
+// Add a new method to an existing class
+const { runtime } = await loadRuntime('./tools.toolkit.json');
+
+const cls = runtime.context.getClasses().find(c => c.name === 'github')!;
+cls.addMethod(runtime.selectorTable.register(newVector, 'github.audit_log'), newImpl);
+// Re-registering a class under its name re-indexes it (and flushes the cache)
+runtime.registerClass(cls);
 ```
 
 </TabItem>
@@ -173,8 +176,8 @@ runtime.registerProtocol(searchable);
 runtime.registerClass(githubClass);
 
 // Check at runtime
-const cls = runtime.getClass('github');
-console.log(cls.conformsToProtocol('searchable')); // true
+const cls = runtime.context.getClasses().find(c => c.name === 'github')!;
+console.log(cls.conformsTo(searchable)); // true
 ```
 
 </TabItem>
@@ -245,8 +248,8 @@ Check whether a `ToolClass` responds to a given selector, including the supercla
 <TabItem value="typescript" label="TypeScript">
 
 ```typescript
-const cls = runtime.getClass('github');
-const sel = runtime.intern('search for code');
+const cls = runtime.context.getClasses().find(c => c.name === 'github')!;
+const sel = runtime.selectorTable.get('github.search_code')!;
 console.log(cls.canHandle(sel)); // true
 ```
 

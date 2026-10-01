@@ -151,8 +151,8 @@ print(isSubclass("SCData", of: "SCArray"))    // false
 ```typescript
 import { SCSelector } from '@smallchat/core';
 
-const sel = runtime.intern('search for code');
-// sel is a ToolSelector (string identifier)
+const sel = runtime.selectorTable.get('github.search_code')!;
+// sel is a compiled ToolSelector (intents are never interned)
 
 const scSel = new SCSelector(sel);
 // Can be passed as an argument to tools that accept selectors

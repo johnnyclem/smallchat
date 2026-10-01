@@ -33,7 +33,11 @@ import type { DecisionExecution, DecisionKind, DecisionLog } from './decision-lo
 
 /**
  * UnrecognizedIntent — doesNotRecognizeSelector: equivalent.
- * Thrown when no tool anywhere in the registry can handle an intent.
+ *
+ * @deprecated Never thrown by the 1.0 runtime: an intent that matches
+ * nothing is a result with `metadata.outcome: 'unresolved'` (and
+ * `DispatchBuilder.execContent()` throws `DispatchError`). Kept for code
+ * that checks `instanceof`; removed in a later major version.
  */
 export class UnrecognizedIntent extends Error {
   selector: ToolSelector;

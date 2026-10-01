@@ -38,7 +38,7 @@ If you have ever written Objective-C, the model is immediately familiar:
 | Protocol | ToolProtocol (capability interface) |
 | Category | ToolCategory (capability extension) |
 | `respondsToSelector:` | `canHandle(selector)` |
-| `forwardInvocation:` | Fallback chain (superclass → broadened → LLM) |
+| `forwardInvocation:` | Refinement: no tool chosen → `needs-disambiguation` / `unresolved` with options to call by tool id |
 | NSProxy | ToolProxy (lazy schema loading) |
 | NSObject | SCObject (typed parameter hierarchy) |
 
@@ -77,18 +77,21 @@ Requires Swift 6.0+, macOS 14+, or iOS 17+.
 <TabItem value="typescript" label="TypeScript">
 
 ```typescript
-import { ToolRuntime, LocalEmbedder, MemoryVectorIndex } from '@smallchat/core';
+import { loadRuntime } from '@smallchat/core';
 
-const embedder = new LocalEmbedder();
-const vectorIndex = new MemoryVectorIndex();
-const runtime = new ToolRuntime({ embedder, vectorIndex });
+// Load a compiled artifact (it records, and enforces, its embedder)
+const { runtime } = await loadRuntime('./tools.toolkit.json');
 
-// Load a compiled artifact
-await runtime.load('./tools.json');
+// Propose a tool for a natural-language intent (nothing runs)...
+const resolution = await runtime.resolve('search for code');
 
-// Dispatch natural-language intent
-const result = await runtime.dispatch('search for code', { query: 'typescript generics' });
-console.log(result.output);
+// ...then run exactly that tool, with its arguments schema-checked
+if (resolution.outcome === 'resolved') {
+  const result = await runtime.dispatchById(resolution.chosen!, { query: 'typescript generics' });
+  console.log(result.content);
+} else {
+  console.log(resolution.outcome, resolution.candidates.map(c => c.toolId));
+}
 ```
 
 </TabItem>
@@ -97,17 +100,12 @@ console.log(result.output);
 ```swift
 import SmallChat
 
-let runtime = ToolRuntime(
-    vectorIndex: MemoryVectorIndex(),
-    embedder: LocalEmbedder()
-)
-
-// Load a compiled artifact
-try await runtime.load("./tools.json")
+// Load a toolkit (a compiled artifact or a manifest directory)
+let runtime = try await MCPToolkit.load(source: "./tools.toolkit.json").runtime
 
 // Dispatch natural-language intent
 let result = try await runtime.dispatch("search for code", args: ["query": "typescript generics"])
-print(result.output)
+print(result.content ?? "")
 ```
 
 </TabItem>

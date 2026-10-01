@@ -49,11 +49,9 @@ The default cache size is 1024 entries. When the cache is full, the least-recent
 <TabItem value="typescript" label="TypeScript">
 
 ```typescript
-const runtime = new ToolRuntime({
-  cacheSize: 2048,  // larger cache for high-traffic deployments
-  embedder,
-  vectorIndex,
-});
+// larger cache for high-traffic deployments
+const { runtime } = await loadRuntime('./tools.toolkit.json', { runtimeOptions: { cacheSize: 2048 } });
+// or: new ToolRuntime(vectorIndex, embedder, { cacheSize: 2048 })
 ```
 
 </TabItem>
@@ -227,19 +225,26 @@ runtime.getCache().flush()
 The cache makes hot-reload safe. When you recompile your tool definitions:
 
 1. Write the new artifact to disk
-2. Call `runtime.reload('./tools.json')` — reloads and computes a new fingerprint
-3. The cache detects the changed fingerprint and invalidates stale entries
-4. Subsequent dispatches rebuild the cache from the new artifact
+2. Load it again with `loadRuntime()` and swap the runtime in, or replace
+   individual providers with `runtime.registerClass(cls)` (same name: the
+   old class is replaced and every cached resolution is flushed)
+3. After changing a provider's tool schemas in place, call
+   `runtime.updateSchemaFingerprint(cls)`; entries cached against the old
+   fingerprint expire on their next lookup
 
 <Tabs groupId="language">
 <TabItem value="typescript" label="TypeScript">
 
 ```typescript
-// In development — watch for changes and hot-reload
-import { watch } from 'fs';
+// In development — watch for changes and load the new artifact
+import { watch } from 'node:fs';
+import { loadRuntime } from '@smallchat/core';
 
+let { runtime, upstreams } = await loadRuntime('./tools.json');
 watch('./tools.json', async () => {
-  await runtime.reload('./tools.json');
+  const next = await loadRuntime('./tools.json');
+  await upstreams.close();
+  ({ runtime, upstreams } = next);
   console.log('Runtime reloaded.');
 });
 ```

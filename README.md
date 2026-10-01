@@ -60,7 +60,7 @@ That's it: your agent can now reach every upstream tool through one server, with
 
 > **Prefer non-interactive mode?** `smallchat setup --no-interactive` auto-detects and compiles without prompts. Add `--config <file> --install [--disable-originals]` to also update that config.
 >
-> **Published on npm?** `@smallchat/core` is on the registry, but currently pinned at `0.1.0` — well behind this repo (`0.5.0`, plus the unreleased work in [What's New](#whats-new) below), and missing commands like `setup`, `doctor`, `memex`, and `rtk` entirely. Build from source as shown above until a fresh version ships; watch [CHANGELOG.md](./CHANGELOG.md) for the publish.
+> **Published on npm?** `@smallchat/core` is on the registry, but currently pinned at `0.1.0` — well behind this repo (`1.0.0`, unreleased; see [What's New](#whats-new) below), and missing commands like `setup`, `doctor`, `memex`, and `rtk` entirely. Build from source as shown above until a fresh version ships; watch [CHANGELOG.md](./CHANGELOG.md) for the publish.
 
 ## Install
 
@@ -126,11 +126,19 @@ import { loadRuntime } from '@smallchat/core';
 
 // The artifact records the embedder its vectors came from (model, SHA-256,
 // dims, pooling); loadRuntime builds that embedder or refuses to load.
-const { runtime } = await loadRuntime('tools.toolkit.json');
+const { runtime, upstreams } = await loadRuntime('tools.toolkit.json');
 
+// Propose one tool (nothing runs), then run exactly that tool
+const resolution = await runtime.resolve('find flights');
+if (resolution.outcome === 'resolved') {
+  await runtime.dispatchById(resolution.chosen!, { to: 'NYC' });
+}
+
+// Or both at once: runs a match the policy allows, else returns an isError
+// result whose metadata.outcome says why (e.g. 'needs-disambiguation')
 const result = await runtime.dispatch('find flights', { to: 'NYC' });
 
-// Fluent API with TypeScript inference
+// Fluent API with TypeScript inference; throws DispatchError if nothing ran
 const content = await runtime
   .intent<{ to: string }>('find flights')
   .withArgs({ to: 'NYC' })
@@ -140,19 +148,20 @@ const content = await runtime
 for await (const token of runtime.inferenceStream('find flights', { to: 'NYC' })) {
   process.stdout.write(token);
 }
+
+await upstreams.close(); // stops stdio upstream MCP servers
 ```
 
 ## What's New
 
-**Unreleased on `main`** (ahead of the last tagged release, 0.5.0):
+**1.0.0** (unreleased; see [CHANGELOG](./CHANGELOG.md) and [MIGRATION](./MIGRATION.md) — it is a breaking release):
 
-- **Replay, explain, decision log** — `smallchat replay` checks golden traces (or a decision log) against an artifact with learning frozen; `smallchat explain` shows every candidate with its tier and policy verdict; `RuntimeOptions.decisionLog` / `serve --decision-log` append a hash-chained JSONL line per decision, and replaying it against the same artifact, policy and learned state reproduces the outcomes (decisions that needed an LLM verifier are reported as skipped). The benchmark now measures the real runtime — see [Benchmarks](./docs/REFERENCE.md#benchmarks) for the measured numbers.
-- **Truth-ledger interop (`@shorthand/core/truth`)** — the vendored Short-Hand package now reads Stenographer's TB/UV v2 asserted-truth ledger at the JSONL seam: signed tombstones (`TB`) compact as ground truth, unverified assertions (`UV`) carry a visible `UNVERIFIED` marker through every compaction level, contested entries keep both sides of the dispute, and overridden/refuted history is displaced on sync. Compaction can emit its candidate invariants back as machine-drafted `PROPOSAL` lines — never as signed truth, and never anonymously. Re-exported from `@smallchat/core` (`TruthAwareCompactor`, `parseWikiLines`, `selectCurrentTruth`, `proposeInvariants`, …).
-- **Semantic map** — when the user resolves a refinement, that choice is learned: the exact intent resolves instantly next time, and *similar* intents get a confidence boost toward the same tool. Defer once, remember forever.
-- **Selector-table pollution fix** — resolved intents no longer leak into the tool list or shadow real tools in "did you mean?" suggestions; intent entries are now LRU-bounded instead of retained forever.
-- **`requireLLMForSubHighDispatch` guard** — opt-in flag to stop MEDIUM/LOW-confidence dispatches from auto-firing a tool when no `LLMClient` is configured.
-- **Security hardening** — CORS is no longer wide-open by default on the MCP HTTP transport, request bodies are capped at 4 MB, spawned MCP servers get an env allowlist instead of the full parent environment, manifest parsing guards against prototype pollution and path traversal, and the playground HTML-escapes toolkit content.
-- **Dispatch performance** — a selector → owning-class index removes the O(matches × classes) rescan on every resolution; tool summaries are memoized instead of rebuilt per dispatch.
+- **Resolve is separate from execute.** `runtime.resolve(intent)` proposes at most one tool and runs nothing; `dispatchById(toolId, args)` runs exactly the named tool; `dispatch()` runs a match only when the dispatch policy allows it. Anything that ran nothing is an `isError` result with `metadata.outcome` (`DispatchOutcome`), and `execContent()` throws `DispatchError` instead of returning an error payload as content.
+- **One dispatch policy on every path.** Below HIGH confidence a tool runs only with an LLM verifier's approval (`requireLLMForSubHighDispatch` is on by default; without an `LLMClient` such matches are `needs-disambiguation`). Destructive tools run only by exact id, a pinned phrase or EXACT similarity. Intent pins gate every tool their selector reaches, overloads and other classes included.
+- **Exact by construction.** Arguments are validated against each tool's JSON Schema before anything runs; artifacts (format 1.0) are content-hashed and pinned to the embedder that produced their vectors; every decision carries a replayable proof with a canonical call digest. `spec/` holds the cross-implementation vectors (call digest, tool id, ranking, resolve outcomes, artifact).
+- **Intents are never interned.** Runtime intents are embedded on their own and never enter the selector table, so they cannot leak into the tool list, shadow tools in suggestions, or change how later intents rank.
+- **`smallchat serve` is an exact MCP aggregator** on the official SDK (stdio by default, Streamable HTTP with a bearer token), with `smallchat_resolve` for semantic lookup; replay, explain and a hash-chained decision log make decisions checkable.
+- **Truth-ledger interop** comes from `@shorthand/core` 1.0 (a registry dependency): stenographer's Truth Format v2, re-exported from `@smallchat/core` (`TruthAwareCompactor`, `parseWikiLines`, `selectCurrentTruth`, `proposeInvariants`, …).
 
 ### 0.5.0
 
@@ -175,7 +184,7 @@ See the full [Changelog](./CHANGELOG.md) for details.
 
 smallchat borrows its architecture from the Smalltalk/Objective-C runtime. Tools are objects. Intents are messages. Dispatch is semantic.
 
-The LLM says *what* it wants. The runtime figures out *which tool* handles it — using vector similarity, resolution caching, superclass traversal, and fallback chains. No routing code. No tool selection prompts.
+The LLM says *what* it wants. The runtime proposes *which tool* handles it — by vector similarity against the compiled selectors, ranked and tiered deterministically — and runs it only when the dispatch policy allows; otherwise it asks the caller to choose a tool by id. No routing code. No tool selection prompts.
 
 See the [Architecture doc](./ARCHITECTURE.md) for the full design and the [Reference](./docs/REFERENCE.md) for runtime details, dispatch mechanics, and the concept mapping from Smalltalk/Obj-C to smallchat.
 

@@ -26,10 +26,9 @@ All three tiers share the same dispatch resolution path. The difference is only 
 <TabItem value="typescript" label="TypeScript">
 
 ```typescript
-import { ToolRuntime } from '@smallchat/core';
+import { loadRuntime } from '@smallchat/core';
 
-const runtime = new ToolRuntime({ ... });
-await runtime.load('./tools.json');
+const { runtime } = await loadRuntime('./tools.toolkit.json');
 
 for await (const event of runtime.dispatchStream('summarize this document', { url: '...' })) {
   switch (event.type) {
@@ -37,16 +36,18 @@ for await (const event of runtime.dispatchStream('summarize this document', { ur
       console.log('Resolving:', event.intent);
       break;
     case 'tool-start':
-      console.log('Invoking:', event.tool, 'on', event.provider);
+      console.log('Invoking:', event.toolId, `(${event.confidence})`);
       break;
     case 'chunk':
-      process.stdout.write(event.content);
+      console.log(event.content);
       break;
     case 'done':
-      console.log('\nDone.');
+      // An intent that did not resolve to one tool ends here with an
+      // isError result (metadata.outcome says why); nothing ran.
+      console.log(event.result.isError ? `Not run: ${event.result.metadata?.outcome}` : 'Done.');
       break;
     case 'error':
-      console.error('Error:', event.message);
+      console.error('Error:', event.error);
       break;
   }
 }

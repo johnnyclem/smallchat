@@ -42,7 +42,7 @@ smallchat maps this model directly:
 - ToolProviders respond to ToolSelectors (semantic fingerprints)
 - `toolkit_dispatch` looks up the selector in the SelectorTable, walks the ToolClass hierarchy, and invokes the ToolIMP
 - The ResolutionCache avoids the embedding on repeat dispatches
-- If nothing matches, the fallback chain provides graceful degradation
+- If no tool is chosen with enough confidence, nothing runs: the result says why and lists the candidates to call by id
 
 The mapping is not metaphorical — the implementation structure mirrors the Obj-C runtime deliberately.
 
