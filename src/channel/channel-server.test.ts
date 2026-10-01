@@ -131,6 +131,7 @@ describe('ChannelServer HTTP bridge', () => {
       httpBridge: true,
       httpBridgePort: PORT,
       httpBridgeHost: '127.0.0.1',
+      httpBridgeSecret: 'my-secret-token',
       maxPayloadSize: 65536,
     });
 
@@ -143,7 +144,7 @@ describe('ChannelServer HTTP bridge', () => {
     // POST an event
     const response = await fetch(`http://127.0.0.1:${PORT}/event`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-Channel-Secret': 'my-secret-token' },
       body: JSON.stringify({
         content: 'Test webhook event',
         meta: { source: 'github', repo: 'smallchat' },
@@ -155,10 +156,11 @@ describe('ChannelServer HTTP bridge', () => {
     expect(body.ok).toBe(true);
     expect(body.channel).toBe('webhook-test');
 
-    // Verify event was injected
+    // Verify event was injected; "source" is reserved for the channel name.
     expect(injected).toHaveLength(1);
     expect(injected[0].content).toBe('Test webhook event');
-    expect(injected[0].meta).toEqual({ source: 'github', repo: 'smallchat' });
+    expect(injected[0].meta).toEqual({ repo: 'smallchat' });
+    expect(injected[0].sender).toBe('bridge');
   });
 
   it('rejects invalid payloads', async () => {
@@ -167,6 +169,7 @@ describe('ChannelServer HTTP bridge', () => {
       httpBridge: true,
       httpBridgePort: PORT + 1,
       httpBridgeHost: '127.0.0.1',
+      httpBridgeSecret: 'my-secret-token',
     });
 
     await server.start();
@@ -174,7 +177,7 @@ describe('ChannelServer HTTP bridge', () => {
     // Missing content field
     const response = await fetch(`http://127.0.0.1:${PORT + 1}/event`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-Channel-Secret': 'my-secret-token' },
       body: JSON.stringify({ meta: { foo: 'bar' } }),
     });
 
@@ -189,6 +192,7 @@ describe('ChannelServer HTTP bridge', () => {
       httpBridge: true,
       httpBridgePort: PORT + 2,
       httpBridgeHost: '127.0.0.1',
+      httpBridgeSecret: 'my-secret-token',
     });
 
     await server.start();

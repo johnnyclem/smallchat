@@ -273,6 +273,57 @@ call `buildMultipartBody` yourself, first pass the files through
 `await bufferFileUploads(files)`. Passing a stream directly now throws
 instead of sending an empty file.
 
+## `smallchat channel --http-bridge`: credentials and identity
+
+**Move the secret off the command line.** `--http-bridge-secret <token>`
+now fails with an error. Use one of these instead:
+
+```json
+{
+  "mcpServers": {
+    "webhook-channel": {
+      "command": "npx",
+      "args": ["-y", "@smallchat/core", "channel", "--name", "webhook", "--http-bridge"],
+      "env": { "SMALLCHAT_CHANNEL_SECRET": "${SMALLCHAT_CHANNEL_SECRET}" }
+    }
+  }
+}
+```
+
+or `--http-bridge-secret-file ~/.smallchat/channel-secret` (mode 0600). The
+secret must be at least 16 characters. A bridge with no credential no
+longer starts. Clients keep sending `X-Channel-Secret: <secret>` or
+`Authorization: Bearer <secret>` to `POST /event`, so stenographer's
+`--objection-channel` and the Swift messenger need no change.
+
+**Sender gating uses the credential's identity.** The body `sender` field
+is ignored. With only the shared secret, every request is the identity
+`bridge` (rename it with `--http-bridge-secret-identity`). To gate
+individual senders, give each one a token:
+
+```bash
+echo '{"alice@corp.example": "<long random token>"}' > ~/.smallchat/channel-tokens.json
+chmod 600 ~/.smallchat/channel-tokens.json
+smallchat channel --name ops --http-bridge \
+  --http-bridge-tokens-file ~/.smallchat/channel-tokens.json \
+  --sender-allowlist alice@corp.example
+```
+
+**Body `channel` is ignored.** Events always carry `--name`. Run one
+channel server per channel name.
+
+**Permission relay needs approvers.** Add `--permission-approvers
+alice@corp.example` (programmatically: `permissionApprovers`). Verdicts
+from anyone else, or from anyone when the list is empty, get `403`. Before,
+a configured sender allowlist was enough. Read the approver from the
+`permission-verdict` event's `approver` field.
+
+**Requests must be JSON, from an allowed Host and Origin.** Send
+`Content-Type: application/json`. Bridges bound to `0.0.0.0` need
+`--http-bridge-allowed-host <name>`. Browser clients need
+`httpBridgeCorsOrigin`. `meta.source` is dropped (the tag's `source` is
+the channel name), so rename that key, e.g. to `origin`.
+
 ---
 
 # Migration Guide: 0.1.0 → 0.2.0
