@@ -202,6 +202,27 @@ describe('ToolCompiler — duplicate tools (SC-INF-08)', () => {
     await expect(compiler.compile([manifest])).rejects.toThrow(SelectorConflictError);
   });
 
+  it('rejects an alias phrase declared by two tools, naming the phrase and both tools', async () => {
+    const manifest: ProviderManifest = {
+      id: 'rtk',
+      name: 'RTK',
+      transportType: 'mcp',
+      tools: [
+        tool('rtk', 'rtk_cargo_test', 'Run cargo tests', { compilerHints: { aliases: ['run tests'] } }),
+        tool('rtk', 'rtk_npm_test', 'Run npm tests', { compilerHints: { aliases: ['Run  Tests'] } }),
+      ],
+    };
+    for (const options of [{}, { allowDuplicates: true }]) {
+      const compiler = new ToolCompiler(new LocalEmbedder(64), new MemoryVectorIndex(), options);
+      const error = await compiler.compile([manifest]).catch(e => e);
+      expect(error).toBeInstanceOf(SelectorConflictError);
+      expect(error.message).toBe(
+        'Alias "Run  Tests" of rtk/rtk_npm_test is also an alias of rtk/rtk_cargo_test ("run tests"). ' +
+        'An alias phrase can belong to only one tool; remove it from one of them.',
+      );
+    }
+  });
+
   it('never reports a merge count for distinct tools', async () => {
     const compiler = createCompiler();
     const result = await compiler.compile([githubManifest, slackManifest]);

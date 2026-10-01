@@ -42,6 +42,14 @@ Tools were previously merged silently (one of each pair was lost).
 `CompilerOptions.deduplicationThreshold` is now `duplicateThreshold`
 (the old name still works), and `CompilationResult.mergedCount` is gone.
 
+**An alias phrase belongs to one tool.** Two tools that declare the same
+`aliases` phrase (compared after NFKC, case and whitespace normalization),
+in their manifests or through smallchat.json `toolHints`, are a compile
+error (`SelectorConflictError` naming the phrase and both tools), even with
+`--allow-duplicates`. In 0.x both alias selectors were kept and the phrase
+tied between the tools. Keep the phrase on the tool it means, or make the
+phrases specific (`run cargo tests`, `run npm tests`).
+
 **ONNX is required for the default compile.** If the model cannot be
 loaded, `compile` fails instead of silently producing hash vectors. Fix the
 install (`smallchat doctor`) or compile with `--embedder hash` explicitly.

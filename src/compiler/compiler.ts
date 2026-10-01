@@ -25,6 +25,7 @@ import type { ManifestCompilerConfig, SmallChatManifest } from '../core/manifest
 import { AppCompiler } from '../app/app-compiler.js';
 import { getTransport } from '../mcp/transport.js';
 import { toolId } from '../core/tool-id.js';
+import { normalizePinPhrase } from '../core/intent-pin.js';
 import { createSchemaConstraints } from '../core/argument-validator.js';
 
 /**
@@ -183,6 +184,8 @@ export class ToolCompiler {
     const toolIds: Map<ParsedTool, string> = new Map();
     const seenToolIds: Set<string> = new Set();
     const selectorOwners: Map<string, string> = new Map(); // canonical → tool id
+    // normalized alias phrase → the tool that declared it, and its spelling
+    const aliasOwners: Map<string, { id: string; alias: string }> = new Map();
     const toolRefs: CompiledToolRef[] = [];
 
     const claim = (canonical: string, id: string, embedding: Float32Array): ToolSelector => {
@@ -238,6 +241,17 @@ export class ToolCompiler {
       // Process aliases — each alias gets its own selector pointing to the same tool
       const aliases: ToolSelector[] = [];
       for (const alias of new Set(hints?.aliases ?? [])) {
+        // One phrase, one tool: two tools sharing an alias would embed it
+        // identically and tie on every intent near it.
+        const phrase = normalizePinPhrase(alias);
+        const other = aliasOwners.get(phrase);
+        if (other !== undefined && other.id !== id) {
+          throw new SelectorConflictError(
+            `Alias "${alias}" of ${id} is also an alias of ${other.id} ("${other.alias}"). ` +
+            'An alias phrase can belong to only one tool; remove it from one of them.',
+          );
+        }
+        aliasOwners.set(phrase, { id, alias });
         const aliasEmbedding = await this.embedder.embed(alias);
         const aliasCanonical = `${canonical}~alias~${alias.replace(/\s+/g, '_')}`;
         aliases.push(claim(aliasCanonical, id, aliasEmbedding));
