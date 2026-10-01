@@ -7,6 +7,12 @@
  *   npx tsx bench/run.ts --consistency
  *   npx tsx bench/run.ts --difficulty hard
  *   npx tsx bench/run.ts --explain weather_simple
+ *   npx tsx bench/run.ts --json
+ *
+ * The smallchat runner is the real runtime (runners/smallchat.ts); the
+ * embedding-only baseline uses the same ONNX embedder. Exits 1 when the
+ * smallchat runtime falls below the floors in bench/floors.json (the same
+ * check `npm test` runs).
  */
 
 import { readFileSync } from 'node:fs';
@@ -19,6 +25,7 @@ import { KeywordBaseline } from './baselines/keyword.js';
 import { EmbeddingBaseline } from './baselines/embedding.js';
 import { LLMBaseline } from './baselines/llm.js';
 import { SmallchatRunner } from './runners/smallchat.js';
+import { createEmbedder } from '../src/artifact/embedder.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -27,12 +34,14 @@ async function main() {
   const doConsistency = args.includes('--consistency');
   const explainId = args.find((_, i) => args[i - 1] === '--explain');
   const difficultyArg = args.find((_, i) => args[i - 1] === '--difficulty') as Difficulty | undefined;
+  const asJson = args.includes('--json');
+  const embedder = await createEmbedder();
 
   // Load data
   const tools: BenchTool[] = JSON.parse(readFileSync(resolve(__dirname, 'tools.json'), 'utf-8'));
   const dataset: BenchCase[] = JSON.parse(readFileSync(resolve(__dirname, 'dataset.json'), 'utf-8'));
 
-  console.log(`Loaded ${tools.length} tools, ${dataset.length} test cases`);
+  if (!asJson) console.log(`Loaded ${tools.length} tools, ${dataset.length} test cases`);
 
   // Explain mode
   if (explainId) {
@@ -46,9 +55,9 @@ async function main() {
 
     const runners = [
       new KeywordBaseline(),
-      new EmbeddingBaseline(),
+      new EmbeddingBaseline(embedder),
       new LLMBaseline(0),
-      new SmallchatRunner(),
+      new SmallchatRunner({ embedder }),
     ];
 
     for (const runner of runners) {
@@ -73,9 +82,9 @@ async function main() {
   // Full benchmark
   const runners = [
     new KeywordBaseline(),
-    new EmbeddingBaseline(),
+    new EmbeddingBaseline(embedder),
     new LLMBaseline(0.1),
-    new SmallchatRunner(),
+    new SmallchatRunner({ embedder }),
   ];
 
   const metrics = await runBenchmark(tools, dataset, runners, {
@@ -84,13 +93,23 @@ async function main() {
     difficulties: difficultyArg ? [difficultyArg] : undefined,
   });
 
-  console.log(formatResults(metrics));
+  if (asJson) {
+    console.log(JSON.stringify(metrics.map(({ cases: _cases, ...summary }) => summary), null, 2));
+  } else {
+    console.log(formatResults(metrics));
+  }
 
-  // Exit with non-zero if smallchat didn't beat keyword
-  const keyword = metrics.find(m => m.method === 'keyword')!;
+  // Regression gate: the runtime must not fall below its recorded floors.
+  const floors = JSON.parse(readFileSync(resolve(__dirname, 'floors.json'), 'utf-8')) as {
+    smallchat: { accuracyTop1: number; accuracyTop3: number; maxResolvedWrongRate: number };
+  };
   const smallchat = metrics.find(m => m.method === 'smallchat')!;
-  if (smallchat.acceptableHitRate < keyword.acceptableHitRate) {
-    console.error('\n⚠ smallchat did not outperform keyword baseline!');
+  const failures: string[] = [];
+  if (smallchat.accuracyTop1 < floors.smallchat.accuracyTop1) failures.push(`top-1 ${smallchat.accuracyTop1.toFixed(3)} < ${floors.smallchat.accuracyTop1}`);
+  if (smallchat.accuracyTop3 < floors.smallchat.accuracyTop3) failures.push(`top-3 ${smallchat.accuracyTop3.toFixed(3)} < ${floors.smallchat.accuracyTop3}`);
+  if ((smallchat.resolvedWrongRate ?? 0) > floors.smallchat.maxResolvedWrongRate) failures.push(`wrong-tool rate ${smallchat.resolvedWrongRate!.toFixed(3)} > ${floors.smallchat.maxResolvedWrongRate}`);
+  if (failures.length > 0 && !difficultyArg) {
+    console.error(`\nsmallchat regressed below bench/floors.json: ${failures.join('; ')}`);
     process.exit(1);
   }
 }

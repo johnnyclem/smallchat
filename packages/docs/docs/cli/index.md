@@ -33,6 +33,8 @@ smallchat <command> [options]
 | [`compile`](./compile) | Compile tool manifests to a dispatch artifact |
 | [`inspect`](./inspect) | Inspect a compiled artifact |
 | [`resolve`](./resolve) | Test dispatch resolution against an artifact |
+| [`explain`](./explain) | Explain a resolution: candidates, tiers, policy verdicts, proof digest |
+| [`replay`](./replay) | Check golden dispatch traces or a decision log against an artifact (exit 0/1/2) |
 | [`serve`](./serve) | Start a MCP 2025-11-25 compliant HTTP server |
 
 ## Global options

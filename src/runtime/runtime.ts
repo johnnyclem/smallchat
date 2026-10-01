@@ -17,6 +17,10 @@ import type { IntentPin } from '../core/intent-pin.js';
 import type { ArgumentCoercion } from '../core/argument-validator.js';
 import type { ManifestPolicyConfig } from '../core/manifest.js';
 import { DEFAULT_THRESHOLDS } from '../core/confidence.js';
+import { DecisionLog } from './decision-log.js';
+import type { DecisionLogOptions } from './decision-log.js';
+import { explainResolution } from './explain.js';
+import type { Explanation } from './explain.js';
 
 /**
  * ToolRuntime — the top-level runtime that manages everything.
@@ -72,6 +76,7 @@ export class ToolRuntime {
       rateLimiter: options?.rateLimiter,
       maxDecompositionDepth: options?.maxDecompositionDepth,
       maxSubDispatches: options?.maxSubDispatches,
+      decisionLog: openDecisionLog(options?.decisionLog),
     };
 
     let intentPins: IntentPinRegistry | undefined;
@@ -119,6 +124,11 @@ export class ToolRuntime {
   /** Whether strict mode is enabled */
   get strict(): boolean {
     return this.context.strict;
+  }
+
+  /** The decision log every resolution and dispatch is appended to, or null (RuntimeOptions.decisionLog) */
+  get decisionLog(): DecisionLog | null {
+    return this.context.decisionLog;
   }
 
   /**
@@ -276,6 +286,17 @@ export class ToolRuntime {
    */
   resolve(intent: string, options?: ResolveOptions): Promise<Resolution> {
     return resolveIntent(this.context, intent, options);
+  }
+
+  /**
+   * Resolve an intent (as resolve(), learning off) and explain the
+   * decision: every candidate with its tier, annotations and the dispatch
+   * policy's verdict on running it without the caller choosing, plus the
+   * proof. Nothing executes. See runtime/explain.ts.
+   */
+  async explain(intent: string, options?: Omit<ResolveOptions, 'learn'>): Promise<Explanation> {
+    const resolution = await resolveIntent(this.context, intent, { ...options, learn: false });
+    return explainResolution(this.context, resolution);
   }
 
   /**
@@ -610,6 +631,19 @@ export interface RuntimeOptions {
   argumentCoercion?: ArgumentCoercion;
   /** contentHash of the artifact the tools came from (recorded in proofs) */
   artifactHash?: string;
+  /**
+   * Durable decision log: a file path, options, or an open DecisionLog.
+   * Every resolve(), dispatch and dispatch by id appends one hash-chained
+   * JSONL line before anything executes (runtime/decision-log.ts). Off when
+   * unset.
+   */
+  decisionLog?: string | DecisionLogOptions | DecisionLog;
+}
+
+function openDecisionLog(option: RuntimeOptions['decisionLog']): DecisionLog | undefined {
+  if (option === undefined) return undefined;
+  if (option instanceof DecisionLog) return option;
+  return new DecisionLog(typeof option === 'string' ? { path: option } : option);
 }
 
 /**

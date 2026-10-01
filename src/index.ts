@@ -160,6 +160,53 @@ export type {
   DecisionCode,
 } from './core/proof.js';
 
+// Replay, decision log and explain — exact by construction, and checkable
+export {
+  DecisionLog,
+  DecisionLogError,
+  DECISION_LOG_SCHEMA,
+  INTENT_DIGEST_DOMAIN,
+  intentDigest,
+  decisionRecordHash,
+  verifyDecisionLog,
+  readDecisionLog,
+  replayDecisionLog,
+} from './runtime/decision-log.js';
+export type {
+  DecisionRecord,
+  DecisionInput,
+  DecisionKind,
+  DecisionExecution,
+  DecisionLogOptions,
+  DecisionLogVerification,
+  DecisionReplayEntry,
+  DecisionReplayReport,
+} from './runtime/decision-log.js';
+export {
+  TraceFormatError,
+  REPLAY_EXIT,
+  parseTraceFile,
+  findTraceFiles,
+  loadTraceFiles,
+  checkExpectation,
+  replayTraces,
+  replayPaths,
+  formatReplayReport,
+  formatDecisionLogReplay,
+} from './runtime/replay.js';
+export type {
+  TraceCase,
+  TraceExpectation,
+  LoadedTraceCase,
+  TraceActual,
+  TraceCaseResult,
+  ReplayReport,
+  ReplayRun,
+  DecisionLogReplay,
+} from './runtime/replay.js';
+export { explainResolution, formatExplanation } from './runtime/explain.js';
+export type { Explanation, ExplainedCandidate } from './runtime/explain.js';
+
 // Dispatch policy, guards, argument validation and the canonical call digest
 export { evaluateDispatchPolicy, isDestructive } from './runtime/policy.js';
 export type { DispatchPolicyOptions, PinState, PolicyCode, PolicyInput, PolicyVerdict } from './runtime/policy.js';
@@ -204,7 +251,7 @@ export { DispatchObserver } from './runtime/observer.js';
 export type { DispatchRecord, CorrectionSignal, SchemaRejection, NegativeExample, DispatchFeedback, ObserverOptions } from './runtime/observer.js';
 
 // Compiler
-export { ToolCompiler, DuplicateToolError, SelectorConflictError } from './compiler/compiler.js';
+export { ToolCompiler, DuplicateToolError, SelectorConflictError, toolEmbeddingText } from './compiler/compiler.js';
 export type { CompilerOptions } from './compiler/compiler.js';
 export { parseMCPManifest, parseOpenAPISpec, parseRawSchema } from './compiler/parser.js';
 export type { ParsedTool } from './compiler/parser.js';
@@ -238,6 +285,8 @@ export type { MCPPrompt, MCPPromptArgument, MCPPromptMessage, MCPPromptContent, 
 export { RateLimiter } from './mcp/rate-limiter.js';
 export { AuditLog } from './mcp/audit-log.js';
 export type { AuditEntry } from './mcp/audit-log.js';
+export { diagnoseArtifact, findNearDuplicates, formatDiagnosis } from './artifact/doctor.js';
+export type { ArtifactDiagnosis, CheckStatus, DiagnoseOptions, DoctorCheck, NearDuplicate } from './artifact/doctor.js';
 export { loadRuntime, buildToolList, formatContent, findManifests } from './mcp/artifact.js';
 export type { LoadRuntimeOptions, LoadedRuntime } from './mcp/artifact.js';
 export { SqliteArtifactStore } from './mcp/sqlite-artifact.js';

@@ -28,6 +28,15 @@ import { toolId } from '../core/tool-id.js';
 import { createSchemaConstraints } from '../core/argument-validator.js';
 
 /**
+ * The text a tool's primary selector embeds: `<name>: <description>`, plus
+ * the selectorHint compiler hint when there is one. `smallchat doctor`
+ * re-embeds it to check that an artifact's vectors reproduce.
+ */
+export function toolEmbeddingText(name: string, description: string, selectorHint?: string): string {
+  return selectorHint ? `${name}: ${description} ${selectorHint}` : `${name}: ${description}`;
+}
+
+/**
  * Thrown by compile() when two distinct tools embed at or above the
  * duplicate threshold. The compiler never merges tools; it refuses to build
  * a toolkit whose intents could not tell them apart, unless the caller
@@ -204,10 +213,7 @@ export class ToolCompiler {
       seenToolIds.add(id);
 
       // Build embedding text — selectorHint steers the vector
-      let embeddingText = `${tool.name}: ${tool.description}`;
-      if (hints?.selectorHint) {
-        embeddingText += ` ${hints.selectorHint}`;
-      }
+      const embeddingText = toolEmbeddingText(tool.name, tool.description, hints?.selectorHint);
 
       // Determine canonical — pinSelector overrides the default
       const namespace = tool.providerHints?.namespace;

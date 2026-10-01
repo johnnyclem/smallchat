@@ -1,0 +1,9 @@
+# Golden dispatch traces: files (filesystem, dropbox, google-drive, rtk).
+{"intent": "list files in a directory", "expect": {"outcome": "needs-disambiguation", "candidates": ["rtk/rtk_ls", "filesystem/list_directory"]}}
+{"name": "same tool name in two providers", "intent": "read file contents", "expect": {"outcome": "needs-disambiguation", "candidates": ["filesystem/read_file", "google-drive/read_file"]}}
+{"intent": "delete a file", "expect": {"outcome": "needs-disambiguation", "candidates": ["dropbox/delete_file"]}}
+{"intent": "move a file", "expect": {"outcome": "needs-disambiguation", "candidates": ["filesystem/move_file", "dropbox/move_file"]}}
+{"intent": "upload a file to dropbox", "expect": {"outcome": "needs-disambiguation", "candidates": ["dropbox/write_file"]}}
+{"name": "an alias match is EXACT", "intent": "search files", "expect": {"toolId": "rtk/rtk_grep", "tier": "exact"}}
+{"intent": "xyzzy plugh", "expect": {"outcome": "unresolved"}}
+{"intent": "make me a sandwich", "expect": {"outcome": "unresolved"}}

@@ -1,0 +1,10 @@
+# Golden dispatch traces: messaging, web, browser, maps, docs (slack, brave-search, fetch, puppeteer, google-maps, notion, atlassian).
+{"intent": "send a slack message", "expect": {"toolId": "slack/send_message", "tier": "high"}}
+{"intent": "post a message to a slack channel", "expect": {"toolId": "slack/send_message", "tier": "high"}}
+{"intent": "search the web with brave", "expect": {"outcome": "needs-disambiguation", "candidates": ["brave-search/brave_web_search", "brave-search/brave_local_search"]}}
+{"intent": "search the web", "expect": {"outcome": "unresolved"}}
+{"intent": "fetch a url", "expect": {"outcome": "needs-disambiguation", "candidates": ["fetch/fetch"]}}
+{"intent": "take a screenshot of the page", "expect": {"outcome": "needs-disambiguation", "candidates": ["puppeteer/puppeteer_screenshot"]}}
+{"intent": "geocode an address", "expect": {"outcome": "needs-disambiguation", "candidates": ["google-maps/maps_geocode", "google-maps/maps_reverse_geocode"]}}
+{"intent": "search notion pages", "expect": {"toolId": "notion/search", "tier": "high"}}
+{"intent": "search confluence pages", "expect": {"outcome": "needs-disambiguation", "candidates": ["atlassian/confluence_search"]}}

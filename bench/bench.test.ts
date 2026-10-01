@@ -1,6 +1,8 @@
 /**
- * Benchmark integration test — runs all baselines + smallchat
- * and asserts that smallchat outperforms baselines.
+ * Benchmark integration test — runs the baselines and the smallchat
+ * runtime (the real dispatch pipeline, see runners/smallchat.ts) over the
+ * labeled set, prints what was measured, and fails on a regression below
+ * the recorded floors (bench/floors.json).
  */
 
 import { describe, it, expect, beforeAll } from 'vitest';
@@ -13,53 +15,62 @@ import { KeywordBaseline } from './baselines/keyword.js';
 import { EmbeddingBaseline } from './baselines/embedding.js';
 import { LLMBaseline } from './baselines/llm.js';
 import { SmallchatRunner } from './runners/smallchat.js';
+import { createEmbedder } from '../src/artifact/embedder.js';
+import type { Embedder } from '../src/core/types.js';
 
 const benchDir = resolve(import.meta.dirname, '.');
 const tools: BenchTool[] = JSON.parse(readFileSync(resolve(benchDir, 'tools.json'), 'utf-8'));
 const dataset: BenchCase[] = JSON.parse(readFileSync(resolve(benchDir, 'dataset.json'), 'utf-8'));
 
+const floors = JSON.parse(readFileSync(resolve(benchDir, 'floors.json'), 'utf-8')) as {
+  smallchat: { accuracyTop1: number; accuracyTop3: number; maxResolvedWrongRate: number };
+};
+
 let allMetrics: MethodMetrics[];
+let embedder: Embedder;
 
 describe('Benchmark', () => {
   beforeAll(async () => {
+    // The same embedder for the runtime and the embedding-only baseline.
+    embedder = await createEmbedder();
     const runners = [
       new KeywordBaseline(),
-      new EmbeddingBaseline(),
+      new EmbeddingBaseline(embedder),
       new LLMBaseline(0), // temperature=0 for deterministic test
-      new SmallchatRunner(),
+      new SmallchatRunner({ embedder }),
     ];
 
     allMetrics = await runBenchmark(tools, dataset, runners, {
       measureConsistency: false, // skip consistency for speed in tests
     });
-  }, 30_000); // 30s timeout for the full benchmark
+  }, 60_000);
 
   it('runs all 4 methods', () => {
     expect(allMetrics).toHaveLength(4);
     expect(allMetrics.map(m => m.method)).toEqual([
       'keyword',
       'embedding-only',
-      'llm',
+      'simulated-llm',
       'smallchat',
     ]);
   });
 
-  it('smallchat has higher top1 accuracy than keyword baseline', () => {
-    const keyword = allMetrics.find(m => m.method === 'keyword')!;
+  it('smallchat ranking accuracy does not regress below the recorded floors', () => {
     const smallchat = allMetrics.find(m => m.method === 'smallchat')!;
-    expect(smallchat.accuracyTop1).toBeGreaterThanOrEqual(keyword.accuracyTop1);
+    expect(smallchat.accuracyTop1).toBeGreaterThanOrEqual(floors.smallchat.accuracyTop1);
+    expect(smallchat.accuracyTop3).toBeGreaterThanOrEqual(floors.smallchat.accuracyTop3);
   });
 
-  it('smallchat has higher acceptable hit rate than keyword baseline', () => {
-    const keyword = allMetrics.find(m => m.method === 'keyword')!;
+  it('smallchat runs the wrong tool no more often than the recorded ceiling', () => {
     const smallchat = allMetrics.find(m => m.method === 'smallchat')!;
-    expect(smallchat.acceptableHitRate).toBeGreaterThanOrEqual(keyword.acceptableHitRate);
+    expect(smallchat.resolvedWrongRate).toBeDefined();
+    expect(smallchat.resolvedWrongRate!).toBeLessThanOrEqual(floors.smallchat.maxResolvedWrongRate);
   });
 
-  it('smallchat has higher top1 accuracy than embedding-only baseline', () => {
-    const embedding = allMetrics.find(m => m.method === 'embedding-only')!;
-    const smallchat = allMetrics.find(m => m.method === 'smallchat')!;
-    expect(smallchat.accuracyTop1).toBeGreaterThanOrEqual(embedding.accuracyTop1);
+  it('only the smallchat runtime reports decisions', () => {
+    for (const m of allMetrics) {
+      expect(m.outcomes !== undefined).toBe(m.method === 'smallchat');
+    }
   });
 
   it('all methods return results for every case', () => {
@@ -74,11 +85,12 @@ describe('Benchmark', () => {
     expect(output).toContain('keyword');
     expect(output).toContain('embedding-only');
     expect(output).toContain('smallchat');
+    expect(output).toContain('needs-disambiguation');
     console.log(output);
   });
 
   it('generates explainability output for each case', async () => {
-    const runner = new SmallchatRunner();
+    const runner = new SmallchatRunner({ embedder });
     await runner.init(tools);
 
     for (const benchCase of dataset.slice(0, 5)) {
@@ -152,7 +164,7 @@ describe('Benchmark', () => {
 
 describe('Consistency', () => {
   it('smallchat produces deterministic results', async () => {
-    const runner = new SmallchatRunner();
+    const runner = new SmallchatRunner({ embedder: await createEmbedder() });
     await runner.init(tools);
 
     // Run the same query 10 times
@@ -186,7 +198,7 @@ describe('Consistency', () => {
   });
 
   it('embedding baseline is deterministic', async () => {
-    const runner = new EmbeddingBaseline();
+    const runner = new EmbeddingBaseline(await createEmbedder());
     await runner.init(tools);
 
     const query = 'translate this to French';

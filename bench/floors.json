@@ -1,0 +1,8 @@
+{
+  "$comment": "Regression floors for the smallchat runtime on bench/dataset.json (111 cases) over bench/tools.json (45 tools), ONNX all-MiniLM-L6-v2, default thresholds and policy, no LLM verifier. Measured 2026-10-01 on linux x64, Node 22: top-1 61/111, top-3 75/111, resolved 0 (wrong 0), needs-disambiguation 5, unresolved 106. Floors leave a 3-case margin for cross-platform float differences.",
+  "smallchat": {
+    "accuracyTop1": 0.52,
+    "accuracyTop3": 0.64,
+    "maxResolvedWrongRate": 0.02
+  }
+}

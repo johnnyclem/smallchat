@@ -1,0 +1,11 @@
+# Golden dispatch traces: payments, databases, storage, time, memory (stripe, mongodb, postgres, sqlite, redis, aws, time, memory).
+{"intent": "list stripe customers", "expect": {"toolId": "stripe/list_customers", "tier": "high"}}
+{"intent": "refund a stripe payment", "expect": {"outcome": "unresolved"}}
+{"intent": "find documents in a mongodb collection", "expect": {"toolId": "mongodb/find", "tier": "exact"}}
+{"name": "same tool name in two databases", "intent": "list tables in postgres", "expect": {"outcome": "needs-disambiguation", "candidates": ["postgres/list_tables", "sqlite/list_tables"]}}
+{"intent": "run a sql query on postgres", "expect": {"outcome": "needs-disambiguation", "candidates": ["postgres/query"]}}
+{"intent": "store a value in redis", "expect": {"outcome": "needs-disambiguation", "candidates": ["redis/set", "redis/get"]}}
+{"intent": "list s3 buckets", "expect": {"outcome": "needs-disambiguation", "candidates": ["aws/s3_list_buckets", "aws/s3_list_objects"]}}
+{"intent": "convert time between timezones", "expect": {"toolId": "time/convert_time", "tier": "high"}}
+{"intent": "get the current time", "expect": {"outcome": "needs-disambiguation", "candidates": ["time/get_current_time"]}}
+{"intent": "create an entity in the knowledge graph", "expect": {"toolId": "memory/create_entities", "tier": "high"}}

@@ -200,6 +200,41 @@ still win.
 **ONNX vectors changed slightly.** Each text is embedded alone without
 padding; recompile ONNX artifacts with 1.0 (required anyway).
 
+## Replay, explain, decision log, doctor and the benchmark
+
+**`smallchat doctor` checks your artifact.** When `./tools.toolkit.json`
+exists (or `--artifact <path>` names one), doctor verifies it against its
+embedder and index and exits 1 when a check fails — a pre-1.0 or tampered
+artifact, an embedder that cannot be built or whose vectors do not
+reproduce on this machine, or a vector index that does not hold the
+artifact's selectors. Recompile with 1.0 (`smallchat compile`) to fix it;
+near-duplicate tools and shared tool names are warnings only.
+
+**`smallchat resolve` prints the runtime's decision.** The "✓ Unambiguous"
+/ "? Ambiguous" lines (a 90% similarity rule of thumb the runtime never
+used) are replaced by `Decision: <outcome> [→ <tool id>] (tier, decision
+code)` and the proof digest — the same resolution `serve` and `dispatch`
+make, under the nearest smallchat.json policy. Scripts that grepped for
+"Unambiguous" should check for `Decision: resolved`, or use `smallchat
+explain --json`.
+
+**Golden traces instead of hand checks.** Record what each important
+intent must resolve to in a JSONL file and run `smallchat replay
+tools.toolkit.json traces/` in CI (exit 0 pass, 1 mismatch, 2 could not
+run); see `examples/traces/` and `docs/REFERENCE.md`.
+
+**Decision log (opt-in).** Set `RuntimeOptions.decisionLog` (a path, options
+or a `DecisionLog`) or pass `--decision-log <file>` to `serve`. Lines are
+written before a tool runs; a write failure throws `DecisionLogError` and
+nothing runs, so put the file on a disk you can append to. One writer per
+file.
+
+**Benchmark.** The bench `smallchat` runner now runs the real runtime, so
+its numbers dropped to what the runtime actually does (see
+`docs/REFERENCE.md#benchmarks`); the `llm` runner is renamed
+`simulated-llm`, `EmbeddingBaseline` takes the embedder to use, and
+`bench/floors.json` holds the regression floors `npm test` enforces.
+
 ---
 
 # Migration Guide: 0.1.0 → 0.2.0

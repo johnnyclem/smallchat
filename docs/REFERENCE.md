@@ -193,6 +193,48 @@ golden vectors in `spec/call-digest/vectors.json`). `proofDigest` covers the
 whole proof except its timings, so the same decision made from the same
 inputs has the same digest.
 
+## Replay, Explain and the Decision Log
+
+Three tools make a decision checkable after the fact (`src/runtime/replay.ts`,
+`src/runtime/explain.ts`, `src/runtime/decision-log.ts`):
+
+- **`smallchat replay <artifact> <traces…>`** runs golden traces — JSONL or
+  JSON cases `{intent, args?, expect: {toolId, tier?} | {outcome:
+  "needs-disambiguation", candidates?} | {outcome: "unresolved"}}` — through
+  `runtime.resolve()` with learning off (nothing executes, nothing is cached,
+  the semantic map is read but never written; case order cannot change a
+  result) and exits 0 when every case passes, 1 on a mismatch, 2 when it
+  could not run. `examples/traces/` covers the example manifests; `npm run
+  test:traces` compiles them and replays the traces, and CI runs it. The
+  library API is `replayTraces(runtime, cases)` / `replayPaths(runtime, paths)`.
+- **`smallchat explain <artifact> <intent>`** (`runtime.explain(intent)`)
+  prints the candidate table — score, own-embedding similarity, tier,
+  source, MCP hints, and the dispatch policy's verdict on running each
+  candidate without the caller naming it — with the proof's steps and
+  `proofDigest`.
+- **Decision log** (`RuntimeOptions.decisionLog`, `serve --decision-log`,
+  `resolve --decision-log`, `explain --decision-log`): an append-only JSONL
+  file with one line per `resolve()`, intent dispatch and dispatch by id —
+  `{schema: "smallchat.decision.v1", seq, ts, kind, intent?, intentDigest,
+  principal, artifactHash, embedderFingerprint, outcome, decision, tier,
+  toolId, execution, callDigest, proofDigest, prevHash, hash}`. Raw arguments
+  are never written (the call digest binds them); `recordIntent: false` keeps
+  only the intent's digest. `seq` starts at 1, `prevHash` is the previous
+  line's `hash` (null on the first line), and `hash` = SHA-256 of the RFC 8785
+  canonical JSON of the line without `hash` — the same chain shape as the
+  suite's truth format. A dispatch's line is written before the tool runs;
+  if it cannot be written the call throws `DecisionLogError` and nothing
+  runs. `verifyDecisionLog(text)` finds the first edited, removed, reordered
+  or inserted line; the chain shows the file is internally consistent, not
+  that nobody rewrote all of it (keep the head hash elsewhere for that).
+  `smallchat replay <artifact> decisions.jsonl` verifies the chain and
+  re-resolves the logged intents: with the same artifact, embedder, policy
+  and learned state, each outcome, tool id and tier is reproduced, and pure
+  `resolve` lines reproduce their `proofDigest` exactly. Decisions that
+  rested on inputs the log does not hold (an LLM verifier's answer, a
+  decomposition, the rate limiter's window) are reported as skipped. One
+  writer per file.
+
 ## Selector Table: Tools vs. Intents
 
 `SelectorTable` interns two different things into the same table: compiled
@@ -354,9 +396,11 @@ await bridge.terminate();
 |---------|-------------|
 | `npx @smallchat/core compile` | Parse manifests, embed selectors, link dispatch tables → `.toolkit.json` |
 | `npx @smallchat/core serve` | Start MCP-compatible HTTP server with SSE streaming |
-| `npx @smallchat/core resolve` | Test dispatch resolution against a compiled artifact |
+| `npx @smallchat/core resolve` | Test dispatch resolution against a compiled artifact; prints the runtime's decision and proof digest |
+| `npx @smallchat/core explain` | Candidate table, tiers, policy verdicts and proof digest for one intent |
+| `npx @smallchat/core replay` | Check golden traces or a decision log against an artifact (exit 0 pass / 1 mismatch / 2 could not run) |
 | `npx @smallchat/core inspect` | Examine providers, selectors, and protocols in a compiled artifact |
-| `npx @smallchat/core doctor` | Check environment: Node version, ONNX model availability, dependencies |
+| `npx @smallchat/core doctor` | Check environment (ONNX model, dependencies) and, with `--artifact` (default `./tools.toolkit.json` when present), artifact ↔ embedder ↔ index compatibility and near-duplicate tools |
 | `npx @smallchat/core init` | Scaffold a new project from `basic`, `mcp-server`, or `agent` templates |
 | `npx @smallchat/core docs` | Generate Markdown documentation from a compiled artifact |
 | `npx @smallchat/core repl` | Interactive shell for testing resolution with `:help`, `:tools`, `:stats` |
@@ -383,18 +427,41 @@ A `full-pipeline-example/` shows how to compose multiple providers into a single
 
 ## Benchmarks
 
-The `bench/` directory contains a benchmarking suite with 700+ intent-to-tool test cases across easy, medium, and hard difficulty tiers, evaluated against 100+ tool definitions.
+`bench/` measures intent → tool selection on a labeled set:
+`bench/dataset.json` (111 queries, each with an expected tool and
+acceptable alternatives) over `bench/tools.json` (45 tools from 21
+providers; several providers share an operation such as `weather.get`).
 
-Four dispatch strategies are compared:
+The `smallchat` runner is the real runtime: the catalog is compiled in-process
+with the default embedder and every query goes through `runtime.resolve()`
+with learning off (`bench/runners/smallchat.ts`). It is scored two ways:
 
-| Strategy | Method |
-|----------|--------|
-| **Keyword** | Simple string matching baseline |
-| **Embedding-only** | Pure cosine similarity |
-| **LLM** | GPT-4 tool selection |
-| **smallchat** | Semantic dispatch with caching and fallback chains |
+- **Ranking** — top-1 / top-3: is the expected (or an acceptable) tool the
+  best, or among the three best, tools the runtime offers (its candidates,
+  or its refinement options when nothing reaches the LOW threshold)?
+- **Decisions** — what the runtime would do on its own: resolve to the right
+  tool, resolve to a wrong one, ask for disambiguation, or find nothing.
 
-Metrics include top-1 accuracy, top-5 accuracy, acceptable hit rate, and latency. Per-case breakdowns provide explainability for dispatch decisions.
+Measured 2026-10-01 on linux x64, Node 22, ONNX all-MiniLM-L6-v2, default
+thresholds and policy, no LLM verifier:
+
+| | smallchat runtime | embedding-only (same ONNX embedder) | keyword baseline |
+|---|---|---|---|
+| top-1 | 61/111 (55%) | 74/111 (67%) | 71/111 (64%) |
+| top-3 | 75/111 (68%) | 101/111 (91%) | 91/111 (82%) |
+| resolved to the right tool | 0 | — | — |
+| resolved to a wrong tool | 0 | — | — |
+| needs-disambiguation | 5 (4.5%) | — | — |
+| unresolved | 106 (95.5%) | — | — |
+
+On this set, with default thresholds and no LLM verifier, the runtime ran no
+tool on its own — right or wrong: query-to-description similarities mostly
+fall below LOW (0.60). Its ranking is below plain nearest-description search
+with the same embedder on this set. The `simulated-llm` runner is a
+heuristic stand-in (no model is called); its numbers say nothing about any
+LLM. `npm test` fails if the runtime falls below the floors in
+`bench/floors.json` (top-1 0.52, top-3 0.64, wrong-tool rate above 0.02);
+`npx tsx bench/run.ts` prints the full report.
 
 ## Concept Mapping
 
@@ -418,4 +485,5 @@ Metrics include top-1 accuracy, top-5 accuracy, acceptable hit rate, and latency
 ## Current Limitations
 
 - **No built-in LLM verifier**: below HIGH confidence, intent dispatch needs an `LLMClient` you supply; without one those matches return `needs-disambiguation`.
+- **Default thresholds refuse most natural-language queries** with all-MiniLM-L6-v2 (see Benchmarks); per-toolkit calibration is not built yet.
 - **JSON output**: Compiled artifacts are JSON. SQLite binary format planned for Phase 4.

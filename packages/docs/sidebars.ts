@@ -24,7 +24,7 @@ const sidebars: SidebarsConfig = {
     {
       type: 'category',
       label: 'CLI Reference',
-      items: ['cli/index', 'cli/compile', 'cli/inspect', 'cli/resolve', 'cli/serve'],
+      items: ['cli/index', 'cli/compile', 'cli/inspect', 'cli/resolve', 'cli/explain', 'cli/replay', 'cli/serve'],
     },
     {
       type: 'category',

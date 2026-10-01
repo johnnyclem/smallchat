@@ -74,6 +74,7 @@
     "build:all": "npm run build && npm run build:packages",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:traces": "node scripts/replay-example-traces.mjs",
     "lint": "tsc --noEmit",
     "dev": "tsc --watch",
     "docs:api": "typedoc --entryPoints src/index.ts --out docs/api --plugin typedoc-plugin-markdown",

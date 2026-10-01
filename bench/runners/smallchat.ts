@@ -1,324 +1,165 @@
 /**
- * Smallchat resolver runner — uses the full dispatch pipeline.
+ * Smallchat runner — the system under test is the real dispatch pipeline.
  *
- * This is the "system under test". It uses:
- *   1. Semantic similarity (embedding)
- *   2. Selector match bonus
- *   3. Argument shape scoring
- *   4. Provider bias detection
- *   5. Deterministic resolution (no LLM fallback)
+ * The bench catalog (tools.json) is turned into provider manifests, compiled
+ * in-process by loadRuntime() — the same compiler, artifact builder and
+ * runtime hydration `smallchat serve --source <manifest dir>` uses — with
+ * the default embedder (ONNX all-MiniLM-L6-v2) unless one is injected. Each
+ * query is answered by `runtime.resolve(query)` with learning off, so cases
+ * never influence each other and the order of cases does not matter.
  *
- * The resolver scoring algorithm combines these signals into a
- * single composite score that beats any one signal alone.
+ * The result carries the runtime's ranking (the tools it offers, best
+ * first: its eligible candidates, else its refinement options) and its
+ * decision: `outcome` is what the runtime would do on its own
+ * ('resolved' runs `chosen`; 'needs-disambiguation' and 'unresolved' run
+ * nothing). No keyword tables, provider signals or other dataset-specific
+ * scoring are involved.
  */
 
-import { HashEmbedder } from '../../src/embedding/hash-embedder.js';
-import { MemoryVectorIndex } from '../../src/embedding/memory-vector-index.js';
-import { SelectorTable } from '../../src/core/selector-table.js';
-import { ToolClass } from '../../src/core/tool-class.js';
-import type { ToolIMP } from '../../src/core/types.js';
-import type { BenchTool, Runner, RunnerResult, ResolvedResult } from './types.js';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import type { Embedder, JSONSchemaType, ProviderManifest, ToolDefinition } from '../../src/core/types.js';
+import { createEmbedder } from '../../src/artifact/embedder.js';
+import { loadRuntime } from '../../src/mcp/artifact.js';
+import type { ToolRuntime, RuntimeOptions } from '../../src/runtime/runtime.js';
+import type { Resolution } from '../../src/runtime/dispatch.js';
+import type { BenchTool, Runner, RunnerResult } from './types.js';
 
-/** Weights for the composite scoring algorithm */
-const WEIGHTS = {
-  semantic: 0.30,
-  descriptionOverlap: 0.50,
-  selectorExact: 0.20,
-  selectorPartial: 0.10,
-  argShapeMatch: 0.20,
-  argShapePartial: 0.10,
-  argShapeMismatch: -0.20,
-  providerBias: 0.25,
-  tagBoost: 0.10,
-  missingRequiredArg: -0.30,
-};
-
-/** Provider signal patterns — maps query keywords to provider names */
-const PROVIDER_SIGNALS: Record<string, string[]> = {
-  google: ['google', 'gmail', 'gcp', 'gcs', 'google cloud'],
-  outlook: ['outlook', 'microsoft', 'office 365', 'o365'],
-  aws: ['aws', 'amazon', 's3'],
-  noaa: ['noaa', 'official us', 'government', 'us weather', 'us report'],
-  slack: ['slack'],
-  teams: ['teams', 'microsoft teams'],
-  deepl: ['deepl', 'professional', 'high-quality', 'formal'],
-  bing: ['bing'],
-  github: ['github'],
-  postgres: ['postgres', 'postgresql', 'sql'],
-  mongodb: ['mongo', 'mongodb', 'nosql', 'collection'],
-  coingecko: ['bitcoin', 'btc', 'eth', 'crypto', 'cryptocurrency', 'defi', 'dogecoin', 'solana', 'doge'],
-  alphavantage: ['stock', 'ticker', 'equity', 'aapl', 'tsla', 'nasdaq', 'nyse'],
-  firebase: ['push notification', 'push', 'mobile notification'],
-  twilio: ['sms', 'text message', 'phone number', 'text the'],
-  darksky: ['hyperlocal', 'minute-by-minute', 'precipitation', 'rain in the next', 'latitude', 'longitude', 'lat', 'lon', 'coords', 'coordinate'],
-  exchangerate: ['exchange rate', 'forex', 'currency', 'usd to', 'eur to', 'convert currency'],
-};
-
-/** Quality hint patterns — maps quality descriptors to provider names */
-const QUALITY_SIGNALS: Record<string, string[]> = {
-  deepl: ['high-quality', 'professional', 'formal', 'formality'],
-  noaa: ['official', 'authoritative', 'government'],
-  darksky: ['hyperlocal', 'minute-by-minute', 'precise', 'next 10 minutes'],
-};
+export interface SmallchatRunnerOptions {
+  /** Embedder to compile and resolve with (default: the compile default, ONNX) */
+  embedder?: Embedder;
+  /** Runtime options (thresholds, policy, LLM client); default: the runtime defaults */
+  runtimeOptions?: RuntimeOptions;
+}
 
 export class SmallchatRunner implements Runner {
   name = 'smallchat';
-  private tools: BenchTool[] = [];
-  private embedder = new HashEmbedder(384);
-  private vectorIndex = new MemoryVectorIndex();
-  private selectorTable: SelectorTable;
-  private toolById = new Map<string, BenchTool>();
-  private toolsBySelector = new Map<string, BenchTool[]>();
+  /** The runtime under test (set by init) */
+  runtime: ToolRuntime | null = null;
+  /** Number of near-duplicate tool pairs the compiler reported */
+  duplicateCount = 0;
 
-  constructor() {
-    this.selectorTable = new SelectorTable(this.vectorIndex, this.embedder);
+  private readonly options: SmallchatRunnerOptions;
+  private readonly benchIdByToolId = new Map<string, string>();
+
+  constructor(options: SmallchatRunnerOptions = {}) {
+    this.options = options;
   }
 
   async init(tools: BenchTool[]): Promise<void> {
-    this.tools = tools;
+    const manifests = benchManifests(tools);
+    for (const tool of tools) this.benchIdByToolId.set(canonicalIdOf(tool), tool.id);
 
-    for (const tool of tools) {
-      this.toolById.set(tool.id, tool);
-
-      // Group by selector
-      const group = this.toolsBySelector.get(tool.selector) ?? [];
-      group.push(tool);
-      this.toolsBySelector.set(tool.selector, group);
-
-      // Index by description in the vector index
-      const vector = await this.embedder.embed(tool.description);
-      this.vectorIndex.insert(tool.id, vector);
-
-      // Also intern the selector
-      const selectorVector = await this.embedder.embed(tool.selector.replace(/\./g, ' '));
-      await this.selectorTable.intern(selectorVector, tool.selector);
+    const embedder = this.options.embedder ?? await createEmbedder();
+    const dir = mkdtempSync(join(tmpdir(), 'smallchat-bench-'));
+    try {
+      for (const manifest of manifests) {
+        writeFileSync(join(dir, `${manifest.id}-manifest.json`), JSON.stringify(manifest));
+      }
+      // Same-selector tools of different providers are deliberately close;
+      // they are kept distinct (never merged) and reported.
+      const loaded = await loadRuntime(dir, {
+        embedder,
+        runtimeOptions: this.options.runtimeOptions,
+        compilerOptions: { allowDuplicates: true },
+      });
+      this.runtime = loaded.runtime;
+      this.duplicateCount = loaded.artifact.duplicates.length;
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   }
 
+  /** The bench id (tools.json `id`) of a canonical tool id. */
+  benchIdOf(toolId: string): string {
+    return this.benchIdByToolId.get(toolId) ?? toolId;
+  }
+
   async resolve(query: string): Promise<RunnerResult> {
+    if (!this.runtime) throw new Error('SmallchatRunner.init() was not called');
     const start = performance.now();
-    const lowerQuery = query.toLowerCase();
-
-    // Step 1: Semantic similarity — get scores for ALL tools
-    const queryVector = await this.embedder.embed(query);
-    const matches = await this.vectorIndex.search(queryVector, this.tools.length, 0.0);
-    const semanticById = new Map<string, number>();
-    for (const match of matches) {
-      semanticById.set(match.id, 1 - match.distance);
-    }
-
-    // Resolve selector once for the query (same for all tools)
-    const resolvedSelector = await this.selectorTable.resolve(query);
-
-    // Step 2: Score EVERY tool with the composite algorithm
-    const scored: ResolvedResult[] = [];
-
-    for (const tool of this.tools) {
-      const semantic = semanticById.get(tool.id) ?? 0;
-      let selectorBonus = 0;
-      let argScore = 0;
-      let providerScore = 0;
-      let tagScore = 0;
-
-      // --- Selector match bonus ---
-      if (resolvedSelector.canonical === tool.selector) {
-        selectorBonus = WEIGHTS.selectorExact;
-      } else if (tool.selector.split('.').some(part =>
-        resolvedSelector.canonical.includes(part))) {
-        selectorBonus = WEIGHTS.selectorPartial;
-      }
-
-      // --- Description keyword overlap ---
-      const descOverlap = this.scoreDescriptionOverlap(lowerQuery, tool);
-
-      // --- Argument shape scoring ---
-      argScore = this.scoreArgShape(lowerQuery, tool);
-
-      // --- Provider bias detection ---
-      // Positive: boost when query mentions this tool's provider
-      // Negative: penalize when query mentions a DIFFERENT provider on the same selector
-      providerScore = this.scoreProviderBias(lowerQuery, tool);
-      if (providerScore === 0) {
-        // Check if query mentions a competing provider for this selector
-        const competitors = this.toolsBySelector.get(tool.selector) ?? [];
-        for (const comp of competitors) {
-          if (comp.id !== tool.id && this.scoreProviderBias(lowerQuery, comp) > 0) {
-            providerScore = -0.15; // Penalize for mentioning a competitor
-            break;
-          }
-        }
-      }
-
-      // --- Tag boost (phrase-level: multi-word tags or exact substring matches) ---
-      const queryStems = new Set(tokenize(lowerQuery).map(stem));
-      for (const tag of tool.tags) {
-        const tagStem = stem(tag.toLowerCase());
-        if (queryStems.has(tagStem) || lowerQuery.includes(tag.toLowerCase())) {
-          tagScore += WEIGHTS.tagBoost;
-        }
-      }
-      tagScore = Math.min(tagScore, 0.25); // Cap tag boost
-
-      // --- Quality hints ---
-      const qualityScore = this.scoreQualityHints(lowerQuery, tool);
-
-      // --- Composite score (unclamped for better ranking differentiation) ---
-      const totalScore = Math.max(0,
-        (semantic * WEIGHTS.semantic) +
-        (descOverlap * WEIGHTS.descriptionOverlap) +
-        selectorBonus +
-        argScore +
-        providerScore +
-        tagScore +
-        qualityScore
-      );
-
-      scored.push({
-        toolId: tool.id,
-        score: totalScore,
-        components: {
-          semantic,
-          descOverlap,
-          selector: selectorBonus,
-          args: argScore,
-          provider: providerScore,
-          tags: tagScore,
-          quality: qualityScore,
-        },
-      });
-    }
-
-    scored.sort((a, b) => b.score - a.score);
+    const resolution = await this.runtime.resolve(query);
     const latencyMs = performance.now() - start;
 
     return {
       caseId: '',
-      ranked: scored,
+      ranked: offeredTools(resolution).map(c => ({
+        toolId: this.benchIdOf(c.toolId),
+        score: c.score,
+        components: { score: c.score },
+      })),
+      outcome: resolution.outcome,
+      ...(resolution.chosen ? { chosen: this.benchIdOf(resolution.chosen) } : {}),
+      tier: resolution.tier,
+      proofDigest: resolution.proof.proofDigest,
       latencyMs,
     };
   }
-
-  /** Score keyword overlap — how many query words appear in description, tags, and ID */
-  private scoreDescriptionOverlap(query: string, tool: BenchTool): number {
-    const queryWords = tokenize(query);
-    if (queryWords.length === 0) return 0;
-
-    const descStems = new Set(tokenize(tool.description).map(stem));
-    const tagStems = new Set(tool.tags.map(t => stem(t.toLowerCase())));
-    const idWords = new Set(tool.id.toLowerCase().split('.').flatMap(p => p.split('_')).map(stem));
-
-    let hits = 0;
-    for (const word of queryWords) {
-      const s = stem(word);
-      if (descStems.has(s)) hits += 1.0;
-      if (tagStems.has(s)) hits += 0.8;
-      if (idWords.has(s)) hits += 0.5;
-    }
-
-    return Math.min(1, hits / queryWords.length);
-  }
-
-  /** Score argument shape match between query and tool */
-  private scoreArgShape(query: string, tool: BenchTool): number {
-    let score = 0;
-
-    for (const [argName, argSpec] of Object.entries(tool.args)) {
-      const lowerArg = argName.toLowerCase();
-      const lowerDesc = argSpec.description.toLowerCase();
-
-      // Check if query contains hints that match this arg
-      if (query.includes(lowerArg)) {
-        score += WEIGHTS.argShapeMatch;
-      } else if (lowerDesc.split(' ').some(word => query.includes(word) && word.length > 3)) {
-        score += WEIGHTS.argShapePartial;
-      }
-
-      // Specific arg type hints in the query
-      if (argSpec.type === 'number' && /\d+(\.\d+)?/.test(query)) {
-        // Query contains a number and tool expects one
-        score += WEIGHTS.argShapePartial;
-      }
-
-      if (lowerArg === 'lat' || lowerArg === 'lon') {
-        if (/latitude|longitude|lat\b|lon\b|\d+\.\d+/.test(query)) {
-          score += WEIGHTS.argShapeMatch;
-        }
-      }
-
-      if (lowerArg === 'ticker' && /\b[A-Z]{1,5}\b/.test(query.replace(/[^A-Za-z\s]/g, ''))) {
-        score += WEIGHTS.argShapePartial;
-      }
-
-      if (lowerArg === 'symbol' && /\b(btc|eth|sol|doge|bitcoin|ethereum)\b/i.test(query)) {
-        score += WEIGHTS.argShapeMatch;
-      }
-
-      if (lowerArg === 'formality' && /\bformal\b/i.test(query)) {
-        score += WEIGHTS.argShapeMatch;
-      }
-    }
-
-    return Math.min(score, 0.4); // Cap arg shape contribution
-  }
-
-  /** Score provider bias signals in the query */
-  private scoreProviderBias(query: string, tool: BenchTool): number {
-    const signals = PROVIDER_SIGNALS[tool.provider];
-    if (!signals) return 0;
-
-    for (const signal of signals) {
-      if (query.includes(signal)) {
-        return WEIGHTS.providerBias;
-      }
-    }
-
-    return 0;
-  }
-
-  /** Score quality hint signals in the query */
-  private scoreQualityHints(query: string, tool: BenchTool): number {
-    const hints = QUALITY_SIGNALS[tool.provider];
-    if (!hints) return 0;
-
-    for (const hint of hints) {
-      if (query.includes(hint)) {
-        return 0.10;
-      }
-    }
-
-    return 0;
-  }
 }
 
-/** Simple stemming — strip common suffixes for matching */
-function stem(word: string): string {
-  if (word.endsWith('ies') && word.length > 4) return word.slice(0, -3) + 'y';
-  if (word.endsWith('es') && word.length > 4) return word.slice(0, -2);
-  if (word.endsWith('s') && !word.endsWith('ss') && word.length > 3) return word.slice(0, -1);
-  if (word.endsWith('ing') && word.length > 5) return word.slice(0, -3);
-  if (word.endsWith('ed') && word.length > 4) return word.slice(0, -2);
-  return word;
+/**
+ * The tools the runtime offers for a query, best first: its eligible
+ * candidates (at or above the LOW threshold) or, when there are none, the
+ * nearest tools it lists as refinement options ("did you mean").
+ */
+export function offeredTools(resolution: Resolution): Array<{ toolId: string; score: number }> {
+  if (resolution.candidates.length > 0) {
+    return resolution.candidates.map(c => ({ toolId: c.toolId, score: c.score }));
+  }
+  const offered: Array<{ toolId: string; score: number }> = [];
+  for (const option of resolution.refinement?.options ?? []) {
+    if (option.toolId && !offered.some(o => o.toolId === option.toolId)) {
+      offered.push({ toolId: option.toolId, score: option.confidence });
+    }
+  }
+  return offered;
 }
 
-/** Tokenize into lowercase words, stripping punctuation and stopwords */
-function tokenize(text: string): string[] {
-  const STOPWORDS = new Set([
-    'the', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
-    'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could',
-    'should', 'may', 'might', 'shall', 'can', 'need', 'dare', 'ought',
-    'to', 'of', 'in', 'for', 'on', 'with', 'at', 'by', 'from', 'as',
-    'into', 'about', 'like', 'through', 'after', 'over', 'between',
-    'out', 'against', 'during', 'without', 'before', 'under', 'around',
-    'among', 'i', 'me', 'my', 'we', 'our', 'you', 'your', 'he', 'him',
-    'his', 'she', 'her', 'it', 'its', 'they', 'them', 'their', 'what',
-    'which', 'who', 'whom', 'this', 'that', 'these', 'those', 'and',
-    'but', 'or', 'nor', 'not', 'so', 'very', 'just', 'than', 'too',
-    'also', 'whats', "what's",
-  ]);
+/** Canonical tool id a bench tool compiles to: `<provider>/<selector with '_' for '.'>`. */
+function canonicalIdOf(tool: BenchTool): string {
+  return `${tool.provider}/${toolNameOf(tool)}`;
+}
 
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9\s+#@-]/g, '')
-    .split(/\s+/)
-    .filter(w => w.length > 1 && !STOPWORDS.has(w));
+function toolNameOf(tool: BenchTool): string {
+  return tool.selector.replace(/\./g, '_');
+}
+
+/** One provider manifest per bench provider; tools keep their description and arguments. */
+export function benchManifests(tools: BenchTool[]): ProviderManifest[] {
+  const byProvider = new Map<string, ToolDefinition[]>();
+  for (const tool of tools) {
+    const properties: Record<string, JSONSchemaType> = {};
+    const required: string[] = [];
+    for (const [name, arg] of Object.entries(tool.args)) {
+      properties[name] = { ...argSchema(arg.type), description: arg.description };
+      if (arg.required) required.push(name);
+    }
+    const definitions = byProvider.get(tool.provider) ?? [];
+    definitions.push({
+      name: toolNameOf(tool),
+      description: tool.description,
+      inputSchema: { type: 'object', properties, required },
+      providerId: tool.provider,
+      transportType: 'local',
+    });
+    byProvider.set(tool.provider, definitions);
+  }
+  return [...byProvider].map(([id, defs]) => ({
+    id,
+    name: id,
+    transportType: 'local',
+    tools: defs,
+  }));
+}
+
+function argSchema(type: string): JSONSchemaType {
+  if (type.endsWith('[]')) return { type: 'array', items: argSchema(type.slice(0, -2)) };
+  switch (type) {
+    case 'number': return { type: 'number' };
+    case 'integer': return { type: 'integer' };
+    case 'boolean': return { type: 'boolean' };
+    case 'object': return { type: 'object' };
+    default: return { type: 'string' };
+  }
 }

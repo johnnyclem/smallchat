@@ -91,6 +91,10 @@ smallchat compile --source ~/.mcp.json
 
 # Ask it a question — see which tool it picks and why
 smallchat resolve tools.toolkit.json "search for code"
+smallchat explain tools.toolkit.json "search for code"
+
+# Pin the decisions that matter: golden traces, exit 1 if one changes
+smallchat replay tools.toolkit.json traces/
 
 # Start an MCP-compatible server
 smallchat serve --source ./manifests --port 3001
@@ -141,6 +145,7 @@ for await (const token of runtime.inferenceStream('find flights', { to: 'NYC' })
 
 **Unreleased on `main`** (ahead of the last tagged release, 0.5.0):
 
+- **Replay, explain, decision log** — `smallchat replay` checks golden traces (or a decision log) against an artifact with learning frozen; `smallchat explain` shows every candidate with its tier and policy verdict; `RuntimeOptions.decisionLog` / `serve --decision-log` append a hash-chained JSONL line per decision, and replaying it against the same artifact, policy and learned state reproduces the outcomes (decisions that needed an LLM verifier are reported as skipped). The benchmark now measures the real runtime — see [Benchmarks](./docs/REFERENCE.md#benchmarks) for the measured numbers.
 - **Truth-ledger interop (`@shorthand/core/truth`)** — the vendored Short-Hand package now reads Stenographer's TB/UV v2 asserted-truth ledger at the JSONL seam: signed tombstones (`TB`) compact as ground truth, unverified assertions (`UV`) carry a visible `UNVERIFIED` marker through every compaction level, contested entries keep both sides of the dispute, and overridden/refuted history is displaced on sync. Compaction can emit its candidate invariants back as machine-drafted `PROPOSAL` lines — never as signed truth, and never anonymously. Re-exported from `@smallchat/core` (`TruthAwareCompactor`, `parseWikiLines`, `selectCurrentTruth`, `proposeInvariants`, …).
 - **Semantic map** — when the user resolves a refinement, that choice is learned: the exact intent resolves instantly next time, and *similar* intents get a confidence boost toward the same tool. Defer once, remember forever.
 - **Selector-table pollution fix** — resolved intents no longer leak into the tool list or shadow real tools in "did you mean?" suggestions; intent entries are now LRU-bounded instead of retained forever.
@@ -182,8 +187,10 @@ See the [Architecture doc](./ARCHITECTURE.md) for the full design and the [Refer
 | `compile` | Compile manifests into a dispatch artifact |
 | `serve` | Start an MCP-compatible server |
 | `resolve` | Test intent-to-tool resolution |
+| `explain` | Candidate table, tiers, policy verdicts and proof digest for one intent |
+| `replay` | Check golden traces or a decision log against an artifact (exit 0 pass / 1 mismatch / 2 could not run) |
 | `inspect` | Examine a compiled artifact |
-| `doctor` | Check your environment |
+| `doctor` | Check your environment, and an artifact against its embedder and index |
 | `docs` | Generate Markdown docs from a compiled artifact |
 | `repl` | Interactive shell for testing resolution |
 | `channel` | Claude Code channel-protocol bridge |

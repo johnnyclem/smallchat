@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
+import { diagnoseArtifact, formatDiagnosis } from '../../artifact/doctor.js';
 
 const EXPECTED_MODEL_SHA256 = 'afdb6f1a0e45b715d0bb9b11772f032c399babd23bfc31fed1c170afc848bdb1';
 
@@ -19,6 +20,7 @@ export const doctorCommand = new Command('doctor')
   .description('Check system health: model files, dependencies, index, and MCP compliance')
   .option('--db-path <path>', 'Path to sqlite-vec database', 'smallchat.db')
   .option('--mcp [url]', 'Run MCP compliance check against a running server')
+  .option('--artifact <path>', 'Check a compiled artifact against its embedder and index, and report near-duplicate tools (default: ./tools.toolkit.json when present)')
   .action(async (options) => {
     let ok = true;
 
@@ -114,7 +116,15 @@ export const doctorCommand = new Command('doctor')
       console.log('  Skipped (model files missing)');
     }
 
-    // 6. MCP compliance check
+    // 6. Artifact ↔ embedder ↔ index
+    const artifactPath = options.artifact ?? (existsSync('tools.toolkit.json') ? 'tools.toolkit.json' : undefined);
+    if (artifactPath) {
+      const diagnosis = await diagnoseArtifact(resolve(artifactPath));
+      console.log(`\n${formatDiagnosis(diagnosis)}`);
+      ok = diagnosis.ok && ok;
+    }
+
+    // 7. MCP compliance check
     if (options.mcp !== undefined) {
       const baseUrl = typeof options.mcp === 'string' ? options.mcp : 'http://127.0.0.1:3001';
       console.log(`\nMCP Compliance Check (${baseUrl}):`);

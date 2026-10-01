@@ -29,6 +29,7 @@ import { SemanticMap } from './semantic-map.js';
 import type { SemanticMapOptions, LearnedPreference } from './semantic-map.js';
 import { evaluateDispatchPolicy, isDestructive } from './policy.js';
 import type { DispatchPolicyOptions, PinState, PolicyCode, PolicyVerdict } from './policy.js';
+import type { DecisionExecution, DecisionKind, DecisionLog } from './decision-log.js';
 
 /**
  * UnrecognizedIntent — doesNotRecognizeSelector: equivalent.
@@ -114,6 +115,12 @@ export interface DispatchConfig {
    * dispatch; the rest are reported as not dispatched. Default 16.
    */
   maxSubDispatches?: number;
+  /**
+   * Append-only decision log: one hash-chained line per resolve(),
+   * dispatch and dispatch by id, written before anything executes (see
+   * runtime/decision-log.ts). Off when unset.
+   */
+  decisionLog?: DecisionLog;
 }
 
 /** Per-dispatch options. */
@@ -171,6 +178,8 @@ export class DispatchContext {
   readonly rateLimiter: SemanticRateLimiter | null;
   readonly maxDecompositionDepth: number;
   readonly maxSubDispatches: number;
+  /** Decision log every decision is appended to (null when off) */
+  readonly decisionLog: DecisionLog | null;
 
   private toolClasses: Map<string, ToolClass> = new Map();
   private protocols: Map<string, ToolProtocol> = new Map();
@@ -212,6 +221,7 @@ export class DispatchContext {
     this.rateLimiter = dispatchConfig?.rateLimiter ? new SemanticRateLimiter(dispatchConfig.rateLimiter) : null;
     this.maxDecompositionDepth = dispatchConfig?.maxDecompositionDepth ?? DEFAULT_MAX_DECOMPOSITION_DEPTH;
     this.maxSubDispatches = dispatchConfig?.maxSubDispatches ?? DEFAULT_MAX_SUB_DISPATCHES;
+    this.decisionLog = dispatchConfig?.decisionLog ?? null;
     this.observer = new DispatchObserver(dispatchConfig?.observerOptions);
     this.semanticMap = dispatchConfig?.semanticMap
       ?? new SemanticMap(dispatchConfig?.semanticMapOptions);
@@ -481,6 +491,15 @@ export class DispatchContext {
   getClasses(): ToolClass[] {
     return Array.from(this.toolClasses.values());
   }
+
+  /**
+   * Append a decision to the decision log, if one is configured. Throws
+   * DecisionLogError when the line cannot be written — callers record
+   * before executing, so nothing runs unrecorded.
+   */
+  logDecision(kind: DecisionKind, proof: ResolutionProof, execution: DecisionExecution, principal?: string, toolId?: string): void {
+    this.decisionLog?.record({ kind, proof, execution, ...(principal !== undefined ? { principal } : {}), ...(toolId !== undefined ? { toolId } : {}) });
+  }
 }
 
 /** Canonical tool id of an IMP: `<providerId>/<toolName>`. */
@@ -620,6 +639,7 @@ export async function resolveIntent(
     depth: 0,
     ancestors: [],
   });
+  context.logDecision('resolve', r.resolution.proof, 'none', options.principal);
   return r.resolution;
 }
 
@@ -1056,6 +1076,8 @@ export interface DispatchByIdOptions {
    * tool receives it (ToolIMP.execute options.signal).
    */
   signal?: AbortSignal;
+  /** Who the call is for; recorded in the decision log */
+  principal?: string;
 }
 
 interface PreparedCall {
@@ -1273,6 +1295,7 @@ export async function dispatchById(
     proof.decision = 'unknown-tool';
     addProofStep(proof, { stage: 'exact_id', decision: ambiguous ? `${toolId} is claimed by more than one tool` : `${toolId} is not a registered tool` }, proofClock() - started);
     finalizeProof(proof);
+    context.logDecision('dispatch-by-id', proof, 'none', options.principal, toolId);
     return {
       content: {
         error: ambiguous
@@ -1285,12 +1308,20 @@ export async function dispatchById(
   }
 
   const proof = exactIdProof(context, toolId, tool, options, started);
-  if (options.signal?.aborted) return abortedResult(toolId, proof, options.signal);
+  if (options.signal?.aborted) {
+    const aborted = abortedResult(toolId, proof, options.signal);
+    context.logDecision('dispatch-by-id', proof, 'aborted', options.principal);
+    return aborted;
+  }
   const callStarted = proofClock();
   const prepared = await prepareCall(context, tool.imp, toolId, args);
   recordCall(proof, toolId, prepared, callStarted);
-  if (!prepared.ok) return invalidArgumentsResult(toolId, prepared.errors, proof);
+  if (!prepared.ok) {
+    context.logDecision('dispatch-by-id', proof, 'invalid-arguments', options.principal);
+    return invalidArgumentsResult(toolId, prepared.errors, proof);
+  }
 
+  context.logDecision('dispatch-by-id', proof, 'ran', options.principal);
   const result = await execute(tool.imp, prepared.args, options.signal);
   return annotateExecuted(result, toolId, proof);
 }
@@ -1385,26 +1416,34 @@ async function dispatchIntent(
 
   if (r.decomposition) {
     // Each sub-intent goes through this same pipeline (and policy), one level deeper.
+    context.logDecision('dispatch', resolution.proof, 'decomposed', frame.principal);
     const result = await runDecomposition(context, intent, r.decomposition, frame);
     result.metadata = { ...result.metadata, outcome: 'resolved', tier: resolution.tier, proof: resolution.proof };
     return result;
   }
 
   if (resolution.outcome !== 'resolved' || !r.imp) {
+    context.logDecision('dispatch', resolution.proof, 'none', frame.principal);
     return notExecutedResult(resolution);
   }
 
   const toolId = resolution.chosen!;
   const proof = resolution.proof;
-  if (frame.signal?.aborted) return abortedResult(toolId, proof, frame.signal);
+  if (frame.signal?.aborted) {
+    const aborted = abortedResult(toolId, proof, frame.signal);
+    context.logDecision('dispatch', proof, 'aborted', frame.principal);
+    return aborted;
+  }
   const callStarted = proofClock();
   const prepared = await prepareCall(context, r.imp, toolId, args ?? {});
   recordCall(proof, toolId, prepared, callStarted);
   if (!prepared.ok) {
+    context.logDecision('dispatch', proof, 'invalid-arguments', frame.principal);
     context.observer.recordSchemaRejection(toolId, intent, JSON.stringify(prepared.errors));
     return invalidArgumentsResult(toolId, prepared.errors, proof);
   }
 
+  context.logDecision('dispatch', proof, 'ran', frame.principal);
   const result = annotateExecuted(await execute(r.imp, prepared.args, frame.signal), toolId, proof);
 
   // Record dispatch for observer (Pillar 5)
@@ -1472,6 +1511,7 @@ export async function* smallchat_dispatchStream(
   }
 
   if (r.decomposition) {
+    context.logDecision('dispatch', r.resolution.proof, 'decomposed', frame.principal);
     const result = await runDecomposition(context, intent, r.decomposition, frame);
     result.metadata = { ...result.metadata, outcome: 'resolved', tier: r.resolution.tier, proof: r.resolution.proof };
     yield { type: 'done', result };
@@ -1479,6 +1519,7 @@ export async function* smallchat_dispatchStream(
   }
 
   if (r.resolution.outcome !== 'resolved' || !r.imp) {
+    context.logDecision('dispatch', r.resolution.proof, 'none', frame.principal);
     yield { type: 'done', result: notExecutedResult(r.resolution) };
     return;
   }
@@ -1492,7 +1533,8 @@ export async function* smallchat_dispatchStream(
     selector: r.resolution.candidates.find(c => c.toolId === r.resolution.chosen)?.selector ?? '',
   };
 
-  yield* executeAndStream(context, r.imp, r.resolution.chosen!, args ?? {}, r.resolution.proof, options.signal);
+  yield* executeAndStream(context, r.imp, r.resolution.chosen!, args ?? {}, r.resolution.proof, options.signal,
+    execution => context.logDecision('dispatch', r.resolution.proof, execution, options.principal));
 }
 
 /**
@@ -1520,7 +1562,8 @@ export async function* smallchat_dispatchStreamById(
     confidence: 1,
     selector: tool.selectors[0],
   };
-  yield* executeAndStream(context, tool.imp, toolId, args, proof, options.signal);
+  yield* executeAndStream(context, tool.imp, toolId, args, proof, options.signal,
+    execution => context.logDecision('dispatch-by-id', proof, execution, options.principal));
 }
 
 function streamError(err: unknown): DispatchEvent {
@@ -1581,16 +1624,20 @@ async function* executeAndStream(
   toolId: string,
   args: Record<string, unknown>,
   proof: ResolutionProof,
-  signal?: AbortSignal,
+  signal: AbortSignal | undefined,
+  logDecision: (execution: DecisionExecution) => void,
 ): AsyncGenerator<DispatchEvent> {
   if (signal?.aborted) {
-    yield { type: 'done', result: abortedResult(toolId, proof, signal) };
+    const aborted = abortedResult(toolId, proof, signal);
+    logDecision('aborted');
+    yield { type: 'done', result: aborted };
     return;
   }
   const callStarted = proofClock();
   const prepared = await prepareCall(context, imp, toolId, args);
   recordCall(proof, toolId, prepared, callStarted);
   if (!prepared.ok) {
+    logDecision('invalid-arguments');
     yield {
       type: 'error',
       error: `Invalid arguments for ${toolId}; the tool was not called: ${prepared.errors.map(e => e.message).join('; ')}`,
@@ -1599,6 +1646,7 @@ async function* executeAndStream(
     return;
   }
   const callArgs = prepared.args;
+  logDecision('ran');
 
   // The tool's signal: the caller's, plus our own for early close.
   const controller = new AbortController();

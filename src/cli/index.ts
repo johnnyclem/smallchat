@@ -18,6 +18,8 @@ import { memexCommand } from './commands/memex.js';
 import { setupCommand } from './commands/setup.js';
 import { appCommand } from './commands/app.js';
 import { rtkCommand } from './commands/rtk.js';
+import { replayCommand } from './commands/replay.js';
+import { explainCommand } from './commands/explain.js';
 
 function readPackageVersion(): string {
   try {
@@ -46,6 +48,8 @@ program.addCommand(compileCommand);
 program.addCommand(appCommand);
 program.addCommand(inspectCommand);
 program.addCommand(resolveCommand);
+program.addCommand(explainCommand);
+program.addCommand(replayCommand);
 program.addCommand(serveCommand);
 program.addCommand(doctorCommand);
 program.addCommand(docsCommand);
@@ -69,8 +73,10 @@ Getting Started
   3. Inspect your compiled toolkit:
      $ smallchat inspect tools.toolkit.json
 
-  4. Test dispatch resolution:
+  4. Test dispatch resolution, and see why:
      $ smallchat resolve tools.toolkit.json "search for files"
+     $ smallchat explain tools.toolkit.json "search for files"
+     $ smallchat replay tools.toolkit.json traces/
 
   5. Start a server:
      $ smallchat serve --source tools.toolkit.json

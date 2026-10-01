@@ -35,6 +35,7 @@ export const serveCommand = new Command('serve')
   .option('--rtk-threshold <bytes>', 'Minimum content size in bytes before RTK filters', '512')
   .option('--cors-origin <pattern>', 'Allow-Origin value for browser clients (omit to disable CORS)')
   .option('--max-body-bytes <bytes>', 'Maximum POST body size; requests exceeding this get HTTP 413', String(4 * 1024 * 1024))
+  .option('--decision-log <path>', 'Append every resolution and dispatch to this hash-chained JSONL decision log')
   .action(async (options) => {
     const sourcePath = resolve(options.source);
     const port = parseInt(options.port, 10);
@@ -44,9 +45,10 @@ export const serveCommand = new Command('serve')
 
     // smallchat.json "policy" block (nearest one upward from the cwd)
     const project = findSmallChatManifest(process.cwd());
-    const runtimeOptions = project?.manifest.policy ? runtimeOptionsFromPolicy(project.manifest.policy) : undefined;
-    if (runtimeOptions) {
-      console.log(`  Dispatch policy from ${project!.path}: ${JSON.stringify(project!.manifest.policy)}`);
+    let runtimeOptions = project?.manifest.policy ? runtimeOptionsFromPolicy(project.manifest.policy) : undefined;
+    if (options.decisionLog) runtimeOptions = { ...runtimeOptions, decisionLog: resolve(options.decisionLog) };
+    if (project?.manifest.policy) {
+      console.log(`  Dispatch policy from ${project.path}: ${JSON.stringify(project.manifest.policy)}`);
     }
 
     const config: MCPServerConfig = {
