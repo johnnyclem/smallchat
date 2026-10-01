@@ -89,7 +89,8 @@
     "packages/vscode-extension"
   ],
   "scripts": {
-    "build": "tsc",
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "build": "npm run clean && tsc",
     "build:packages": "npm run build --workspaces --if-present",
     "build:all": "npm run build && npm run build:packages",
     "test": "vitest run",

@@ -57,4 +57,34 @@ describe('published package contract', () => {
     }
     expect([...undeclared]).toEqual([]);
   });
+
+  // npm 11 (Node 24) `npm ci` refuses a lockfile that leaves out another
+  // platform's optional packages, and npm 10 then installs no binary for
+  // them on that platform. Regenerate with `npm install --package-lock-only`
+  // on npm 11 when this fails.
+  it('the lockfile lists every optional platform package, so npm ci works on npm 10 and 11', () => {
+    const { packages } = JSON.parse(readFileSync(join(ROOT, 'package-lock.json'), 'utf-8')) as {
+      packages: Record<string, { optionalDependencies?: Record<string, string> }>;
+    };
+    // npm resolves a dependency in the nearest node_modules up the tree
+    const resolves = (from: string, name: string): boolean => {
+      for (let dir = from; ; dir = dir.replace(/\/?node_modules\/(@[^/]+\/)?[^/]+$/, '')) {
+        if (packages[`${dir ? `${dir}/` : ''}node_modules/${name}`]) return true;
+        if (!dir || !dir.includes('node_modules')) return Boolean(packages[`node_modules/${name}`]);
+      }
+    };
+    const missing = Object.entries(packages).flatMap(([path, entry]) =>
+      Object.keys(entry.optionalDependencies ?? {})
+        .filter(name => !resolves(path, name))
+        .map(name => `${path || '(root)'} -> ${name}`),
+    );
+    expect(missing).toEqual([]);
+  });
+
+  it('builds from a clean dist/, so a removed module never ships', () => {
+    const scripts = (JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf-8')) as { scripts: Record<string, string> }).scripts;
+    expect(scripts.build).toMatch(/^npm run clean && tsc$/);
+    expect(scripts.clean).toContain("rmSync('dist'");
+    expect(scripts.prepublishOnly).toBe('npm run build');
+  });
 });

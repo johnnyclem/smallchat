@@ -13,11 +13,12 @@
  * Checks: the tarball holds dist/, the CLI and spec/ and nothing from the
  * workspace (shorthand/, src/); its package.json has no file:, link: or
  * workspace: dependency; `import('@smallchat/core')` and every subpath
- * export load; `smallchat --version` prints the package version.
+ * export load, and a Node16 TypeScript consumer resolves each subpath's
+ * declarations; `smallchat --version` prints the package version.
  */
 
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -44,6 +45,11 @@ try {
   }
   for (const path of files) {
     if (/^(shorthand|src|packages|node_modules)\//.test(path)) fail(`the tarball contains workspace file ${path}`);
+    // A module removed from src/ must not ship from a stale dist/.
+    const source = path.match(/^dist\/(.+)\.(?:js|d\.ts)$/)?.[1];
+    if (source && !existsSync(join(ROOT, 'src', `${source}.ts`)) && !existsSync(join(ROOT, 'src', `${source}.tsx`))) {
+      fail(`the tarball contains ${path}, built from a source file that no longer exists (stale dist/)`);
+    }
   }
 
   const shorthand = JSON.parse(execFileSync(npm, ['pack', '--json', '--workspace', 'shorthand', '--pack-destination', work], { cwd: ROOT, encoding: 'utf-8' }));
@@ -59,6 +65,14 @@ try {
   const subpaths = Object.keys(pkg.exports).map(k => (k === '.' ? pkg.name : `${pkg.name}/${k.slice(2)}`));
   const probe = `for (const s of ${JSON.stringify(subpaths)}) { const m = await import(s); if (Object.keys(m).length === 0) throw new Error(s + ' exports nothing'); } const core = await import('${pkg.name}'); if (core.PACKAGE_VERSION !== '${pkg.version}') throw new Error('PACKAGE_VERSION ' + core.PACKAGE_VERSION);`;
   execFileSync(process.execPath, ['--input-type=module', '-e', probe], { cwd: app, stdio: 'inherit' });
+
+  // Every subpath also resolves its declarations for a Node16 TypeScript consumer.
+  writeFileSync(join(app, 'consumer.ts'), subpaths.map((s, i) => `import * as m${i} from '${s}';\nvoid m${i};`).join('\n') + '\n');
+  writeFileSync(join(app, 'tsconfig.json'), JSON.stringify({
+    compilerOptions: { module: 'Node16', moduleResolution: 'Node16', target: 'ES2022', strict: true, noEmit: true, skipLibCheck: true, types: [] },
+    files: ['consumer.ts'],
+  }));
+  execFileSync(process.execPath, [join(ROOT, 'node_modules', 'typescript', 'bin', 'tsc'), '-p', app], { cwd: app, stdio: 'inherit' });
 
   const version = execFileSync(process.execPath, [join(app, 'node_modules', '.bin', 'smallchat'), '--version'], { cwd: app, encoding: 'utf-8' }).trim();
   if (version !== pkg.version) fail(`smallchat --version printed ${version}, expected ${pkg.version}`);
