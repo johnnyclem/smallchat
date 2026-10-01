@@ -29,8 +29,10 @@ export const PROOF_DIGEST_DOMAIN = 'smallchat.proof.v1';
  * - needs-disambiguation: there are candidates, but policy or verification
  *   refuses to pick one on its own; the caller chooses (by tool id).
  * - unresolved: nothing plausible matched.
+ * - throttled: the semantic rate limiter (opt-in) refused to embed this
+ *   intent for this principal; retry after the window drains.
  */
-export type ResolutionOutcome = 'resolved' | 'needs-disambiguation' | 'unresolved';
+export type ResolutionOutcome = 'resolved' | 'needs-disambiguation' | 'unresolved' | 'throttled';
 
 /** Where a candidate came from. */
 export type CandidateSource =
@@ -76,7 +78,9 @@ export type DecisionCode =
   /** Nothing scored above the search floor */
   | 'no-candidates'
   /** dispatchById with an id that is not registered (or is ambiguous) */
-  | 'unknown-tool';
+  | 'unknown-tool'
+  /** The semantic rate limiter refused to embed the intent for this principal */
+  | 'rate-limited';
 
 export type ProofStage =
   | 'exact_id'
@@ -90,7 +94,9 @@ export type ProofStage =
   | 'policy'
   | 'decomposition'
   | 'refinement'
-  | 'validation';
+  | 'rate_limit'
+  | 'validation'
+  | 'execution';
 
 /** One row of the candidate table. */
 export interface ProofCandidate {

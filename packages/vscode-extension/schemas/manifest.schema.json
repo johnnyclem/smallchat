@@ -22,14 +22,9 @@
           "items": { "type": "string" },
           "description": "Semantic aliases — additional intent phrases that should resolve to this tool"
         },
-        "priority": {
-          "type": "number",
-          "description": "Priority multiplier for dispatch ranking (default 1.0)",
-          "minimum": 0
-        },
         "preferred": {
           "type": "boolean",
-          "description": "Mark as preferred resolution when multiple tools collide"
+          "description": "Compile-time annotation: the intended tool when it collides with another (collision report only; does not affect dispatch ranking)"
         },
         "exclude": {
           "type": "boolean",
@@ -45,11 +40,6 @@
       "type": "object",
       "description": "Provider-level compiler hints — defaults for all tools in this manifest",
       "properties": {
-        "priority": {
-          "type": "number",
-          "description": "Default priority multiplier for all tools from this provider",
-          "minimum": 0
-        },
         "namespace": {
           "type": "string",
           "description": "Namespace prefix prepended to all selector canonicals"

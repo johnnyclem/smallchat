@@ -77,7 +77,6 @@ export function mergeCompilerHints(
     // Promote relevant provider hints into a tool-level hint
     return {
       selectorHint: providerHints.selectorHint,
-      priority: providerHints.priority,
     };
   }
 
@@ -86,7 +85,6 @@ export function mergeCompilerHints(
     selectorHint: toolHints.selectorHint ?? providerHints.selectorHint,
     pinSelector: toolHints.pinSelector,
     aliases: toolHints.aliases,
-    priority: toolHints.priority ?? providerHints.priority,
     preferred: toolHints.preferred,
     exclude: toolHints.exclude,
     vendorMeta: toolHints.vendorMeta,

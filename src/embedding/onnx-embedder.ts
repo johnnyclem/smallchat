@@ -155,14 +155,34 @@ export class ONNXEmbedder implements Embedder {
     return results[0];
   }
 
+  /**
+   * Embed each text on its own, as a [1, tokenCount] tensor with no
+   * padding. The quantized model quantizes activations dynamically over the
+   * whole input tensor, so padding, or sharing a batch with other texts,
+   * shifts a text's vector (cosine ≈ 0.99 to its unpadded vector). Running
+   * every text alone at its own length makes its vector a function of the
+   * text only — embed() and embedBatch() agree exactly — and keeps short
+   * intents cheap (a 4-token intent no longer pays for 128 positions).
+   */
   private async embedBatchInternal(texts: string[]): Promise<Float32Array[]> {
+    const results: Float32Array[] = [];
+    for (const text of texts) results.push(await this.embedOne(text));
+    return results;
+  }
+
+  private async embedOne(text: string): Promise<Float32Array> {
+    const [embedding] = await this.runBatch([text]);
+    return embedding;
+  }
+
+  private async runBatch(texts: string[]): Promise<Float32Array[]> {
     const session = this.session!;
     const ort = this.ort!;
     const tokenizer = this.tokenizer!;
 
     const batchSize = texts.length;
     const encoded = texts.map(t => tokenizer.encode(t));
-    const seqLen = this.maxLength;
+    const seqLen = Math.max(1, ...encoded.map(e => e.inputIds.length));
 
     // Create padded tensors
     const inputIds = new BigInt64Array(batchSize * seqLen);

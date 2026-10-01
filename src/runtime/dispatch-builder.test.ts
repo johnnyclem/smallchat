@@ -36,7 +36,7 @@ describe('Feature: Dispatch Builder Fluent API', () => {
       const builder = new DispatchBuilder(mockContext, 'search docs');
       const result = await builder.withArgs({ query: 'test' }).exec();
 
-      expect(toolkit_dispatch).toHaveBeenCalledWith(mockContext, 'search docs', { query: 'test' });
+      expect(toolkit_dispatch).toHaveBeenCalledWith(mockContext, 'search docs', { query: 'test' }, expect.objectContaining({ signal: expect.any(AbortSignal) }));
       expect(result.content).toBe('result');
     });
   });
@@ -63,7 +63,7 @@ describe('Feature: Dispatch Builder Fluent API', () => {
         .withArgs({ key: 'value' })
         .exec();
 
-      expect(toolkit_dispatch).toHaveBeenCalledWith(mockContext, 'intent', { key: 'value' });
+      expect(toolkit_dispatch).toHaveBeenCalledWith(mockContext, 'intent', { key: 'value' }, expect.objectContaining({ signal: expect.any(AbortSignal) }));
       expect(result.metadata?.requestId).toBe('abc');
     });
   });
@@ -132,7 +132,7 @@ describe('Feature: Dispatch Builder Fluent API', () => {
       const builder = new DispatchBuilder(mockContext, 'stream-intent');
       const gen = builder.stream();
 
-      expect(smallchat_dispatchStream).toHaveBeenCalledWith(mockContext, 'stream-intent', {});
+      expect(smallchat_dispatchStream).toHaveBeenCalledWith(mockContext, 'stream-intent', {}, {});
       expect(gen).toBeDefined();
     });
   });

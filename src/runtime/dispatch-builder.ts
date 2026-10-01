@@ -1,6 +1,6 @@
 import type { DispatchEvent, ToolResult } from '../core/types.js';
 import { toolkit_dispatch, smallchat_dispatchStream } from './dispatch.js';
-import type { DispatchContext } from './dispatch.js';
+import type { DispatchContext, DispatchOptions } from './dispatch.js';
 
 /**
  * DispatchBuilder — fluent interface for constructing and executing a dispatch.
@@ -19,6 +19,8 @@ export class DispatchBuilder<TArgs extends Record<string, unknown> = Record<stri
   private _args: TArgs;
   private _timeoutMs: number | undefined;
   private _metadata: Record<string, unknown> | undefined;
+  private _signal: AbortSignal | undefined;
+  private _principal: string | undefined;
 
   constructor(context: DispatchContext, intent: string, args: TArgs = {} as TArgs) {
     this._context = context;
@@ -39,14 +41,33 @@ export class DispatchBuilder<TArgs extends Record<string, unknown> = Record<stri
     const builder = new DispatchBuilder<T>(this._context, this._intent, args);
     builder._timeoutMs = this._timeoutMs;
     builder._metadata = this._metadata;
+    builder._signal = this._signal;
+    builder._principal = this._principal;
     return builder;
   }
 
   /**
-   * Set a timeout for the dispatch execution.
+   * Set a timeout for the dispatch. When it expires, exec() rejects and
+   * the AbortSignal the tool received fires; a tool that has not started
+   * yet does not run.
    */
   withTimeout(ms: number): this {
     this._timeoutMs = ms;
+    return this;
+  }
+
+  /**
+   * Cancel the dispatch from outside: when `signal` fires, nothing more
+   * executes and the running tool receives the abort.
+   */
+  withSignal(signal: AbortSignal): this {
+    this._signal = signal;
+    return this;
+  }
+
+  /** Who the dispatch is for (rate limiting and principal-scoped feedback). */
+  withPrincipal(principal: string): this {
+    this._principal = principal;
     return this;
   }
 
@@ -64,13 +85,19 @@ export class DispatchBuilder<TArgs extends Record<string, unknown> = Record<stri
    * Equivalent to the legacy `runtime.dispatch(intent, args)`.
    */
   async exec(): Promise<ToolResult> {
-    const dispatchPromise = toolkit_dispatch(this._context, this._intent, this._args);
+    const controller = new AbortController();
+    const forward = (): void => controller.abort(this._signal?.reason);
+    if (this._signal?.aborted) controller.abort(this._signal.reason);
+    else this._signal?.addEventListener('abort', forward, { once: true });
 
     let result: ToolResult;
-    if (this._timeoutMs !== undefined) {
-      result = await withTimeout(dispatchPromise, this._timeoutMs);
-    } else {
-      result = await dispatchPromise;
+    try {
+      const dispatchPromise = toolkit_dispatch(this._context, this._intent, this._args, this.options(controller.signal));
+      result = this._timeoutMs !== undefined
+        ? await withTimeout(dispatchPromise, this._timeoutMs, controller)
+        : await dispatchPromise;
+    } finally {
+      this._signal?.removeEventListener('abort', forward);
     }
 
     if (this._metadata) {
@@ -94,7 +121,14 @@ export class DispatchBuilder<TArgs extends Record<string, unknown> = Record<stri
    * Event flow: resolving → tool-start → chunk* / inference-delta* → done | error
    */
   stream(): AsyncGenerator<DispatchEvent> {
-    return smallchat_dispatchStream(this._context, this._intent, this._args);
+    return smallchat_dispatchStream(this._context, this._intent, this._args, this.options(this._signal));
+  }
+
+  private options(signal: AbortSignal | undefined): DispatchOptions {
+    return {
+      ...(signal ? { signal } : {}),
+      ...(this._principal !== undefined ? { principal: this._principal } : {}),
+    };
   }
 
   /**
@@ -149,12 +183,16 @@ export class DispatchBuilder<TArgs extends Record<string, unknown> = Record<stri
 }
 
 /**
- * Helper to wrap a promise with a timeout.
+ * Wrap a dispatch with a timeout that also aborts it: when the timer
+ * fires, the controller aborts (so the tool's signal fires) and the
+ * promise rejects.
  */
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+function withTimeout<T>(promise: Promise<T>, ms: number, controller: AbortController): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
-      reject(new Error(`Dispatch timed out after ${ms}ms`));
+      const error = new Error(`Dispatch timed out after ${ms}ms`);
+      controller.abort(error);
+      reject(error);
     }, ms);
 
     promise.then(

@@ -1,4 +1,4 @@
-import { SCObject, isSubclass } from './sc-object.js';
+import { SCObject, isSubclass, wrapValue } from './sc-object.js';
 
 /**
  * SCTypeDescriptor — describes what type a parameter slot accepts.
@@ -127,9 +127,12 @@ export function matchType(value: unknown, type: SCTypeDescriptor): MatchQuality 
       return 'none';
 
     case 'object': {
-      if (!(value instanceof SCObject)) return 'none';
-      if (value.isa === type.className) return 'exact';
-      if (isSubclass(value.isa, type.className)) return 'superclass';
+      // Plain JSON (what dispatch receives) matches as its wrapped form: a
+      // plain object as SCData, an array as SCArray.
+      const object = value instanceof SCObject ? value : wrapValue(value);
+      if (!(object instanceof SCObject)) return 'none';
+      if (object.isa === type.className) return 'exact';
+      if (isSubclass(object.isa, type.className)) return 'superclass';
       return 'none';
     }
 
@@ -167,8 +170,8 @@ export function scoreSignatureMatch(
 
   for (let i = 0; i < signature.arity; i++) {
     const slot = signature.parameters[i];
-    if (i >= args.length) {
-      // Missing optional arg — ok if not required
+    if (i >= args.length || args[i] === undefined) {
+      // Missing (or omitted, in a named-argument call) optional arg — ok if not required
       if (slot.required) return -1;
       continue;
     }

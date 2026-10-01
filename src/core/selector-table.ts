@@ -1,16 +1,13 @@
 import type { Embedder, ToolSelector, VectorIndex, SelectorMatch } from './types.js';
-import type { SemanticRateLimiter } from './semantic-rate-limiter.js';
+import { quantizeScore, SCORE_QUANTUM } from './confidence.js';
 
 /**
- * SelectorTable — the interning table for semantic selectors.
+ * VectorFloodError — the semantic rate limiter refused an intent.
  *
- * Like Objective-C's sel_registerName, this ensures that semantically
- * equivalent intents resolve to the same cached ToolSelector object.
- * "Pointer equality" becomes "embedding similarity above threshold."
- */
-/**
- * VectorFloodError — thrown when the semantic rate limiter detects
- * a vector flooding attack and throttles the embedder.
+ * @deprecated smallchat no longer throws it: a throttled intent resolves
+ * to outcome 'throttled' with a retry-after (see SemanticRateLimiter).
+ * Kept so existing `instanceof` checks and callers that drive a
+ * SemanticRateLimiter themselves still compile.
  */
 export class VectorFloodError extends Error {
   constructor(canonical: string) {
@@ -23,49 +20,36 @@ export class VectorFloodError extends Error {
   }
 }
 
-/** Default cap on how many runtime-resolved intent selectors are retained. */
-const DEFAULT_MAX_INTENT_ENTRIES = 500;
-
+/**
+ * SelectorTable — the table of compiled tool (and alias) selectors.
+ *
+ * Like Objective-C's sel_registerName, it maps a canonical selector name
+ * to one ToolSelector object and keeps the vector index that tool
+ * resolution searches. It holds tool selectors only: a runtime intent is
+ * embedded on its own (resolve/probe) and is never added to the table or
+ * the vector index, so what an intent resolves to does not depend on which
+ * other intents the process has seen.
+ */
 export class SelectorTable {
   private selectors: Map<string, ToolSelector> = new Map();
   private index: VectorIndex;
   private embedder: Embedder;
   private threshold: number;
-  private rateLimiter: SemanticRateLimiter | null;
-  /**
-   * Insertion-order tracking for intent-provenance selectors only, so the
-   * intern table can't grow without bound as a process resolves distinct
-   * user intents over its lifetime. Tool selectors (compiled at build time,
-   * bounded by the manifest) are never evicted.
-   */
-  private intentOrder: string[] = [];
-  private maxIntentEntries: number;
 
-  constructor(
-    index: VectorIndex,
-    embedder: Embedder,
-    threshold = 0.95,
-    rateLimiter?: SemanticRateLimiter,
-    maxIntentEntries = DEFAULT_MAX_INTENT_ENTRIES,
-  ) {
+  constructor(index: VectorIndex, embedder: Embedder, threshold = 0.95) {
     this.index = index;
     this.embedder = embedder;
     this.threshold = threshold;
-    this.rateLimiter = rateLimiter ?? null;
-    this.maxIntentEntries = maxIntentEntries;
   }
 
   /**
-   * Intern a selector. If a semantically equivalent one exists
-   * (cosine similarity > threshold), return the existing one.
-   *
-   * `provenance` distinguishes compiled tool/alias selectors (the default)
-   * from selectors created by resolving a runtime intent — see
-   * `resolve()`. Intent selectors are excluded from `all()` and from
-   * `searchTools()` so they never surface as phantom tools or refinement
-   * options, and are LRU-bounded so they can't grow the table unbounded.
+   * Intern a tool selector. If a tool selector with this canonical, or one
+   * semantically equivalent to it (cosine similarity >= threshold), is
+   * already in the table, return it; otherwise add a new one. Only tool
+   * selectors are ever matched — the table holds nothing else. Use
+   * `register()` to keep two similar tools apart.
    */
-  async intern(embedding: Float32Array, canonical: string, provenance: 'tool' | 'intent' = 'tool'): Promise<ToolSelector> {
+  async intern(embedding: Float32Array, canonical: string): Promise<ToolSelector> {
     // Check for exact canonical match first (fast path)
     const exactMatch = this.selectors.get(canonical);
     if (exactMatch) return exactMatch;
@@ -77,41 +61,19 @@ export class SelectorTable {
       if (match) return match;
     }
 
-    // New selector — create and intern
-    const parts = canonical.split(':').filter(Boolean);
-    const sel: ToolSelector = {
-      vector: embedding,
-      canonical,
-      parts,
-      arity: Math.max(0, parts.length - 1),
-      provenance,
-    };
-
-    this.selectors.set(canonical, sel);
-    this.index.insert(canonical, embedding);
-
-    if (provenance === 'intent') {
-      this.intentOrder.push(canonical);
-      this.evictExcessIntents();
-    }
-
-    return sel;
+    return this.register(embedding, canonical);
   }
 
   /**
    * Register a compiled tool or alias selector under its exact canonical
    * name. Unlike intern(), this never folds the selector into a
    * semantically similar existing one — two distinct tools always get two
-   * distinct selectors. Registering an existing tool canonical again
-   * returns the selector already in the table.
+   * distinct selectors. Registering an existing canonical again returns the
+   * selector already in the table.
    */
   register(embedding: Float32Array, canonical: string): ToolSelector {
     const existing = this.selectors.get(canonical);
-    if (existing && existing.provenance !== 'intent') return existing;
-    if (existing) {
-      // An intent that canonicalized to this exact name — the tool wins.
-      this.intentOrder = this.intentOrder.filter(c => c !== canonical);
-    }
+    if (existing) return existing;
 
     const parts = canonical.split(':').filter(Boolean);
     const sel: ToolSelector = {
@@ -126,74 +88,22 @@ export class SelectorTable {
     return sel;
   }
 
-  /** Evict the oldest intent selectors past the retention cap. */
-  private evictExcessIntents(): void {
-    while (this.intentOrder.length > this.maxIntentEntries) {
-      const oldest = this.intentOrder.shift();
-      if (oldest === undefined) break;
-      this.selectors.delete(oldest);
-      this.index.remove(oldest);
-    }
-  }
-
   /**
-   * Resolve a natural language intent to an interned selector.
-   * Equivalent to sel_getName() + sel_registerName().
-   *
-   * Checks the semantic rate limiter before embedding. If the system
-   * is under vector flood, throws VectorFloodError without touching
-   * the embedder.
+   * Embed a natural language intent. The returned selector carries this
+   * exact text's own embedding, its display canonical (canonicalize) and
+   * its identity key (intentKey); the table and the vector index are left
+   * unchanged. Equivalent to sel_getName() for an intent.
    */
   async resolve(intent: string): Promise<ToolSelector> {
-    const canonical = canonicalize(intent);
-
-    // Fast path: if we already have this selector, skip embedding + rate check
-    const existing = this.selectors.get(canonical);
-    if (existing) return existing;
-
-    // Pre-embedding flood gate
-    if (this.rateLimiter && !this.rateLimiter.check(canonical)) {
-      throw new VectorFloodError(canonical);
-    }
-
-    const embedding = await this.embedder.embed(intent);
-
-    // Post-embedding: record for similarity tracking
-    if (this.rateLimiter) {
-      this.rateLimiter.record(canonical, embedding);
-      // Check if similarity has dropped below floor — throttle future requests
-      if (!this.rateLimiter.checkSimilarity()) {
-        // We already embedded this one, so let it through but log the warning.
-        // The NEXT request will be caught by the pre-embedding check once
-        // the volume threshold is also hit, or by checkSimilarity on the
-        // next cycle.
-      }
-    }
-
-    return this.intern(embedding, canonical, 'intent');
+    return intentSelector(intent, await this.embedder.embed(intent));
   }
 
   /**
-   * Embed an intent without interning it: the returned selector carries
-   * this exact text's own embedding, and the table and vector index are
-   * left unchanged. The semantic rate limiter still applies (it is a guard,
-   * not learned state). Used by side-effect-free resolution.
+   * Same as resolve(). Kept as the name side-effect-free resolution used
+   * before 1.0, when resolve() interned the intent.
    */
-  async probe(intent: string): Promise<ToolSelector> {
-    const canonical = canonicalize(intent);
-    if (this.rateLimiter && !this.rateLimiter.check(canonical)) {
-      throw new VectorFloodError(canonical);
-    }
-    const embedding = await this.embedder.embed(intent);
-    this.rateLimiter?.record(canonical, embedding);
-    const parts = canonical.split(':').filter(Boolean);
-    return {
-      vector: embedding,
-      canonical,
-      parts,
-      arity: Math.max(0, parts.length - 1),
-      provenance: 'intent',
-    };
+  probe(intent: string): Promise<ToolSelector> {
+    return this.resolve(intent);
   }
 
   /** Look up a selector by its canonical name */
@@ -202,59 +112,93 @@ export class SelectorTable {
   }
 
   /**
-   * Find the nearest selectors to a vector, including intent selectors
-   * interned by prior `resolve()` calls. Prefer `searchTools()` for any
-   * caller building a dispatchable candidate list or a refinement/"did you
-   * mean?" surface — this raw search will happily return the user's own
-   * previously-resolved intent as a "match".
+   * The raw nearest-neighbour search over the vector index, including any
+   * ids the index holds that are not registered selectors (e.g. rows a
+   * shared SQLite index carries from elsewhere). Prefer `searchTools()`.
    */
   nearest(vector: Float32Array, topK: number, threshold: number): SelectorMatch[] | Promise<SelectorMatch[]> {
     return this.index.search(vector, topK, threshold);
   }
 
   /**
-   * Find the nearest *tool* selectors to a vector — the vector index minus
-   * any runtime intent selectors. This is what dispatch resolution,
-   * enumeration, and refinement should search: a user's own intent (which
-   * gets interned into the same vector index on resolution) must never come
-   * back as a candidate tool or a refinement suggestion.
+   * Find the nearest registered tool selectors to a vector, best first.
+   *
+   * Similarities are compared after quantization (quantizeScore): a
+   * selector is included when its quantized similarity is >= threshold,
+   * and selectors with equal quantized similarity are ordered by id, so the
+   * result — including which selectors make the topK cut — is the same
+   * whatever order they were registered in and whichever vector backend
+   * computed the distances. Index rows that are not registered selectors
+   * are skipped; the search widens until topK registered selectors are
+   * found (and every tie at the cut is seen) or the index is exhausted.
    */
   async searchTools(vector: Float32Array, topK: number, threshold: number): Promise<SelectorMatch[]> {
-    // Over-fetch to compensate for intent matches we'll filter out, up to
-    // the full size of the table so a real tool match is never missed.
-    const fetchK = Math.min(this.selectors.size || topK, topK * 4 || topK);
-    const raw = await this.index.search(vector, Math.max(topK, fetchK), threshold);
-    const results: SelectorMatch[] = [];
-    for (const match of raw) {
-      const sel = this.selectors.get(match.id);
-      if (!sel || sel.provenance === 'intent') continue;
-      results.push(match);
-      if (results.length >= topK) break;
+    if (topK <= 0) return [];
+    const similarity = (m: SelectorMatch): number => quantizeScore(1 - m.distance);
+    // A raw similarity that rounds up to the threshold still counts.
+    const rawThreshold = threshold - SCORE_QUANTUM / 2;
+    let fetchK = topK + 1;
+    for (;;) {
+      const raw = await this.index.search(vector, fetchK, rawThreshold);
+      const exhausted = raw.length < fetchK;
+      const results = raw
+        .filter(m => this.selectors.has(m.id) && similarity(m) >= threshold)
+        .sort((a, b) => similarity(b) - similarity(a) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+      const lastFetched = raw.length > 0 ? similarity(raw[raw.length - 1]) : -1;
+      const cut = results.length >= topK ? similarity(results[topK - 1]) : null;
+      // Done when the index is exhausted, or we have topK and everything
+      // fetched beyond them scores strictly lower than the cut.
+      if (exhausted || (cut !== null && lastFetched < cut)) return results.slice(0, topK);
+      fetchK *= 2;
     }
-    return results;
   }
 
-  /** Number of interned selectors (tool + intent) */
+  /** Number of registered selectors */
   get size(): number {
     return this.selectors.size;
   }
 
-  /**
-   * All interned selectors. Excludes runtime intent selectors by default —
-   * pass `{ includeIntents: true }` to see the full interning table
-   * (diagnostics only; intent selectors have no owning ToolClass and can't
-   * be dispatched).
-   */
-  all(options?: { includeIntents?: boolean }): ToolSelector[] {
-    const values = Array.from(this.selectors.values());
-    if (options?.includeIntents) return values;
-    return values.filter(s => s.provenance !== 'intent');
+  /** All registered tool selectors */
+  all(): ToolSelector[] {
+    return Array.from(this.selectors.values());
   }
 }
 
 /**
- * Convert a natural language intent into a canonical selector form.
- * "find my recent documents" → "find:recent:documents"
+ * The selector for a runtime intent: its own embedding, a display
+ * canonical, and its identity key. Never interned.
+ */
+export function intentSelector(intent: string, vector: Float32Array): ToolSelector {
+  const canonical = canonicalize(intent);
+  const parts = canonical.split(':').filter(Boolean);
+  return {
+    vector,
+    canonical,
+    parts,
+    arity: Math.max(0, parts.length - 1),
+    provenance: 'intent',
+    key: intentKey(intent),
+  };
+}
+
+/**
+ * The identity of an intent: its full text in Unicode NFC, trimmed, with
+ * runs of whitespace collapsed to one space, lower-cased. Nothing else is
+ * removed — negations, stopwords, punctuation and non-Latin scripts all
+ * keep two intents apart. The resolution cache, the semantic map and
+ * explicit feedback key on it. (canonicalize() is for display only.)
+ */
+export function intentKey(intent: string): string {
+  return intent.normalize('NFC').trim().replace(/\s+/gu, ' ').toLowerCase().normalize('NFC');
+}
+
+/**
+ * Convert a natural language intent into a canonical selector form, for
+ * display: "find my recent documents" → "find:recent:documents".
+ *
+ * It drops stopwords (including "not") and punctuation, so two different
+ * intents can share a canonical form. Never use it as an identity key —
+ * use intentKey().
  */
 export function canonicalize(intent: string): string {
   const stopwords = new Set([
@@ -270,9 +214,10 @@ export function canonicalize(intent: string): string {
   ]);
 
   const words = intent
+    .normalize('NFC')
     .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, '')
-    .split(/\s+/)
+    .replace(/[^\p{L}\p{N}\p{M}\s]/gu, '')
+    .split(/\s+/u)
     .filter(w => w.length > 0 && !stopwords.has(w));
 
   return words.join(':') || 'unknown';

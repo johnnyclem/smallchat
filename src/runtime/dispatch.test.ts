@@ -883,8 +883,9 @@ describe('semantic map — learned refinement resolution (Pillar 4b)', () => {
     const pref = await context.reinforceRefinement('quarterly revenue overview', 'contexta:list_tasks');
     expect(context.semanticMap.size).toBe(1);
     expect(pref.selectorId).toBe('contexta:list_tasks');
-    // The stored key is the canonicalized intent.
-    expect(context.semanticMap.lookupExact(pref.intentCanonical)).not.toBeNull();
+    // The stored key is the intent's normalized full text (intentKey).
+    expect(pref.intentKey).toBe('quarterly revenue overview');
+    expect(context.semanticMap.lookupExact('Quarterly Revenue Overview')).not.toBeNull();
   });
 
   it('ignores a learned preference whose selector was unregistered (stale)', async () => {
@@ -901,13 +902,14 @@ describe('semantic map — learned refinement resolution (Pillar 4b)', () => {
   });
 });
 
-// Regression coverage for the HyperVault field report (#2): after the very
-// first dispatch, the resolved intent used to get interned into the same
-// selector table / vector index as compiled tools, so it could come back as
-// a phantom "tool" — either enumerated via selectorTable.all(), or offered
-// by refine() as the top "did you mean?" option (matching itself at ~1.0).
+// Regression coverage for the HyperVault field report (#2) and SC-INF-13:
+// a resolved intent used to get interned into the same selector table /
+// vector index as compiled tools, so it could come back as a phantom
+// "tool" — enumerated via selectorTable.all(), or offered by refine() as
+// the top "did you mean?" option (matching itself at ~1.0). Intents are no
+// longer interned at all.
 describe('selector table pollution — resolved intents must not surface as tools', () => {
-  it('does not list a previously-resolved intent via selectorTable.all()', async () => {
+  it('does not add a resolved intent to the selector table', async () => {
     const context = createContext();
     const cls = new ToolClass('workspace');
     const embedding = await context.embedder.embed('list my workspaces');
@@ -915,14 +917,12 @@ describe('selector table pollution — resolved intents must not surface as tool
     cls.addMethod(selector, makeIMP('workspace', 'list_workspaces', 'workspaces!'));
     context.registerClass(cls);
 
-    // An intent unrelated to any registered tool — forces the resolve() path
-    // to intern it, which is exactly what happened in production.
     await toolkit_dispatch(context, 'search for projects in my workspace');
 
     const canonical = 'search:projects:workspace';
     expect(context.selectorTable.all().some(s => s.canonical === canonical)).toBe(false);
-    // It's still tracked (for cache-hit purposes), just not as a "tool".
-    expect(context.selectorTable.get(canonical)).toBeDefined();
+    expect(context.selectorTable.get(canonical)).toBeUndefined();
+    expect(context.selectorTable.size).toBe(1);
   });
 
   it('never offers the caller\'s own intent as a refinement option', async () => {
@@ -934,29 +934,14 @@ describe('selector table pollution — resolved intents must not surface as tool
     context.registerClass(cls);
 
     const intent = 'search for projects in my workspace';
-
-    // First dispatch interns the intent into the shared vector index.
-    const first = await toolkit_dispatch(context, intent);
-    const firstRefinement = (first as any).refinement;
-    if (firstRefinement) {
-      expect(
-        firstRefinement.options.some((o: any) => o.selectorId === 'search:projects:workspace'),
-      ).toBe(false);
+    for (let i = 0; i < 2; i++) {
+      const result = await toolkit_dispatch(context, intent);
+      const refinement = (result as any).refinement;
+      if (refinement) {
+        expect(refinement.options.some((o: any) => o.selectorId === 'search:projects:workspace')).toBe(false);
+      }
     }
-
-    // Second dispatch of the *exact same* intent: before the fix, the intent
-    // now matches itself at ~1.0 similarity and becomes the top "did you
-    // mean?" suggestion, or gets dispatched as a dead tool with no owning
-    // ToolClass — either way, a caller acting on it fails with "no longer in
-    // the toolkit".
-    const second = await toolkit_dispatch(context, intent);
-    const secondRefinement = (second as any).refinement;
-    if (secondRefinement) {
-      expect(
-        secondRefinement.options.some((o: any) => o.selectorId === 'search:projects:workspace'),
-      ).toBe(false);
-    }
-    expect(context.selectorTable.get('search:projects:workspace')?.provenance).toBe('intent');
+    expect(context.selectorTable.get('search:projects:workspace')).toBeUndefined();
   });
 });
 

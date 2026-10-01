@@ -144,11 +144,44 @@ export class OverloadTable {
    * form before calling this method.
    */
   resolve(args: unknown[]): OverloadResolutionResult | null {
+    return this.pickBest(this.entries.map(entry => ({ entry, score: scoreSignatureMatch(entry.signature, args) })), args);
+  }
+
+  /**
+   * Resolve using named arguments, mapped to each signature's positions.
+   * Signatures that declare every provided name are preferred; omitted
+   * optional parameters are fine. (When none declares them all, names are
+   * matched as far as they go, so validateAndResolveNamed can report the
+   * excess arguments.) Ties are broken exactly as in resolve(): higher
+   * arity, then developer-defined over semantic overloads, else
+   * OverloadAmbiguityError.
+   */
+  resolveNamed(
+    namedArgs: Record<string, unknown>,
+    signature?: SCMethodSignature,
+  ): OverloadResolutionResult | null {
+    if (signature) return this.resolve(namedToPositional(namedArgs, signature));
+
+    const names = Object.keys(namedArgs);
+    const score = (entry: OverloadEntry) => scoreSignatureMatch(entry.signature, namedToPositional(namedArgs, entry.signature));
+    const declaresAll = (entry: OverloadEntry) => {
+      const declared = new Set(entry.signature.parameters.map(p => p.name));
+      return names.every(n => declared.has(n));
+    };
+    const exact = this.entries.map(entry => ({ entry, score: declaresAll(entry) ? score(entry) : -1 }));
+    if (exact.some(e => e.score >= 0)) return this.pickBest(exact, Object.values(namedArgs));
+    return this.pickBest(this.entries.map(entry => ({ entry, score: score(entry) })), Object.values(namedArgs));
+  }
+
+  /** The best-scoring entry, with the tie-break rules shared by resolve and resolveNamed. */
+  private pickBest(
+    scored: Array<{ entry: OverloadEntry; score: number }>,
+    args: unknown[],
+  ): OverloadResolutionResult | null {
     let bestScore = -1;
     let bestEntries: OverloadEntry[] = [];
 
-    for (const entry of this.entries) {
-      const score = scoreSignatureMatch(entry.signature, args);
+    for (const { entry, score } of scored) {
       if (score < 0) continue;
 
       if (score > bestScore) {
@@ -166,11 +199,13 @@ export class OverloadTable {
       bestEntries.sort((a, b) => b.signature.arity - a.signature.arity);
       if (bestEntries[0].signature.arity === bestEntries[1].signature.arity) {
         // Prefer developer-defined over semantic overloads
-        const devDefined = bestEntries.filter(e => !e.isSemanticOverload);
+        const topArity = bestEntries[0].signature.arity;
+        const tied = bestEntries.filter(e => e.signature.arity === topArity);
+        const devDefined = tied.filter(e => !e.isSemanticOverload);
         if (devDefined.length === 1) {
           bestEntries = devDefined;
         } else {
-          throw new OverloadAmbiguityError(this.selectorCanonical, bestEntries, args);
+          throw new OverloadAmbiguityError(this.selectorCanonical, tied, args);
         }
       }
     }
@@ -184,38 +219,6 @@ export class OverloadTable {
       matchQuality,
       entry: winner,
     };
-  }
-
-  /** Resolve using named arguments by mapping them to positional form */
-  resolveNamed(
-    namedArgs: Record<string, unknown>,
-    signature?: SCMethodSignature,
-  ): OverloadResolutionResult | null {
-    // If no specific signature, try all overloads with name-to-position mapping
-    if (!signature) {
-      let bestResult: OverloadResolutionResult | null = null;
-      let bestScore = -1;
-
-      for (const entry of this.entries) {
-        const positional = namedToPositional(namedArgs, entry.signature);
-        const score = scoreSignatureMatch(entry.signature, positional);
-        if (score > bestScore) {
-          bestScore = score;
-          const quality = this.deriveMatchQuality(score, entry.signature.arity);
-          bestResult = {
-            imp: entry.imp,
-            signature: entry.signature,
-            matchQuality: quality,
-            entry,
-          };
-        }
-      }
-
-      return bestResult;
-    }
-
-    const positional = namedToPositional(namedArgs, signature);
-    return this.resolve(positional);
   }
 
   /**

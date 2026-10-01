@@ -18,7 +18,7 @@
 
 export type ConfidenceTier = 'exact' | 'high' | 'medium' | 'low' | 'none';
 
-/** Default tier thresholds — can be overridden per-tool-class by adaptive thresholds */
+/** Tier thresholds (RuntimeOptions.thresholds overrides the defaults) */
 export interface TierThresholds {
   exact: number;
   high: number;
@@ -32,6 +32,35 @@ export const DEFAULT_THRESHOLDS: Readonly<TierThresholds> = Object.freeze({
   medium: 0.75,
   low: 0.60,
 });
+
+/**
+ * Scores are compared at this resolution. Similarities from different
+ * vector backends (float32 SQLite, float64 in-memory) or platforms can
+ * differ in the last few bits; quantizing every score before it is ranked
+ * or compared with a threshold keeps those differences from changing an
+ * outcome. Equal quantized scores are ordered by canonical tool id.
+ */
+export const SCORE_QUANTUM = 1e-4;
+
+/** A score rounded to SCORE_QUANTUM (4 decimal places), clamped to [0, 1]. */
+export function quantizeScore(score: number): number {
+  if (!Number.isFinite(score)) return 0;
+  return Math.min(1, Math.max(0, Math.round(score * 1e4) / 1e4));
+}
+
+/**
+ * The deterministic candidate order: higher quantized score first, then
+ * canonical tool id (UTF-16 code unit order). Returns a negative number
+ * when `a` ranks before `b`.
+ */
+export function compareRanked(
+  a: { score: number; toolId: string },
+  b: { score: number; toolId: string },
+): number {
+  const byScore = quantizeScore(b.score) - quantizeScore(a.score);
+  if (byScore !== 0) return byScore;
+  return a.toolId < b.toolId ? -1 : a.toolId > b.toolId ? 1 : 0;
+}
 
 /** Compute the confidence tier from a similarity score */
 export function computeTier(confidence: number, thresholds: TierThresholds = DEFAULT_THRESHOLDS): ConfidenceTier {

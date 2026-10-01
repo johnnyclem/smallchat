@@ -484,3 +484,65 @@ describe('OverloadTable.validateAndResolve', () => {
     }).toThrow(SignatureValidationError);
   });
 });
+
+// ---------------------------------------------------------------------------
+// SC-INF-20 — named-argument overload resolution
+// ---------------------------------------------------------------------------
+
+describe('SC-INF-20: resolveNamed handles omitted optionals, plain JSON and ties like resolve()', () => {
+  it('an omitted optional parameter does not disqualify a signature', () => {
+    const table = new OverloadTable('search');
+    table.register(createSignature([
+      param('query', 0, SCType.string(), true),
+      param('limit', 1, SCType.number(), false),
+    ]), mockIMP('search'));
+
+    expect(table.resolveNamed({ query: 'x' })?.imp.toolName).toBe('search');
+    expect(table.validateAndResolveNamed({ query: 'x' })?.imp.toolName).toBe('search');
+  });
+
+  it('plain JSON objects and arrays match SCData and SCArray slots', () => {
+    const table = new OverloadTable('find');
+    table.register(createSignature([param('filter', 0, SCType.object('SCData'))]), mockIMP('find_by_filter'));
+    table.register(createSignature([param('ids', 0, SCType.object('SCArray'))]), mockIMP('find_by_ids'));
+
+    expect(table.resolveNamed({ filter: { a: 1 } })?.imp.toolName).toBe('find_by_filter');
+    expect(table.resolveNamed({ ids: [1, 2] })?.imp.toolName).toBe('find_by_ids');
+    expect(table.validateAndResolveNamed({ filter: { a: 1 } })?.imp.toolName).toBe('find_by_filter');
+    // A plain object is not an SCArray, and a string is not SCData.
+    expect(table.resolveNamed({ ids: { a: 1 } })).toBeNull();
+    expect(table.resolveNamed({ filter: 'a' })).toBeNull();
+  });
+
+  it('a signature that does not declare a provided name does not match', () => {
+    const table = new OverloadTable('get');
+    table.register(createSignature([param('id', 0, SCType.string())]), mockIMP('get_by_id'));
+    table.register(createSignature([
+      param('id', 0, SCType.string()),
+      param('verbose', 1, SCType.boolean(), false),
+    ]), mockIMP('get_verbose'));
+
+    expect(table.resolveNamed({ id: 'x', verbose: true })?.imp.toolName).toBe('get_verbose');
+  });
+
+  it('ties are broken by arity, then refused as ambiguous — never silently by registration order', () => {
+    const byArity = new OverloadTable('list');
+    byArity.register(createSignature([param('q', 0, SCType.string())]), mockIMP('list_short'));
+    byArity.register(createSignature([
+      param('q', 0, SCType.string()),
+      param('page', 1, SCType.number(), false),
+    ]), mockIMP('list_long'));
+    expect(byArity.resolveNamed({ q: 'x' })?.imp.toolName).toBe(byArity.resolve(['x'])?.imp.toolName);
+
+    const ambiguous = new OverloadTable('send');
+    ambiguous.register(createSignature([
+      param('to', 0, SCType.string()),
+      param('cc', 1, SCType.string(), false),
+    ]), mockIMP('send_cc'));
+    ambiguous.register(createSignature([
+      param('to', 0, SCType.string()),
+      param('urgent', 1, SCType.boolean(), false),
+    ]), mockIMP('send_urgent'));
+    expect(() => ambiguous.resolveNamed({ to: 'a@b.c' })).toThrow(OverloadAmbiguityError);
+  });
+});

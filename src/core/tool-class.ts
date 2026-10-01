@@ -1,4 +1,4 @@
-import type { ToolIMP, ToolMethod, ToolProtocol, ToolSchema, ToolSelector, ToolResult, TransportType, ArgumentConstraints, ValidationResult, InferenceDelta, ToolTransport, ToolTransportFactory, ToolAnnotations } from './types.js';
+import type { ToolIMP, ToolMethod, ToolProtocol, ToolSchema, ToolSelector, ToolResult, TransportType, ArgumentConstraints, ValidationResult, InferenceDelta, ToolTransport, ToolTransportFactory, ToolAnnotations, ExecuteOptions } from './types.js';
 import { OverloadTable } from './overload-table.js';
 import type { OverloadResolutionResult } from './overload-table.js';
 import type { SCMethodSignature } from './sc-types.js';
@@ -273,7 +273,7 @@ export class ToolProxy implements ToolIMP {
     };
   }
 
-  async execute(args: Record<string, unknown>): Promise<ToolResult> {
+  async execute(args: Record<string, unknown>, options?: ExecuteOptions): Promise<ToolResult> {
     await this.realize();
 
     const validation = this.constraints.validate(args);
@@ -287,14 +287,14 @@ export class ToolProxy implements ToolIMP {
 
     const transport = this.getTransport();
     if (!transport) return this.noTransportError();
-    return transport.execute(this.toolName, args);
+    return transport.execute(this.toolName, args, options);
   }
 
   /**
    * Chunk-level streaming execution.
    * Falls back to single-shot if the transport doesn't support streaming.
    */
-  async *executeStream(args: Record<string, unknown>): AsyncGenerator<ToolResult> {
+  async *executeStream(args: Record<string, unknown>, options?: ExecuteOptions): AsyncGenerator<ToolResult> {
     await this.realize();
 
     const validation = this.constraints.validate(args);
@@ -312,22 +312,40 @@ export class ToolProxy implements ToolIMP {
       yield this.noTransportError();
       return;
     }
-    yield* transport.executeStream(this.toolName, args);
+    yield* transport.executeStream(this.toolName, args, options);
   }
 
   /**
-   * Token-level inference streaming.
-   * Only supported by MCP transport — other transports return nothing.
+   * Whether executeInference can stream this tool: only when the transport
+   * says so (ToolTransport.supportsInference). Streaming dispatch checks it
+   * before choosing token-level inference over executeStream.
    */
-  async *executeInference(args: Record<string, unknown>): AsyncGenerator<InferenceDelta> {
+  supportsInference(): boolean {
+    const transport = this.getTransport();
+    if (!transport || typeof transport.executeInference !== 'function') return false;
+    return transport.supportsInference?.(this.toolName) === true;
+  }
+
+  /**
+   * Token-level inference streaming, when supportsInference() is true.
+   * Otherwise it yields nothing, returns nothing and executes nothing.
+   */
+  async *executeInference(args: Record<string, unknown>, options?: ExecuteOptions): AsyncGenerator<InferenceDelta, ToolResult | void, undefined> {
+    if (!this.supportsInference()) return;
     await this.realize();
 
     const validation = this.constraints.validate(args);
-    if (!validation.valid) return;
+    if (!validation.valid) {
+      return {
+        content: { errors: validation.errors },
+        isError: true,
+        metadata: { validationErrors: validation.errors },
+      };
+    }
 
     const transport = this.getTransport();
-    if (!transport) return;
-    yield* transport.executeInference(this.toolName, args);
+    if (!transport?.executeInference) return;
+    return yield* transport.executeInference(this.toolName, args, options);
   }
 }
 

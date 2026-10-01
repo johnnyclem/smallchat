@@ -49,7 +49,7 @@ export class SqliteArtifactStore {
       this.db.exec('DELETE FROM metadata');
       // Recreate the vector table at this artifact's dimensionality.
       this.db.exec('DROP TABLE IF EXISTS vec_selectors');
-      this.db.exec(`CREATE VIRTUAL TABLE vec_selectors USING vec0(id TEXT PRIMARY KEY, embedding FLOAT[${dims}])`);
+      this.db.exec(`CREATE VIRTUAL TABLE vec_selectors USING vec0(id TEXT PRIMARY KEY, embedding FLOAT[${dims}] distance_metric=cosine)`);
 
       const insertVec = this.db.prepare('INSERT INTO vec_selectors(id, embedding) VALUES (?, ?)');
       const skeleton: ArtifactV1 = { ...artifact, selectors: {} };

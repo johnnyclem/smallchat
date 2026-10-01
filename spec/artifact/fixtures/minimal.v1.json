@@ -169,7 +169,7 @@
       "selectorA": "notes.create_note",
       "selectorB": "notes.delete_note",
       "similarity": 0.8463399293979357,
-      "hint": "Collision zone (84.6%): \"notes.create_note\" and \"notes.delete_note\" — dispatches will trigger MEDIUM-confidence verification. Consider renaming, merging, or pinning."
+      "hint": "Collision zone (84.6%): \"notes.create_note\" and \"notes.delete_note\" — an intent near both may resolve to needs-disambiguation, or to the other tool. Consider distinct descriptions, a selectorHint, or calling them by tool id."
     }
   ],
   "duplicates": [],
@@ -180,5 +180,5 @@
     "collisionCount": 1,
     "duplicateCount": 0
   },
-  "contentHash": "b20f99c1f77cb4942e9145f4b4fb52078c20340482aeb61f81456039aa1ef125"
+  "contentHash": "eb0df0508b6a8c4d4c3ae5be490419728db5d83a584412f4c3c17da7dce7d4dd"
 }

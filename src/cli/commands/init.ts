@@ -397,7 +397,6 @@ function generateSmallChatJson(name: string, template: string): object {
     base.toolHints = {
       [`${name}.greet`]: {
         aliases: ['say hello', 'welcome user'],
-        priority: 1.2,
       },
     };
   }

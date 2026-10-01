@@ -21,7 +21,7 @@ import { OverloadTable } from '../core/overload-table.js';
 import { createSignature, param, SCType } from '../core/sc-types.js';
 import type { SCTypeDescriptor, SCParameterSlot } from '../core/sc-types.js';
 import { parseMCPManifest, applyManifestOverrides, type ParsedTool } from './parser.js';
-import type { SmallChatManifest } from '../core/manifest.js';
+import type { ManifestCompilerConfig, SmallChatManifest } from '../core/manifest.js';
 import { AppCompiler } from '../app/app-compiler.js';
 import { getTransport } from '../mcp/transport.js';
 import { toolId } from '../core/tool-id.js';
@@ -81,6 +81,8 @@ export class ToolCompiler {
   private semanticOverloadThreshold: number;
   private compileApps: boolean;
   private appVectorIndex: VectorIndex | undefined;
+  /** Options passed to the constructor; they win over smallchat.json */
+  private readonly options: CompilerOptions;
 
   constructor(
     embedder: Embedder,
@@ -89,29 +91,54 @@ export class ToolCompiler {
   ) {
     this.embedder = embedder;
     this.vectorIndex = vectorIndex;
-    this.collisionThreshold = options?.collisionThreshold ?? 0.89;
-    this.generateSemanticOverloads = options?.generateSemanticOverloads ?? false;
-    this.semanticOverloadThreshold = options?.semanticOverloadThreshold ?? 0.82;
+    this.options = options ?? {};
     this.compileApps = options?.compileApps ?? true;
     this.appVectorIndex = options?.appVectorIndex;
-    this.duplicateThreshold = options?.duplicateThreshold ?? options?.deduplicationThreshold ?? 0.95;
-    this.allowDuplicates = options?.allowDuplicates ?? false;
+    this.collisionThreshold = 0.89;
+    this.generateSemanticOverloads = false;
+    this.semanticOverloadThreshold = 0.82;
+    this.duplicateThreshold = 0.95;
+    this.allowDuplicates = false;
+    this.applySettings();
+  }
+
+  /**
+   * Resolve the thresholds for one compile: an option passed to the
+   * constructor, else the project's smallchat.json "compiler" block, else
+   * the default.
+   */
+  private applySettings(project: ManifestCompilerConfig = {}): void {
+    const o = this.options;
+    this.collisionThreshold = o.collisionThreshold ?? project.collisionThreshold ?? 0.89;
+    this.generateSemanticOverloads = o.generateSemanticOverloads ?? project.generateSemanticOverloads ?? false;
+    this.semanticOverloadThreshold = o.semanticOverloadThreshold ?? project.semanticOverloadThreshold ?? 0.82;
+    this.duplicateThreshold = o.duplicateThreshold ?? o.deduplicationThreshold
+      ?? project.duplicateThreshold ?? project.deduplicationThreshold ?? 0.95;
+    this.allowDuplicates = o.allowDuplicates ?? project.allowDuplicates ?? false;
   }
 
   /**
    * Compile tool definitions from provider manifests into a compiled artifact.
    *
    * @param manifests - Provider manifests to compile
-   * @param projectManifest - Optional smallchat.json project manifest with overrides
+   * @param projectManifest - Optional smallchat.json project manifest: its
+   *   hint overrides and its "compiler" thresholds (duplicateThreshold,
+   *   allowDuplicates, collisionThreshold, generateSemanticOverloads,
+   *   semanticOverloadThreshold) apply unless the constructor set them.
    */
   async compile(
     manifests: ProviderManifest[],
     projectManifest?: SmallChatManifest,
   ): Promise<CompilationResult> {
+    this.applySettings(projectManifest?.compiler);
+
     // Phase 1: PARSE
     let allTools: ParsedTool[] = [];
     for (const manifest of manifests) {
       allTools.push(...parseMCPManifest(manifest));
+    }
+    for (const where of hintsWithPriority(manifests, projectManifest)) {
+      console.warn(`  Ignored compiler hint "priority" (${where}): dispatch ranks candidates by similarity only.`);
     }
 
     // Apply project-level hint overrides from smallchat.json
@@ -338,10 +365,9 @@ export class ToolCompiler {
       dispatchTables.set(providerId, table);
     }
 
-    // Detect selector collisions (skip pairs that are now overloaded or aliased)
-    // 0.4.0 COLLISION FIREWALL: expanded detection to the 0.75-0.95 zone.
-    // In --strict mode, collisions in the 0.75-0.89 zone are errors, not warnings.
-    const isStrict = this.collisionThreshold < 0.89; // --strict lowers the threshold
+    // Detect selector collisions (skip pairs that are now overloaded or aliased).
+    // Collision firewall: pairs in the 0.75–duplicateThreshold zone are
+    // reported (warnings, never errors).
     const firewallThreshold = 0.75; // Collision firewall lower bound
 
     const overloadedCanonicals = new Set(overloadTables.keys());
@@ -384,7 +410,7 @@ export class ToolCompiler {
           } else if (bPreferred) {
             hint = `"${b.canonical}" is preferred (compiler hint) over "${a.canonical}" (${(similarity * 100).toFixed(1)}% similar).`;
           } else if (severity === 'collision-zone') {
-            hint = `Collision zone (${(similarity * 100).toFixed(1)}%): "${a.canonical}" and "${b.canonical}" — dispatches will trigger MEDIUM-confidence verification. Consider renaming, merging, or pinning.`;
+            hint = `Collision zone (${(similarity * 100).toFixed(1)}%): "${a.canonical}" and "${b.canonical}" — an intent near both may resolve to needs-disambiguation, or to the other tool. Consider distinct descriptions, a selectorHint, or calling them by tool id.`;
           } else {
             hint = `Disambiguation needed: "${a.canonical}" and "${b.canonical}" are similar (${(similarity * 100).toFixed(1)}%).`;
           }
@@ -572,6 +598,27 @@ export class ToolCompiler {
   }
 }
 
+/**
+ * Where a removed `priority` compiler hint is still set. It never affected
+ * dispatch, so 1.0 removed it; compile warns instead of silently ignoring it.
+ */
+function hintsWithPriority(manifests: ProviderManifest[], project?: SmallChatManifest): string[] {
+  const has = (hints: unknown): boolean =>
+    typeof hints === 'object' && hints !== null && 'priority' in hints;
+  const found: string[] = [];
+  for (const m of manifests) {
+    if (has(m.compilerHints)) found.push(`provider ${m.id}`);
+    for (const t of m.tools) if (has(t.compilerHints)) found.push(`${m.id}.${t.name}`);
+  }
+  for (const [id, hints] of Object.entries(project?.providerHints ?? {})) {
+    if (has(hints)) found.push(`smallchat.json providerHints.${id}`);
+  }
+  for (const [id, hints] of Object.entries(project?.toolHints ?? {})) {
+    if (has(hints)) found.push(`smallchat.json toolHints.${id}`);
+  }
+  return found;
+}
+
 /** Cosine similarity between two vectors */
 function cosineSim(a: Float32Array, b: Float32Array): number {
   let dot = 0, normA = 0, normB = 0;
@@ -603,17 +650,6 @@ export interface CompilerOptions {
   generateSemanticOverloads?: boolean;
   /** Similarity threshold for grouping tools as overloads (default 0.82) */
   semanticOverloadThreshold?: number;
-  /** Priority hints from dream analysis — tools to boost, demote, or exclude. */
-  priorityHints?: {
-    boosted: Map<string, number>;
-    demoted: Map<string, number>;
-    excluded: Set<string>;
-  };
-  /**
-   * 0.4.0 --strict mode: raises all thresholds, enables verification on every
-   * dispatch, and treats ambiguity as an error instead of a warning.
-   */
-  strict?: boolean;
   /**
    * MCP Apps: run AppCompiler after the tool LINK phase to compile UI components.
    * Defaults to true when any tools declare uiResourceUri; set to false to skip.

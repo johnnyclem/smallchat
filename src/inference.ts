@@ -47,12 +47,12 @@ export type {
 } from './core/sc-types.js';
 
 // --- Selectors, classes, overloads: the dispatch substrate ---
-export { SelectorTable, canonicalize, VectorFloodError } from './core/selector-table.js';
+export { SelectorTable, canonicalize, intentKey, intentSelector, VectorFloodError } from './core/selector-table.js';
 export { SelectorNamespace, SelectorShadowingError } from './core/selector-namespace.js';
 export type { CoreSelectorEntry } from './core/selector-namespace.js';
 export { ResolutionCache, computeSchemaFingerprint } from './core/resolution-cache.js';
-export { SemanticRateLimiter } from './core/semantic-rate-limiter.js';
-export type { SemanticRateLimiterOptions, FloodingMetrics } from './core/semantic-rate-limiter.js';
+export { SemanticRateLimiter, DEFAULT_PRINCIPAL } from './core/semantic-rate-limiter.js';
+export type { SemanticRateLimiterOptions, FloodingMetrics, RateLimitVerdict } from './core/semantic-rate-limiter.js';
 export { ToolClass, ToolProxy } from './core/tool-class.js';
 export { OverloadTable, OverloadAmbiguityError } from './core/overload-table.js';
 export type { OverloadEntry, OverloadResolutionResult } from './core/overload-table.js';
@@ -67,9 +67,12 @@ export {
   dispatchById,
   resolveIntent,
   toolIdOf,
+  DEFAULT_MAX_DECOMPOSITION_DEPTH,
+  DEFAULT_MAX_SUB_DISPATCHES,
 } from './runtime/dispatch.js';
 export type {
   DispatchConfig,
+  DispatchOptions,
   DispatchByIdOptions,
   RegisteredTool,
   Resolution,
@@ -81,7 +84,7 @@ export type { RuntimeOptions } from './runtime/runtime.js';
 export { DispatchBuilder } from './runtime/dispatch-builder.js';
 
 // --- Confidence-tiered resolution + the serializable resolution proof ---
-export { computeTier, requiresVerification, requiresDecomposition, requiresRefinement, DEFAULT_THRESHOLDS } from './core/confidence.js';
+export { computeTier, requiresVerification, requiresDecomposition, requiresRefinement, DEFAULT_THRESHOLDS, quantizeScore, compareRanked, SCORE_QUANTUM } from './core/confidence.js';
 export type { ConfidenceTier, TierThresholds } from './core/confidence.js';
 export { createProof, addProofStep, finalizeProof, computeProofDigest, PROOF_DIGEST_DOMAIN } from './core/proof.js';
 export type {
@@ -117,9 +120,9 @@ export type { DecompositionResult, DecompositionOptions } from './runtime/decomp
 export { refine, buildRefinementResult } from './runtime/refinement.js';
 export type { RefinementResult } from './runtime/refinement.js';
 export { DispatchObserver } from './runtime/observer.js';
-export type { DispatchRecord, CorrectionSignal, SchemaRejection, AdaptiveThreshold, NegativeExample, ObserverOptions } from './runtime/observer.js';
+export type { DispatchRecord, CorrectionSignal, SchemaRejection, NegativeExample, DispatchFeedback, ObserverOptions } from './runtime/observer.js';
 export { SemanticMap } from './runtime/semantic-map.js';
-export type { LearnedPreference, SemanticMapMatch, SemanticMapOptions, SerializedSemanticMap } from './runtime/semantic-map.js';
+export type { LearnedPreference, SemanticMapMatch, SemanticMapOptions, SerializedSemanticMap, SerializedSemanticMapV1, SerializedPreference } from './runtime/semantic-map.js';
 
 // --- Pluggable LLM interface (degrades gracefully when absent) ---
 export { NULL_LLM_CLIENT } from './core/llm-client.js';
@@ -163,6 +166,8 @@ export type {
   ToolTransport,
   ToolTransportConnectionOptions,
   ToolTransportFactory,
+  ExecuteOptions,
+  InferenceStream,
   ValidationError,
   ValidationResult,
   VectorIndex,

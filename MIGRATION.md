@@ -118,6 +118,88 @@ now live in `core/proof.ts` (still exported from the package root and
 **`resolveRefinement(intent, choice)` runs the chosen tool by id.** Pass the
 option object (it carries `toolId`) or its `selectorId`.
 
+## Retrieval: intent identity, determinism, feedback, rate limiting
+
+**Intents are keyed by their full text.** The cache, the semantic map and
+feedback use `intentKey(text)` (NFC, trimmed, whitespace collapsed, lower
+case). Code that looked things up by `canonicalize(intent)` should pass the
+intent text instead; `canonicalize()` is for display only:
+
+```typescript
+// 0.5
+semanticMap.lookupExact(canonicalize(intent));
+// 1.0
+semanticMap.lookupExact(intent);          // normalized with intentKey()
+```
+
+**Persisted semantic maps.** `toJSON()` now writes version 2 (`intentKey`
+instead of `intentCanonical`). `SemanticMap.fromJSON()` still reads version
+1, but those entries only boost similar intents — they never answer an
+exact lookup, because their keys conflated intents such as "delete the
+logs" and "do not delete the logs". Re-teach important mappings (or let
+`resolveRefinement` re-learn them) if you need the exact fast path.
+
+**The selector table holds tools only.** `SelectorTable.resolve()` no longer
+interns the intent, so drop `maxIntentEntries` and `all({ includeIntents })`,
+and call `new SelectorTable(index, embedder, threshold?)` and
+`intern(embedding, canonical)` without the removed parameters.
+
+**SQLite vector indexes are rebuilt for cosine distance.** Opening an older
+`.db` whose `vec_selectors` table has no `distance_metric` rebuilds the
+table in place (ids and vectors are kept), so open it once with write
+access. Thresholds now mean cosine similarity on every backend; if you
+lowered thresholds to compensate for the old L2 scores, restore them.
+
+**Negative examples come from explicit feedback.** If you relied on the
+observer inferring corrections, either report them —
+
+```typescript
+runtime.feedback({ intent: 'search issues about login', toolId: 'github/search_prs', correct: false,
+  expectedToolId: 'github/search_issues' });
+```
+
+— or opt back in with `observerOptions: { implicitCorrections: true }`.
+`isNegativeExample(intent, toolId, principal?)` takes the canonical tool id
+(not the bare tool name). `getAdaptedThresholds()`/`getAdaptiveThresholds()`
+and the `correctionThreshold`/`thresholdBumpAmount` options are gone (they
+never affected dispatch).
+
+**Rate limiting is opt-in and per caller.** To keep vector-flooding
+protection, pass `rateLimiter: { ... }` in `RuntimeOptions` and identify the
+caller on each call (`dispatch(intent, args, { principal: sessionId })`,
+`resolve(intent, { principal })`). Handle `outcome === 'throttled'`
+(`result.metadata.retryAfterMs`) instead of catching `VectorFloodError`,
+which is no longer thrown. `runtime.cache.rateLimiter`, `checkFloodGate()`,
+`recordIntent()` and `getFloodingMetrics()` are removed; use
+`SemanticRateLimiter.evaluate()` / `getMetrics(principal)` directly.
+
+**Registry changes flush the cache.** `registerClass()` with an existing
+name replaces that class; to remove one, call `unregisterClass(name)`.
+Nothing to do unless you depended on the old class staying reachable.
+
+**Decomposition depth is 2 by default** and at most 16 sub-intents run per
+request: set `maxDecompositionDepth` / `maxSubDispatches` in
+`RuntimeOptions` to change them.
+
+**Custom transports and IMPs: cancellation and streaming.**
+`ToolIMP.execute(args, options?)` and `ToolTransport.execute/
+executeStream/executeInference(toolName, args, options?)` receive
+`options.signal`; stop work when it aborts. A transport that streams
+tokens must implement `supportsInference(toolName)` returning `true`
+(otherwise streaming dispatch uses `executeStream`), and an
+`executeInference` that gets a non-streamed reply should `return` it as a
+`ToolResult` rather than yield nothing. `WorkerVectorIndex.search()` and
+`size()` now return promises.
+
+**Compiler hints.** Remove `priority` from compiler hints (compile warns;
+it never changed dispatch) and `strict`/`priorityHints` from
+`CompilerOptions`. smallchat.json `compiler` thresholds now apply to
+`ToolCompiler.compile(manifests, projectManifest)`; constructor options
+still win.
+
+**ONNX vectors changed slightly.** Each text is embedded alone without
+padding; recompile ONNX artifacts with 1.0 (required anyway).
+
 ---
 
 # Migration Guide: 0.1.0 → 0.2.0

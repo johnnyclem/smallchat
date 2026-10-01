@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { ToolCompiler, DuplicateToolError, SelectorConflictError } from './compiler.js';
 import { LocalEmbedder } from '../embedding/local-embedder.js';
 import { MemoryVectorIndex } from '../embedding/memory-vector-index.js';
@@ -207,5 +207,58 @@ describe('ToolCompiler — duplicate tools (SC-INF-08)', () => {
     const result = await compiler.compile([githubManifest, slackManifest]);
     expect(result.duplicates).toEqual([]);
     expect(result.uniqueSelectorCount).toBe(3);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SC-INF-22: smallchat.json "compiler" options reach the compiler
+// ---------------------------------------------------------------------------
+
+describe('ToolCompiler — smallchat.json compiler options (SC-INF-22)', () => {
+  const project = (compiler: Record<string, unknown>) => ({ name: 'p', version: '1.0.0', compiler });
+
+  it('applies allowDuplicates and duplicateThreshold from the project manifest', async () => {
+    const result = await createCompiler().compile([nearDuplicateManifest], project({ allowDuplicates: true }));
+    expect(result.duplicates).toHaveLength(2);
+
+    const raised = await createCompiler().compile([nearDuplicateManifest], project({ duplicateThreshold: 1.01 }));
+    expect(raised.duplicates).toEqual([]);
+  });
+
+  it('applies generateSemanticOverloads from the project manifest', async () => {
+    // Same text, different argument types: an overload group, not a duplicate.
+    const overloadable: ProviderManifest = {
+      id: 'svc',
+      name: 'Svc',
+      transportType: 'mcp',
+      tools: [
+        tool('svc', 'find_record', 'Find a record', { inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } }),
+        tool('svc', 'find-record', 'Find a record', { inputSchema: { type: 'object', properties: { id: { type: 'number' } }, required: ['id'] } }),
+      ],
+    };
+    await expect(createCompiler().compile([overloadable], project({}))).rejects.toThrow(DuplicateToolError);
+    const result = await createCompiler().compile([overloadable], project({ generateSemanticOverloads: true }));
+    expect(result.semanticOverloads).toHaveLength(1);
+  });
+
+  it('explicit constructor options win over the project manifest', async () => {
+    const compiler = new ToolCompiler(new LocalEmbedder(64), new MemoryVectorIndex(), { allowDuplicates: false });
+    await expect(compiler.compile([nearDuplicateManifest], project({ allowDuplicates: true }))).rejects.toThrow(DuplicateToolError);
+  });
+
+  it('warns about the removed "priority" hint instead of silently ignoring it', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const manifest: ProviderManifest = {
+        id: 'svc',
+        name: 'Svc',
+        transportType: 'mcp',
+        tools: [tool('svc', 'ping', 'Ping the service', { compilerHints: { priority: 2 } as never })],
+      };
+      await createCompiler().compile([manifest]);
+      expect(warn.mock.calls.flat().join(' ')).toMatch(/Ignored compiler hint "priority" \(svc\.ping\)/);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

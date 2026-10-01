@@ -3,11 +3,28 @@ import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 
 /**
+ * The vec0 table definition SqliteVectorIndex searches: cosine distance
+ * (1 − cosine similarity), the same quantity MemoryVectorIndex returns.
+ * Other writers of `vec_selectors` (the SQLite artifact store) declare the
+ * same metric, so opening their databases needs no rebuild.
+ */
+function vecSelectorsTableSql(dimensions: number): string {
+  return `CREATE VIRTUAL TABLE vec_selectors USING vec0(id TEXT PRIMARY KEY, embedding FLOAT[${dimensions}] distance_metric=cosine)`;
+}
+
+/**
  * SqliteVectorIndex — a persistent vector index using sqlite-vec.
  *
- * Replaces MemoryVectorIndex with a disk-backed, production-grade
- * vector search index. Uses sqlite-vec's vec0 virtual table for
- * efficient cosine-distance nearest-neighbor queries.
+ * A disk-backed alternative to MemoryVectorIndex for large registries.
+ * Uses a sqlite-vec vec0 virtual table declared with
+ * `distance_metric=cosine`, so search() returns 1 − cosine similarity
+ * exactly like MemoryVectorIndex and thresholds mean the same thing on
+ * both backends.
+ *
+ * Databases written before smallchat 1.0 declared no metric, so vec0
+ * computed L2 distance, which search() then misread as cosine distance
+ * (a 0.90-cosine match scored 0.55). Opening such a database rebuilds the
+ * table in place with the cosine metric, keeping every id and vector.
  */
 export class SqliteVectorIndex implements VectorIndex {
   private db: Database.Database;
@@ -23,13 +40,28 @@ export class SqliteVectorIndex implements VectorIndex {
     // Load the sqlite-vec extension
     sqliteVec.load(this.db);
 
-    // Create the virtual table if it doesn't exist
-    this.db.exec(`
-      CREATE VIRTUAL TABLE IF NOT EXISTS vec_selectors USING vec0(
-        id TEXT PRIMARY KEY,
-        embedding FLOAT[${dimensions}]
-      );
-    `);
+    this.ensureCosineTable();
+  }
+
+  /** Create vec_selectors with the cosine metric, or rebuild an older (L2) one. */
+  private ensureCosineTable(): void {
+    const row = this.db
+      .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'vec_selectors'")
+      .get() as { sql: string } | undefined;
+    if (!row) {
+      this.db.exec(vecSelectorsTableSql(this.dimensions));
+      return;
+    }
+    if (/distance_metric\s*=\s*cosine/i.test(row.sql)) return;
+
+    const rebuild = this.db.transaction(() => {
+      const rows = this.db.prepare('SELECT id, embedding FROM vec_selectors').all() as Array<{ id: string; embedding: Buffer }>;
+      this.db.exec('DROP TABLE vec_selectors');
+      this.db.exec(vecSelectorsTableSql(this.dimensions));
+      const insert = this.db.prepare('INSERT INTO vec_selectors(id, embedding) VALUES (?, ?)');
+      for (const r of rows) insert.run(r.id, r.embedding);
+    });
+    rebuild();
   }
 
   insert(id: string, vector: Float32Array): void {
@@ -57,9 +89,8 @@ export class SqliteVectorIndex implements VectorIndex {
       );
     }
 
-    // sqlite-vec uses distance (lower = closer). For cosine distance,
-    // distance = 1 - similarity. So threshold on similarity becomes
-    // a max distance of (1 - threshold).
+    // The table uses distance_metric=cosine: distance = 1 - similarity, so
+    // a similarity threshold is a max distance of (1 - threshold).
     const maxDistance = 1 - threshold;
 
     const stmt = this.db.prepare(`

@@ -8,9 +8,9 @@
 
 Your agent has 50 tools. The LLM sees all 50 in its context window every single turn, burning tokens and degrading selection accuracy. You write routing logic, maintain tool registries, and pray the model picks the right one.
 
-**smallchat infers which tool to call.** The LLM expresses intent. The runtime resolves it — semantically, deterministically, in microseconds, with an auditable proof of *why* — and self-heals when nothing matches cleanly. No prompt stuffing. No selection lottery.
+**smallchat infers which tool to call.** The LLM expresses intent. The runtime resolves it — semantically, deterministically (same artifact, embedder and runtime state ⇒ same choice and proof digest), in milliseconds (cache hits in microseconds), with an auditable proof of *why* — and asks instead of guessing when nothing matches cleanly. No prompt stuffing. No selection lottery.
 
-> **Tool inference is the durable idea.** Compiling tools out of the context window saves tokens — a real win *today*. But token prices fall. What does not get cheaper is choosing the *right* tool from thousands, deterministically, in microseconds, with a proof you can audit and govern. smallchat is built so that the token savings are a present-era *benefit* of tool inference, not its reason to exist. Even when tokens cost nothing, the inference engine still earns its place.
+> **Tool inference is the durable idea.** Compiling tools out of the context window saves tokens — a real win *today*. But token prices fall. What does not get cheaper is choosing the *right* tool from thousands, reproducibly, in milliseconds, with a proof you can audit and govern. smallchat is built so that the token savings are a present-era *benefit* of tool inference, not its reason to exist. Even when tokens cost nothing, the inference engine still earns its place.
 
 > **Dispatch, not retrieval.** smallchat is not a knowledge engine or a RAG layer — it doesn't compile documents or answer questions. It infers *which tool to call* from a natural-language intent. The data substrate is your agent's tool registry (`.toolkit.json`), not enterprise documents.
 
@@ -27,9 +27,9 @@ An agent in production needs two things: **what it knows** and **what it can do*
 | Layer | Problem | Example |
 |-------|---------|---------|
 | Knowledge layer | Pre-compile documents and data into governed, answer-shaped artifacts so the agent answers from a resolved source instead of re-deriving it. (Moving retrieval upstream also cuts tokens.) | RAG pipelines, enterprise knowledge engines |
-| **Dispatch layer** | **Infer *which tool to call* from a natural-language intent — semantically, deterministically, in microseconds, with an auditable resolution proof. (Moving tool-selection upstream also cuts tokens.)** | **smallchat** |
+| **Dispatch layer** | **Infer *which tool to call* from a natural-language intent — semantically, reproducibly (same artifact, embedder and state ⇒ same choice), in milliseconds, with an auditable resolution proof. (Moving tool-selection upstream also cuts tokens.)** | **smallchat** |
 
-> The parenthetical token savings is what sells the idea in 2026. The deterministic, auditable selection is what keeps it useful after that.
+> The parenthetical token savings is what sells the idea in 2026. The reproducible, auditable selection is what keeps it useful after that.
 
 smallchat runs **in the agent process** — no SaaS dependency, no external round-trip. Your tool registry lives with your agent.
 
@@ -161,7 +161,7 @@ for await (const token of runtime.inferenceStream('find flights', { to: 'NYC' })
 - **Pre-flight verification** — `respondsToSelector:` gate between resolution and execution
 - **Intent decomposition** — `doesNotUnderstand:` handler breaks complex intents into sub-intents
 - **Refinement protocol** — `forwardInvocation:` dialogue for NONE-confidence dispatches
-- **Observation & adaptation** — KVO-inspired observer adapts thresholds in real time
+- **Observation & feedback** — dispatch observer with an explicit feedback API (negative examples); implicit correction inference is opt-in in 1.0
 
 See the full [Changelog](./CHANGELOG.md) for details.
 

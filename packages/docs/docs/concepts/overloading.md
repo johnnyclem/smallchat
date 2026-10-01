@@ -236,16 +236,17 @@ When type scores are equal, arity comparison prefers:
 
 ```typescript
 export interface OverloadEntry {
-  selector: ToolSelector;
   signature: SCMethodSignature;
-  implementation: ToolIMP;
-  priority?: number;  // explicit priority override
+  imp: ToolIMP;
+  originalToolName?: string;
+  isSemanticOverload: boolean;  // compiler-generated (semantic group)
 }
 
 export interface OverloadResolutionResult {
-  entry: OverloadEntry;
+  imp: ToolIMP;
+  signature: SCMethodSignature;
   matchQuality: MatchQuality;  // 'exact' | 'superclass' | 'union' | 'any'
-  score: number;               // 0–1
+  entry: OverloadEntry;
 }
 ```
 

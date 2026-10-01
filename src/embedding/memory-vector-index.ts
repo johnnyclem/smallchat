@@ -3,8 +3,9 @@ import type { SelectorMatch, VectorIndex } from '../core/types.js';
 /**
  * MemoryVectorIndex — an in-memory vector index using brute-force cosine similarity.
  *
- * v0.0.1 implementation. Will be replaced by sqlite-vec / HNSW for production.
- * Sufficient for small-to-medium registries (< 10K tools).
+ * A linear scan: each search is O(N) in the number of selectors. Fine for
+ * small-to-medium registries (a few thousand tools); use SqliteVectorIndex
+ * for larger ones.
  */
 export class MemoryVectorIndex implements VectorIndex {
   private vectors: Map<string, Float32Array> = new Map();
@@ -25,7 +26,8 @@ export class MemoryVectorIndex implements VectorIndex {
       }
     }
 
-    results.sort((a, b) => a.distance - b.distance);
+    // Ties are ordered by id, so the topK cut never depends on insertion order.
+    results.sort((a, b) => a.distance - b.distance || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
     return results.slice(0, topK);
   }
 

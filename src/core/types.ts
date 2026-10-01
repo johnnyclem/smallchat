@@ -30,13 +30,18 @@ export interface ToolSelector {
 
   /**
    * Where this selector came from: a compiled tool (or alias) vs. a runtime
-   * intent resolved via SelectorTable.resolve(). Intent selectors share the
-   * interning table and vector index with tool selectors for cache-hit
-   * purposes, but have no owning ToolClass and must never be surfaced as
-   * dispatchable tools or refinement options. Defaults to 'tool' when
-   * omitted (selectors interned directly via intern() predate this field).
+   * intent embedded by SelectorTable.resolve(). Intent selectors are never
+   * added to the selector table or the vector index. Defaults to 'tool'
+   * when omitted.
    */
   provenance?: 'tool' | 'intent';
+
+  /**
+   * Identity of an intent selector: intentKey(text) — the normalized full
+   * text (core/selector-table.ts). The resolution cache keys on it. Absent
+   * on tool selectors, whose canonical is their identity.
+   */
+  key?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -147,8 +152,12 @@ export interface ToolIMP {
   schema: ToolSchema | null;
   /** Loads the full schema on demand */
   schemaLoader: () => Promise<ToolSchema>;
-  /** Execute the tool */
-  execute(args: Record<string, unknown>): Promise<ToolResult>;
+  /**
+   * Execute the tool. `options.signal` is aborted when the caller gives up
+   * (timeout, cancelled stream, AbortController); a tool should stop work
+   * and settle promptly when it fires.
+   */
+  execute(args: Record<string, unknown>, options?: ExecuteOptions): Promise<ToolResult>;
   /** Argument type constraints */
   constraints: ArgumentConstraints;
   /** Optional MCP Apps ui:// resource URI — present when this tool has an interactive view */
@@ -177,10 +186,35 @@ export interface ToolIMP {
 // creates one.
 
 export interface ToolTransport {
-  execute(toolName: string, args: Record<string, unknown>): Promise<ToolResult>;
-  executeStream(toolName: string, args: Record<string, unknown>): AsyncGenerator<ToolResult>;
-  executeInference(toolName: string, args: Record<string, unknown>): AsyncGenerator<InferenceDelta>;
+  execute(toolName: string, args: Record<string, unknown>, options?: ExecuteOptions): Promise<ToolResult>;
+  executeStream(toolName: string, args: Record<string, unknown>, options?: ExecuteOptions): AsyncGenerator<ToolResult>;
+  /**
+   * Token-level inference streaming. Used only when supportsInference()
+   * returns true for the tool. See InferenceStream for the contract.
+   */
+  executeInference?(toolName: string, args: Record<string, unknown>, options?: ExecuteOptions): InferenceStream;
+  /**
+   * Whether executeInference can stream this tool. A transport without this
+   * method is treated as not supporting inference streaming, and streaming
+   * dispatch uses executeStream instead.
+   */
+  supportsInference?(toolName: string): boolean;
 }
+
+/** Per-call execution options. */
+export interface ExecuteOptions {
+  /** Aborted when the caller no longer wants the result */
+  signal?: AbortSignal;
+}
+
+/**
+ * A token-level inference stream. It yields deltas; when the upstream
+ * answers with a complete, non-streamed result instead, it yields nothing
+ * and returns that result. A stream that yields no deltas and returns
+ * nothing must not have executed the tool — the runtime then falls back to
+ * executeStream / execute.
+ */
+export type InferenceStream = AsyncGenerator<InferenceDelta, ToolResult | void, undefined>;
 
 export interface ToolTransportConnectionOptions {
   transportType: TransportType;
@@ -409,17 +443,11 @@ export interface CompilerHint {
   aliases?: string[];
 
   /**
-   * Priority multiplier for dispatch ranking (default 1.0).
-   * Values > 1.0 boost this tool in ambiguous resolutions.
-   * Values < 1.0 demote it (useful for deprecated tools).
-   * e.g. 1.5 makes this tool 50% more likely to win ties.
-   */
-  priority?: number;
-
-  /**
-   * Mark this tool as the preferred resolution when multiple tools collide
-   * within the collision threshold. Only one tool per collision group should
-   * set this to true — the compiler warns if multiple do.
+   * Compile-time annotation: when this tool collides with another (the
+   * compiler's collision report), name it as the intended one. Only one tool
+   * per collision group should set it — the compiler warns if several do.
+   * It does not change dispatch ranking: candidates are ranked by
+   * similarity alone (quantized, ties broken by tool id).
    */
   preferred?: boolean;
 
@@ -442,11 +470,6 @@ export interface CompilerHint {
  * per-tool.
  */
 export interface ProviderCompilerHints {
-  /**
-   * Default priority multiplier for all tools from this provider.
-   */
-  priority?: number;
-
   /**
    * Namespace prefix prepended to all selector canonicals from this provider.
    * e.g. "vendor.github" → selectors become "vendor.github.search_code"

@@ -4,8 +4,8 @@ Detailed documentation for smallchat's runtime, dispatch system, CLI, and MCP se
 
 ## Core Runtime
 
-- **Selector Table** — semantic interning of tool intents (like `sel_registerName`)
-- **Resolution Cache** — LRU cache with version tagging and automatic staleness detection
+- **Selector Table** — the compiled tool selectors and their vector index (like `sel_registerName`); runtime intents are embedded on their own and never interned
+- **Resolution Cache** — LRU cache keyed by the intent's full normalized text (`intentKey`), with version tagging and automatic staleness detection
 - **ToolClass** — provider grouping with dispatch tables, superclass chains, and overload support
 - **ToolProxy** — lazy schema loading (like `NSProxy`)
 - **resolve / dispatchById / dispatch** — choose a tool without running it; run exactly one tool by id; or both in one call (see below)
@@ -18,9 +18,11 @@ smallchat supports three tiers of execution, with automatic fallback:
 
 | Tier | Interface | Granularity | Use case |
 |------|-----------|-------------|----------|
-| 1 | `executeInference` | Token-level deltas | OpenAI/Anthropic SSE streams |
+| 1 | `executeInference` | Token-level deltas | OpenAI/Anthropic SSE streams — used only when the IMP (for `ToolProxy`: its transport's `supportsInference()`) supports it |
 | 2 | `executeStream` | Chunk-level results | Paginated or batched responses |
 | 3 | `execute` | Single-shot | Simple tool calls |
+
+An inference stream that yields no deltas falls back to the result it returns (a non-streamed upstream reply) or to tiers 2–3, so every resolved tool runs.
 
 `smallchat_dispatchStream` yields a sequence of typed events:
 
@@ -28,7 +30,7 @@ smallchat supports three tiers of execution, with automatic fallback:
 resolving → tool-start → chunk* / inference-delta* → done
 ```
 
-Cancellation is supported via standard `AbortController` semantics on the async generator.
+Cancellation: pass `{ signal }` (`dispatchStream(intent, args, { signal })`, `dispatch(intent, args, { signal })`, `dispatchById(id, args, { signal })`, `DispatchBuilder.withSignal()` / `withTimeout()`). The tool receives an `AbortSignal` (`execute(args, { signal })`) that fires when yours does or when you stop iterating a stream early; a signal that fired before execution means nothing runs (`outcome: 'aborted'`). Tools that ignore the signal keep running.
 
 The runtime exposes a convenience `inferenceStream()` method that yields only token text, filtering out lifecycle events and falling back gracefully through the tiers.
 
@@ -55,16 +57,18 @@ Tools can register multiple signatures under the same selector. Resolution picks
 2. **Superclass** match (SCObject hierarchy)
 3. **Union** type match
 4. **Any** (`id`) — accepts anything
-5. Tiebreaker: higher arity preferred
+5. Tiebreaker: higher arity preferred, then developer-defined over semantic overloads; otherwise `OverloadAmbiguityError`
 
-The compiler can also generate **semantic overloads** automatically by clustering tools with similar embeddings but different argument signatures (configurable threshold, default 0.82).
+Named arguments (`{ query: 'x' }`) resolve the same way: omitted optional parameters are fine, plain JSON objects and arrays match `SCData` / `SCArray` slots, and signatures that declare every provided name are preferred.
+
+The compiler can also report **semantic overload groups** — tools with similar embeddings but different argument signatures (`generateSemanticOverloads`, threshold default 0.82). Grouped tools are exempt from duplicate detection and listed in `CompilationResult.semanticOverloads`; 1.0 artifacts do not carry overload tables, so dispatch does not use them.
 
 ## Resolve, Dispatch by Id, and the Dispatch Policy
 
 Resolution and execution are separate calls:
 
 ```typescript
-// Choose a tool; nothing runs, nothing is cached or interned (learn: false).
+// Choose a tool; nothing runs, nothing is cached (learn: false). Intents are never interned.
 const resolution = await runtime.resolve('close the stale issue');
 // resolution.outcome: 'resolved' | 'needs-disambiguation' | 'unresolved'
 // resolution.chosen:  'github/update_issue' (when resolved)
@@ -114,6 +118,53 @@ Configure it with `RuntimeOptions` (`requireLLMForSubHighDispatch`,
 `strict`, `intentPins`, `treatUnannotatedAsDestructive`, `thresholds`,
 `llmClient`) or, for `smallchat serve`, a `"policy"` block in
 `smallchat.json`.
+
+### Determinism
+
+Every similarity is quantized to 1e-4 before it is ranked or compared with
+a threshold, and candidates with equal quantized scores are ordered by
+canonical tool id (rules and golden vectors: `spec/ranking/`). The property
+this gives: with the same artifact (`contentHash`), the same embedder
+(fingerprint) and the same runtime state — registered classes, intent
+pins, semantic map, feedback, resolution cache and options — the same
+intent text yields the same outcome, candidate order and `proofDigest`.
+Other intents the process resolved before do not enter into it. Not
+covered: an LLM verifier's or decomposer's answers (inputs like any other),
+an opted-in rate limiter's window, and cross-platform float drift larger
+than half a quantum. SQLite and in-memory indexes both report cosine
+distance.
+
+### Learning and feedback
+
+- **Semantic map** — `resolveRefinement()` / `reinforceRefinement()` teach
+  "this intent text → that tool"; the same `intentKey` later resolves at
+  EXACT, and similar intents get a bounded boost.
+- **Negative examples** — `runtime.feedback({ intent, toolId, correct:
+  false, expectedToolId?, principal? })` keeps resolution from choosing that
+  tool for that intent text (for one principal, when given); `correct: true`
+  clears it. Implicit correction inference (a tool switch within 30 s) is
+  off unless `observerOptions.implicitCorrections` is set, and invalid
+  arguments never blacklist a tool.
+- Registry changes (`registerClass` — which replaces a class of the same
+  name — `unregisterClass`, `swizzle`, categories, overloads) and learning
+  flush the resolution cache.
+
+### Rate limiting (opt-in)
+
+`RuntimeOptions.rateLimiter` enables the semantic rate limiter. It keeps a
+sliding window per principal (`{ principal }` on `resolve`/`dispatch`;
+default `"default"`) of novel intents — cache hits, pinned phrases and
+learned exact intents are never embedded and never counted — and refuses
+on volume (`maxNovelIntents`), gibberish (`maxCanonicalLength` /
+`entropyFraction`) or incoherence (`similarityFloor`). A refused intent
+resolves to `outcome: 'throttled'` with `retryAfterMs`; nothing is thrown.
+
+### Decomposition limits
+
+LOW-tier (or unmatched) intents may be split by `LLMClient.decompose` when
+dispatching. Depth is bounded by `maxDecompositionDepth` (default 2),
+sub-intents that restate the intent or one it came from are dropped, and at
+most `maxSubDispatches` (default 16) sub-intents run per request.
 
 ## Argument Validation
 
@@ -264,7 +315,7 @@ const original = runtime.swizzle(toolClass, selector, newImp);
 |---------|--------|---------|
 | **Intent Pinning** | `src/core/intent-pin.ts` | Lock sensitive selectors against semantic collision |
 | **Selector Namespacing** | `src/core/selector-namespace.ts` | Prevent cross-provider selector shadowing |
-| **Semantic Rate Limiting** | `src/core/semantic-rate-limiter.ts` | Throttle vector embedding operations to prevent DoS |
+| **Semantic Rate Limiting** | `src/core/semantic-rate-limiter.ts` | Opt-in, per-principal throttling of novel-intent embedding (vector-flooding DoS) |
 | **Container Sandboxing** | `src/transport/container-sandbox.ts` | Docker isolation for untrusted MCP subprocesses |
 | **Type Confusion Prevention** | `src/core/overload-table.ts` | Strict signature validation on overloaded dispatch |
 
@@ -285,12 +336,17 @@ import { ClaudeCodeChannelAdapter, ChannelServer } from '@smallchat/core/channel
 For production workloads, `ONNXEmbedder` and `SqliteVectorIndex` can run in dedicated worker threads via `WorkerEmbedder` and `WorkerVectorIndex`, keeping the main thread free for dispatch:
 
 ```typescript
-import { createWorkerEmbedder, WorkerVectorIndex } from '@smallchat/core';
+import { createWorkerEmbedder, WorkerVectorIndex, ToolRuntime } from '@smallchat/core';
 
-const embedder = await createWorkerEmbedder();
-const index = new WorkerVectorIndex();
+// One worker hosts both the ONNX embedder and the sqlite-vec index.
+const { bridge, embedder } = createWorkerEmbedder({ vectorIndexDbPath: './vectors.db' });
+const index = new WorkerVectorIndex(bridge);
 const runtime = new ToolRuntime(index, embedder);
+// ... register tools, dispatch as usual; when done:
+await bridge.terminate();
 ```
+
+`WorkerVectorIndex.search()` and `size()` return promises (the `VectorIndex` interface allows it); the runtime awaits them.
 
 ## CLI Reference
 

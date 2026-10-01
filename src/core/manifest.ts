@@ -126,7 +126,7 @@ export interface SmallChatManifest {
    * Keyed by fully-qualified tool name: "providerId.toolName"
    * These merge with (and override) any hints declared on the tool itself.
    *
-   * e.g. { "github.search_code": { "priority": 1.5, "aliases": ["find code"] } }
+   * e.g. { "github.search_code": { "aliases": ["find code"] } }
    */
   toolHints?: Record<string, CompilerHint>;
 

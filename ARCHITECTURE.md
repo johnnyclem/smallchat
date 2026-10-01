@@ -8,7 +8,7 @@ smallchat models LLM tool use as message dispatch. The LLM expresses intent. The
 
 The codebase is deliberately split in two, reflecting what lasts and what is contingent:
 
-- **Tier 1 — the tool-inference core (durable).** Everything that turns an intent into a resolved tool: the selector table, vector index, resolution cache, confidence tiers, the serializable resolution proof, and the `verify → decompose → refine → observe` fallback chain. Its value is *selection correctness, determinism (with the same artifact, embedder, policy, learned state and LLM-verifier answers, on one platform, the same intent yields the same choice and the same proof digest), microsecond latency, and auditability* — none of which depend on the price of a token. This tier is importable on its own as `@smallchat/core/inference`.
+- **Tier 1 — the tool-inference core (durable).** Everything that turns an intent into a resolved tool: the selector table, vector index, resolution cache, confidence tiers, the serializable resolution proof, and the `verify → decompose → refine → observe` fallback chain. Its value is *selection correctness, determinism (with the same artifact, embedder and runtime state — registered classes, pins, learned preferences, feedback, cache, options — and the same LLM-verifier answers, the same intent text yields the same outcome, candidate order and proof digest; scores are quantized to 1e-4 and ties broken by tool id, so float noise below that and the order tools were registered in do not matter; other intents the process saw do not either), low latency (a cache hit is a map lookup; a novel intent costs one embedding plus a linear scan of the tool vectors — milliseconds with the ONNX embedder), and auditability* — none of which depend on the price of a token. This tier is importable on its own as `@smallchat/core/inference`.
 - **Tier 2 — optimization satellites (contingent).** Compaction, output compression (RTK), knowledge pre-compilation (`memex`), CRDT memory, importance scoring, and dream recompilation. These exist to reduce token spend — pressing *today*, less so as tokens get cheap. They orbit the core and are tagged `[satellite]` in `src/index.ts`. Nothing in Tier 1 depends on them.
 
 The guiding principle: **token bloat is today's problem that a compiler solves; tool inference is the innovation that survives a future where token costs are nominal.** The sections below describe Tier 1 in detail.
@@ -22,24 +22,24 @@ The guiding principle: **token bloat is today's problem that a compiler solves; 
 ├─────────────────────────────────────────┤
 │           DispatchContext               │
 │  selector table · resolution cache     │
-│  overload tables · forwarding chain    │
+│  overload tables · dispatch policy     │
 ├─────────────────────────────────────────┤
 │             ToolClass                   │
 │  dispatch table (selector → IMP)       │
 │  protocols · categories · superclass   │
 ├─────────────────────────────────────────┤
 │     SelectorTable · VectorIndex        │
-│  semantic interning · cosine lookup    │
+│  tool selectors · cosine lookup        │
 └─────────────────────────────────────────┘
 ```
 
 ### Selector Table (`src/core/selector-table.ts`)
 
-Semantic interning of tool intents — analogous to `sel_registerName`. Natural-language intents are embedded into vectors and deduplicated so that `"search for code"` and `"find code"` resolve to the same canonical selector.
+The table of compiled tool (and alias) selectors and the vector index resolution searches — analogous to `sel_registerName`. It holds tools only: a runtime intent is embedded on its own (`resolve(intent)`) and is never added to the table or the index, so what an intent resolves to cannot depend on which intents the process saw before. `searchTools()` compares quantized similarities and orders ties by id. Intents are identified by `intentKey(text)` — the full text, NFC, trimmed, whitespace-collapsed, lower-cased; `canonicalize()` (stopwords dropped) is a display form only.
 
 ### Resolution Cache (`src/core/resolution-cache.ts`)
 
-LRU cache for resolved dispatches — analogous to `objc_msgSend`'s inline cache. Hot intents skip the full vector-similarity search on repeat calls.
+LRU cache for resolved dispatches — analogous to `objc_msgSend`'s inline cache — keyed by `intentKey`, so only the same intent text hits (a negation or another script never does). A hit skips embedding and vector search. It stores plain HIGH/EXACT vector resolutions of ordinary tools (never pinned or destructive ones) and is flushed whenever the registry changes (`registerClass`, `unregisterClass`, `swizzle`, categories, overloads) or learning/feedback changes.
 
 ### ToolClass (`src/core/tool-class.ts`)
 
@@ -55,7 +55,9 @@ Resolution and execution are separate:
 
 - `runtime.resolve(intent)` chooses at most one tool and executes nothing. It returns an outcome (`resolved`, `needs-disambiguation` or `unresolved`), the chosen canonical tool id (`<providerId>/<toolName>`), the ranked candidates, and a structured proof. Candidates come from pinned phrases, learned preferences, the cache, vector and overload matches and protocol conformance, are ranked once (score, then tool id), and the chosen one passes verification and the dispatch policy.
 - `runtime.dispatchById(toolId, args)` executes exactly that tool: an O(1) lookup, no embedding. MCP `tools/call` uses it.
-- `runtime.dispatch(intent, args)` is `resolve` → policy → the same execution boundary as `dispatchById`.
+- `runtime.dispatch(intent, args, { signal?, principal? })` is `resolve` → policy → the same execution boundary as `dispatchById`. The `signal` reaches the tool (`ToolIMP.execute(args, { signal })`); a signal that fired before execution runs nothing (`outcome: 'aborted'`).
+
+Ranking is deterministic: every score is quantized to 1e-4 and equal scores are ordered by canonical tool id (`spec/ranking/`). An opt-in semantic rate limiter (`RuntimeOptions.rateLimiter`) keeps a window per `principal` and, when it refuses a novel intent, resolution returns `outcome: 'throttled'` with a retry-after instead of throwing.
 
 The dispatch policy is one function evaluated on every path that can run a tool: an `exact` intent pin accepts only its pinned phrases; a destructive tool (MCP `destructiveHint`) runs only by exact id, a pinned phrase or EXACT similarity measured from the intent's own embedding; below HIGH a tool runs only after an LLM verifier approves it (`requireLLMForSubHighDispatch`, on by default). Anything refused is `needs-disambiguation`, with the candidates' tool ids.
 
@@ -67,14 +69,14 @@ When confidence is NONE, dispatch does not guess — it *defers*. The refinement
 
 The Semantic Map closes the loop. When the user picks an option (`runtime.resolveRefinement(originalIntent, choice)`), the choice is recorded as a learned preference — the original intent's embedding mapped to the chosen selector. Two things follow:
 
-1. **Exact fast-path** — the identical intent later resolves straight to the learned selector, before vector search, at the EXACT tier. The system never re-asks a question it has already been answered.
+1. **Exact fast-path** — the same intent text (same `intentKey`) later resolves straight to the learned selector, before vector search, at the EXACT tier. The system never re-asks a question it has already been answered; a reworded or negated intent is a different question.
 2. **Similarity boost** — a *similar* future intent (cosine ≥ threshold to a remembered one) gets a confidence boost toward the learned selector, scaled by similarity and how many times the mapping has been reinforced. A near-miss that would otherwise defer again is lifted into a confident dispatch.
 
-Both paths add a `semantic_map` step to the resolution proof, so the learned influence is auditable. A learned preference never authorizes a pinned or destructive tool on its own: the dispatch policy requires the pinned phrase or EXACT similarity for those. The map is the positive-signal mirror of the observer's negative examples (below), and it is serializable (`SemanticMap.toJSON()` / `fromJSON`) so a host can persist learning across sessions.
+Both paths add a `semantic_map` step to the resolution proof, so the learned influence is auditable. A learned preference never authorizes a pinned or destructive tool on its own: the dispatch policy requires the pinned phrase or EXACT similarity for those. The map is the positive-signal mirror of the observer's negative examples — recorded through explicit feedback (`runtime.feedback({ intent, toolId, correct: false })`; implicit correction inference is opt-in) — and it is serializable (`SemanticMap.toJSON()` / `fromJSON`) so a host can persist learning across sessions.
 
 ### Compiler (`src/compiler/compiler.ts`)
 
-Parse → Embed → Link pipeline. Reads tool definitions, computes semantic embeddings, groups tools into classes, and emits a compiled artifact. Optional Phase 2.5 generates semantic overloads by grouping tools above a similarity threshold.
+Parse → Embed → Link pipeline. Reads tool definitions, computes semantic embeddings, groups tools into classes, and emits a compiled artifact. Thresholds come from `CompilerOptions`, else from the project's smallchat.json `compiler` block. Optional Phase 2.5 groups similar tools with different argument signatures into semantic overload groups: they are reported in `CompilationResult.semanticOverloads` and exempt from duplicate detection, but 1.0 artifacts do not carry overload tables, so dispatch does not use them.
 
 ### SCObject System (`src/core/sc-object.ts`)
 
@@ -146,7 +148,7 @@ async function* streamWithContext(intent: string) {
 
 ### Backpressure and cancellation
 
-Standard async generators give it for free. `AbortController` works exactly as you expect.
+Async generators give backpressure: the tool's stream is pulled only as fast as you consume events. For cancellation, pass `{ signal }` to `dispatchStream(intent, args, { signal })` (or `dispatch(...)`, `dispatchById(...)`, `DispatchBuilder.withSignal()`/`withTimeout()`): the running tool receives an `AbortSignal` that fires when yours does, and also when you stop iterating early (`break`). A tool only stops if it honors the signal — smallchat cannot interrupt code that ignores it.
 
 ---
 

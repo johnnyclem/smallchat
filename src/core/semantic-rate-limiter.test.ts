@@ -98,6 +98,7 @@ describe('SemanticRateLimiter', () => {
         maxCanonicalLength: 20,
         entropyFraction: 0.5,
         minSamplesForSimilarity: 4,
+        similarityFloor: -1, // isolate the entropy heuristic (these vectors are dissimilar)
       });
 
       // 2 short + 2 long = 50% is exactly at threshold
@@ -228,6 +229,33 @@ describe('SemanticRateLimiter', () => {
       currentTime = baseTime + 6000;
 
       expect(limiter.check('d')).toBe(true);
+    });
+  });
+
+  // SC-INF-10: the similarity heuristic gates check(), and state is per principal
+  describe('per-principal windows and typed verdicts', () => {
+    it('check() refuses a principal whose recent intents are incoherent noise', () => {
+      const limiter = new SemanticRateLimiter({ minSamplesForSimilarity: 5, similarityFloor: 0.5 });
+      for (let i = 0; i < 10; i++) limiter.record(`random:${i}`, makeVector(i * 1000));
+      const verdict = limiter.evaluate('next');
+      expect(verdict.allowed).toBe(false);
+      expect(verdict.allowed === false && verdict.reason).toBe('similarity');
+    });
+
+    it('one principal exhausting its budget does not throttle another', () => {
+      const limiter = new SemanticRateLimiter({ maxNovelIntents: 2 });
+      limiter.record('a', makeVector(1), 'alice');
+      limiter.record('b', makeVector(1), 'alice');
+
+      const alice = limiter.evaluate('c', 'alice');
+      expect(alice.allowed).toBe(false);
+      expect(alice.allowed === false && alice.reason).toBe('volume');
+      expect(alice.allowed === false && alice.retryAfterMs).toBeGreaterThan(0);
+      expect(limiter.check('c', 'bob')).toBe(true);
+      expect(limiter.check('c')).toBe(true);
+      expect(limiter.principals()).toEqual(['alice']);
+      expect(limiter.getMetrics('alice').throttled).toBe(true);
+      expect(limiter.getMetrics('bob').throttled).toBe(false);
     });
   });
 });
