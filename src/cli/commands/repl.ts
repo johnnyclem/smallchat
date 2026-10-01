@@ -3,25 +3,28 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import type { ArtifactV1 } from '../../artifact/types.js';
+import { describeFingerprint, parseEmbedderKind } from '../../artifact/embedder.js';
 import { readArtifact } from '../../artifact/io.js';
-import { createArtifactIndex, describeFingerprint, parseEmbedderKind } from '../../artifact/embedder.js';
+import { loadRuntime, type LoadedRuntime } from '../../mcp/artifact.js';
+import { buildToolTable } from '../../mcp/tool-names.js';
+import { projectRuntimeOptions } from './project-policy.js';
 
 /**
  * Interactive REPL for querying the smallchat runtime.
  *
- * Loads a compiled artifact and lets you test dispatch resolution
- * interactively. Supports special commands prefixed with ':'.
+ * Loads a compiled artifact and resolves each intent with runtime.resolve(),
+ * the resolution `smallchat resolve`, serve and dispatch use: the outcome,
+ * tier, chosen tool and candidates. Nothing is executed. Supports special
+ * commands prefixed with ':'.
  */
 export const replCommand = new Command('repl')
-  .description('Start an interactive shell for querying tool resolution')
+  .description('Start an interactive shell that resolves intents (never executes)')
   .argument('<file>', 'Path to the compiled toolkit file')
   .option('-e, --embedder <type>', 'Expected embedder (onnx or hash); refuses if the artifact was compiled with another')
-  .option('--top-k <number>', 'Number of results to show', '5')
-  .option('--threshold <number>', 'Minimum similarity threshold', '0.5')
+  .option('--top-k <number>', 'Number of candidates to show', '5')
   .action(async (file, options) => {
     const filePath = resolve(file);
     const topK = parseInt(options.topK, 10);
-    const threshold = parseFloat(options.threshold);
 
     if (!existsSync(filePath)) {
       console.error(`File not found: ${filePath}`);
@@ -32,27 +35,30 @@ export const replCommand = new Command('repl')
 
     // The artifact's embedder fingerprint decides which embedder resolves
     // intents; --embedder can only confirm it.
-    let data: ArtifactV1;
-    let index: Awaited<ReturnType<typeof createArtifactIndex>>;
+    let loaded: LoadedRuntime;
     try {
-      data = await readArtifact(filePath);
-      if (options.embedder !== undefined && parseEmbedderKind(options.embedder) !== data.embedder.kind) {
-        throw new Error(
-          `--embedder ${options.embedder} does not match ${filePath}, which was compiled with the ` +
-          `${data.embedder.kind} embedder (${data.embedder.model})`,
-        );
+      if (options.embedder !== undefined) {
+        const artifact = await readArtifact(filePath);
+        if (parseEmbedderKind(options.embedder) !== artifact.embedder.kind) {
+          throw new Error(
+            `--embedder ${options.embedder} does not match ${filePath}, which was compiled with the ` +
+            `${artifact.embedder.kind} embedder (${artifact.embedder.model})`,
+          );
+        }
       }
-      index = await createArtifactIndex(data, { source: filePath });
+      // Same dispatch policy as `resolve` and `serve`: the nearest smallchat.json "policy" block.
+      loaded = await loadRuntime(filePath, { runtimeOptions: projectRuntimeOptions().options });
     } catch (e) {
       console.error(`Failed to load ${filePath}: ${(e as Error).message}`);
       process.exit(1);
     }
-    const { selectorTable } = index;
+    const { runtime, artifact: data, upstreams } = loaded;
+    const names = buildToolTable(data).byToolId;
 
     console.log(`smallchat repl`);
-    console.log(`Loaded ${data.stats.selectorCount} selectors from ${data.stats.providerCount} providers`);
+    console.log(`Loaded ${data.stats.toolCount} tools (${data.stats.selectorCount} selectors) from ${data.stats.providerCount} providers`);
     console.log(`Embedder: ${describeFingerprint(data.embedder)}`);
-    console.log(`Type an intent to resolve, or :help for commands.\n`);
+    console.log(`Type an intent to resolve (nothing is executed), or :help for commands.\n`);
 
     const rl = createInterface({
       input: process.stdin,
@@ -60,52 +66,54 @@ export const replCommand = new Command('repl')
       prompt: 'smallchat> ',
     });
 
-    rl.prompt();
-
-    rl.on('line', async (line) => {
-      const input = line.trim();
-
-      if (!input) {
-        rl.prompt();
-        return;
-      }
-
-      // Handle special commands
+    const resolveLine = async (input: string): Promise<void> => {
       if (input.startsWith(':')) {
         handleCommand(input, data);
-        rl.prompt();
         return;
       }
-
-      // Resolve intent
       try {
-        const selector = await selectorTable.resolve(input);
-        const matches = await selectorTable.searchTools(selector.vector, topK, threshold);
-
-        console.log(`\n  Intent:    "${input}"`);
-        console.log(`  Selector:  ${selector.canonical}`);
-
-        if (matches.length === 0) {
-          console.log('  Matches:   none\n');
+        const resolution = await runtime.resolve(input);
+        console.log(`\n  Intent:  "${input}"`);
+        console.log(`  Outcome: ${resolution.outcome} (tier ${resolution.tier.toUpperCase()}, decision ${resolution.proof.decision})`);
+        if (resolution.chosen) {
+          const name = names.get(resolution.chosen)?.name;
+          console.log(`  Chosen:  ${resolution.chosen}${name ? `  (serve name: ${name})` : ''}`);
+        }
+        if (resolution.reason) console.log(`  Reason:  ${resolution.reason}`);
+        const candidates = resolution.proof.candidates.slice(0, topK);
+        if (candidates.length === 0) {
+          console.log('  Candidates: none\n');
         } else {
-          console.log('  Matches:');
-          for (const match of matches) {
-            const confidence = ((1 - match.distance) * 100).toFixed(1);
-            const toolId = data.selectors[match.id]?.toolId ?? 'unknown';
-            console.log(`    ${confidence.padStart(5)}%  ${match.id}  (${toolId})`);
+          console.log('  Candidates:');
+          for (const c of candidates) {
+            const excluded = c.excluded ? `  excluded: ${c.excluded}` : '';
+            console.log(`    ${c.toolId}  score ${c.score.toFixed(3)}  ${c.tier.toUpperCase()}${excluded}`);
           }
           console.log('');
         }
       } catch (e) {
         console.error(`  Error: ${(e as Error).message}\n`);
       }
+    };
 
-      rl.prompt();
+    // Lines are resolved one at a time, in order; input that ends (a pipe)
+    // closes the REPL only after the last line has been answered.
+    let pending = Promise.resolve();
+    rl.prompt();
+    rl.on('line', (line) => {
+      const input = line.trim();
+      pending = pending.then(async () => {
+        if (input) await resolveLine(input);
+        rl.prompt();
+      });
     });
 
     rl.on('close', () => {
-      console.log('\nGoodbye.');
-      process.exit(0);
+      void pending.then(async () => {
+        await upstreams.close();
+        console.log('\nGoodbye.');
+        process.exit(0);
+      });
     });
   });
 

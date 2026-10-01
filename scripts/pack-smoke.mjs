@@ -16,11 +16,13 @@
  * export load, and a Node16 TypeScript consumer resolves each subpath's
  * declarations; `smallchat --version` prints the package version. The
  * packed @smallchat/react (run `npm run build:packages` first) typechecks
- * against React 19's types with skipLibCheck off.
+ * against React 19's types with skipLibCheck off. Each `smallchat init`
+ * template builds with tsc against the installed package and makes one
+ * successful call (the mcp-server template through an MCP client).
  */
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -96,6 +98,34 @@ try {
 
   const version = execFileSync(process.execPath, [join(app, 'node_modules', '.bin', 'smallchat'), '--version'], { cwd: app, encoding: 'utf-8' }).trim();
   if (version !== pkg.version) fail(`smallchat --version printed ${version}, expected ${pkg.version}`);
+
+  // Every `smallchat init` template builds against the installed package
+  // and makes one successful call.
+  for (const template of ['basic', 'agent', 'mcp-server']) {
+    const name = `tpl-${template.replace('-', '')}`;
+    const dir = join(work, name);
+    execFileSync(process.execPath, [join(app, 'node_modules', '.bin', 'smallchat'), 'init', dir, '--template', template, '--no-git', '--no-install'], { cwd: work, stdio: 'ignore' });
+    symlinkSync(join(app, 'node_modules'), join(dir, 'node_modules'), 'dir');
+    execFileSync(process.execPath, [join(ROOT, 'node_modules', 'typescript', 'bin', 'tsc'), '-p', dir], { cwd: dir, stdio: 'inherit' });
+    if (template === 'mcp-server') {
+      const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+      const { StdioClientTransport } = await import('@modelcontextprotocol/sdk/client/stdio.js');
+      const client = new Client({ name: 'pack-smoke', version: '0.0.0' });
+      await client.connect(new StdioClientTransport({ command: process.execPath, args: ['dist/server.js'], cwd: dir, stderr: 'inherit' }));
+      try {
+        const result = await client.callTool({ name: `${name}__greet`, arguments: { name: 'Ada' } });
+        const text = result.content?.[0]?.text;
+        if (result.isError || text !== 'Hello, Ada! Welcome to smallchat.') fail(`the mcp-server template's greet returned ${JSON.stringify(result.content)}`);
+      } finally {
+        await client.close();
+      }
+    } else {
+      const entry = template === 'basic' ? 'dist/index.js' : 'dist/agent.js';
+      const out = execFileSync(process.execPath, [entry], { cwd: dir, encoding: 'utf-8' });
+      const expected = template === 'basic' ? 'Result: Hello, World! Welcome to smallchat.' : 'Result: "Hi, Ada! Welcome to smallchat."';
+      if (!out.includes(expected)) fail(`the ${template} template printed:\n${out}`);
+    }
+  }
 
   if (!process.exitCode) console.log(`pack-smoke: ${packed.filename} (${packed.files.length} files) installs and loads`);
 } finally {

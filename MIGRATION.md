@@ -111,7 +111,10 @@ smallchat compile --source ./manifests -f sqlite
 **The artifact decides the embedder.** `serve`, `resolve`, `repl` and
 `loadRuntime()` construct the embedder recorded in the artifact (ONNX by
 default) and refuse a different one. If you passed `-e local` to `resolve`
-or `repl`, drop it. In code, pass an embedder only if it matches:
+or `repl`, drop it. `repl` now prints each intent's resolution (outcome,
+tier, chosen tool, candidates) instead of raw similarities, and its
+`--threshold` option is gone: drop it. In code, pass an embedder only if
+it matches:
 
 ```typescript
 // 0.5
@@ -623,6 +626,16 @@ permission rules then see the rewritten command, so an allow rule such as
 **`init` runs `git init` and `npm install`** unless you pass `--no-git` /
 `--no-install`.
 
+**`init` templates register their tools.** Every template implements its
+sample tools in `src/tools.ts` and registers them with
+`registerLocalHandler` before loading them. `init` no longer writes
+`smallchat.config.json`: nothing read it, so delete it from projects
+`init` created (`smallchat.json` is the project file). In a project made
+with the old `mcp-server` template, register each `local` tool's handler
+before `new MCPServer(...)` (and move `tools/*.ts` under `src/`): `local`
+tools run only in the process that registers them, so `smallchat serve`,
+which forwards calls to upstream MCP servers, cannot run them either.
+
 ## Satellites: Next.js, React, playground, dream and memex
 
 **`@smallchat/nextjs` handlers need an authorization decision.**
@@ -849,13 +862,13 @@ npm install --save-dev @smallchat/testing
 
 ```bash
 # Scaffold a new project
-npx @smallchat/core init [directory] --template basic|mcp-server|agent
+npx -y @smallchat/core init [directory] --template basic|mcp-server|agent
 
 # Generate tool documentation
-npx @smallchat/core docs <artifact.json> -o TOOLS.md
+npx -y @smallchat/core docs <artifact.json> -o TOOLS.md
 
 # Interactive REPL
-npx @smallchat/core repl <artifact.json>
+npx -y @smallchat/core repl <artifact.json>
 ```
 
 ### 8. Package.json Exports (Tree-Shaking)
@@ -878,6 +891,6 @@ const loaded = await store.load('my-toolkit');
 
 ## Need Help?
 
-- Run `npx @smallchat/core doctor` to check your setup
+- Run `npx -y @smallchat/core doctor` to check your setup
 - Check the [examples/](./examples/) directory for working reference implementations
 - File an issue at https://github.com/johnnyclem/smallchat/issues

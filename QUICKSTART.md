@@ -27,7 +27,7 @@ the default ONNX embedder (bundled; no download) and writes
 ## 3. Test Resolution
 
 ```bash
-npx @smallchat/core resolve tools.toolkit.json "echo back a message"
+npx -y @smallchat/core resolve tools.toolkit.json "echo back a message"
 ```
 
 ```
@@ -42,7 +42,7 @@ Candidates:
 `resolve` only proposes; nothing runs. Try a vaguer intent:
 
 ```bash
-npx @smallchat/core resolve tools.toolkit.json "greet someone"
+npx -y @smallchat/core resolve tools.toolkit.json "greet someone"
 ```
 
 ```
@@ -52,7 +52,7 @@ Reason: my-app/greet scored 0.725 (low); below HIGH a tool runs only after an LL
 
 Below HIGH confidence (0.85), a tool runs on its own only when an LLM
 verifier approves it; otherwise the caller picks a tool by id. An intent
-that matches nothing is `unresolved`. `npx @smallchat/core explain
+that matches nothing is `unresolved`. `npx -y @smallchat/core explain
 tools.toolkit.json "greet someone"` shows the full candidate table and
 the policy verdict for each tool.
 
@@ -111,12 +111,13 @@ the artifact; both work.
 ## 5. Explore Interactively
 
 ```bash
-npx @smallchat/core repl tools.toolkit.json
+npx -y @smallchat/core repl tools.toolkit.json
 ```
 
-Type natural language intents and see which tools they resolve to. Try:
-- `greet a user`
-- `echo back a message`
+Type natural language intents and see how each resolves: the same outcome,
+tier, chosen tool and candidates `resolve` prints (nothing runs). Try:
+- `echo back a message` (resolved, HIGH)
+- `greet a user` (needs-disambiguation: below HIGH, nothing would run on its own)
 - `:tools` to list all available tools
 - `:help` for more commands
 
@@ -124,30 +125,34 @@ Type natural language intents and see which tools they resolve to. Try:
 
 - **Add more tools**: Create manifest JSON files in `manifests/`
 - **Use streaming**: `for await (const event of runtime.dispatchStream('intent')) { ... }`
-- **Serve your tools as one MCP server**: `npx @smallchat/core serve --source tools.toolkit.json` (stdio; add `--http` for Streamable HTTP at `127.0.0.1:3001/mcp` with a bearer token)
-- **Generate docs**: `npx @smallchat/core docs tools.toolkit.json`
-- **Check health**: `npx @smallchat/core doctor`
+- **Serve these tools over MCP**: `local` tools run only inside your own process, so serve them from it: the `mcp-server` template below does that over stdio. `npx -y @smallchat/core serve --source <artifact>` is for *upstream* MCP servers (manifests with an `mcp` transport and a launch spec, e.g. from `smallchat setup`): it forwards each call, by exact name, to the server that owns the tool, and cannot run this project's `local` tools.
+- **Generate docs**: `npx -y @smallchat/core docs tools.toolkit.json`
+- **Check health**: `npx -y @smallchat/core doctor`
 
 ## Templates
 
 `smallchat init` supports three templates:
 
-| Template | Use Case |
-|----------|----------|
-| `basic` | Simple tool dispatch (default) |
-| `mcp-server` | An MCP server (stdio) for your manifests |
-| `agent` | Streaming agent with dispatch loop |
+| Template | Use Case | Entry point |
+|----------|----------|-------------|
+| `basic` | Resolve an intent, then run the chosen tool by id (default) | `src/index.ts` |
+| `mcp-server` | Serve the sample tools to an MCP host over stdio | `src/server.ts` |
+| `agent` | A loop that streams each request to its tool, and reports what it did not run | `src/agent.ts` |
 
 ```bash
 npx -y @smallchat/core init my-server --template mcp-server
 npx -y @smallchat/core init my-agent --template agent
 ```
 
-`init` runs `git init` (unless the directory is already in a repository)
-and `npm install`; skip them with `--no-git` / `--no-install`. Then
-`npm run compile` compiles `manifests/`, and for the basic template
-`npm run build && npm start` resolves an intent against the sample
-manifest and, when it resolves, runs the chosen tool by id.
+Every template declares `greet` and `echo` in `manifests/`, implements
+them in `src/tools.ts` and registers them with `registerLocalHandler`
+before it loads the tools. `init` runs `git init` (unless the directory is
+already in a repository) and `npm install`; skip them with `--no-git` /
+`--no-install`. Then `npm run compile` compiles `manifests/`. For `basic`
+and `agent`, `npm run build && npm start` runs the entry point; for
+`mcp-server`, run `npm run build` and point your MCP host at
+`node dist/server.js` (its tools are `<project>__greet` and
+`<project>__echo`).
 
 ## Example Projects
 
