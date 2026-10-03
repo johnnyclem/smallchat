@@ -2,7 +2,14 @@
   "signers": [
     {
       "id": "johnnyclem",
-      "role": "human"
+      "role": "human",
+      "keys": [
+        {
+          "alg": "ed25519",
+          "id": "johnnyclem/2026-09",
+          "publicKey": "vwK0Oit9S-qSuXboNLd6z8x_ZT3Cikae7d8UUSPaxoE"
+        }
+      ]
     },
     {
       "id": "sam",

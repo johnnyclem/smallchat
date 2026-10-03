@@ -33,5 +33,15 @@
     "type": "TB",
     "status": "active",
     "current": true
+  },
+  "01M1E6JK8FG84XDEKPATH4A2BX": {
+    "type": "UV",
+    "status": "verified",
+    "current": false
+  },
+  "01M1E6JK8KR7Z4VAZ1GM8KFSQT": {
+    "type": "TB",
+    "status": "active",
+    "current": true
   }
 }

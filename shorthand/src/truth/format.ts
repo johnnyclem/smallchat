@@ -10,9 +10,10 @@
  *
  * `decodeTruthLine` validates one line — the structure the JSON Schema
  * (wiki-line.v2.schema.json) describes, plus what JSON Schema can't
- * express: the hash, the identity rules and the link rules — and throws
- * `TruthLineError` when a reader must refuse it. `checkTruthChain` checks
- * that decoded lines form one stream. The schema is open where readers must
+ * express: the hash, the identity rules, the link rules and the agent
+ * quorum rules (quorum.ts) — and throws `TruthLineError` when a reader
+ * must refuse it. `checkTruthChain` checks that decoded lines form one
+ * stream. The schema is open where readers must
  * be: unknown fields and unknown values of status, kinds, link types,
  * cause kinds and signal sources are kept, never refused and never
  * coerced. The line `type` and the required fields are closed.
@@ -25,6 +26,11 @@
 import { sha256Hex } from '../utils.js';
 import { CanonicalizationError, canonicalize } from './jcs.js';
 import { MIGRATION_AUTHOR, identityIssue, identityKey } from './identity.js';
+import { checkQuorum } from './quorum.js';
+import { isLeapSecond, isRfc3339 } from './time.js';
+import { EVIDENCE_KINDS } from './types.js';
+
+export { isRfc3339 } from './time.js';
 
 export const TRUTH_SCHEMA_VERSION = 2;
 
@@ -54,8 +60,8 @@ const INBOUND_LINKS: Record<'TB' | 'UV', readonly string[]> = {
   UV: ['verifies', 'refutes', 'supersedes', 'strikes'],
 };
 
-/** v1 lines were validated like a live write: closed evidence and verifyBy kinds. */
-const V1_EVIDENCE_KINDS = ['commit', 'file', 'test', 'command', 'claimed-command', 'wiki', 'message'];
+/** v1 lines are validated like a live write: closed evidence and verifyBy kinds, the ones this version knows. */
+const V1_EVIDENCE_KINDS: readonly string[] = EVIDENCE_KINDS;
 const V1_VERIFY_KINDS = ['command', 'inspect', 'ask', 'observe'];
 
 /** A line a reader must refuse. */
@@ -110,7 +116,6 @@ export function chainTruthLines(bodies: Array<Record<string, unknown>>, head: St
 // ---------------------------------------------------------------------------
 
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
-const RFC3339_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d+)?(Z|[+-](\d{2}):(\d{2}))$/;
 const HEX64_RE = /^[0-9a-f]{64}$/;
 const LITERAL_VALUE_RE = /^\S([\s\S]*\S)?$/;
 
@@ -147,29 +152,11 @@ function id(o: Obj, key: string, path = key): string {
   return v;
 }
 
-function daysIn(year: number, month: number): number {
-  return [31, year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1];
-}
-
-/**
- * RFC 3339 date-time naming a real time (no February 30, no 24:00, no
- * offset past 23:59), as the schema's pattern and `format: date-time`
- * require, and as stenographer's codec reads it: `T` and `Z` upper case,
- * and no leap second (`:60`), which the spec lets a codec refuse.
- */
-export function isRfc3339(ts: string): boolean {
-  const m = RFC3339_RE.exec(ts);
-  if (!m) return false;
-  const [y, mo, d, h, mi, s] = m.slice(1, 7).map(Number);
-  if (mo < 1 || mo > 12 || d < 1 || d > daysIn(y, mo) || h > 23 || mi > 59 || s > 59) return false;
-  return m[9] === undefined || (Number(m[9]) <= 23 && Number(m[10]) <= 59);
-}
-
-function evidenceList(o: Obj, key: string, v1: boolean): void {
+function evidenceList(o: Obj, key: string, v1: boolean, at = key): void {
   const list = o[key];
-  if (!Array.isArray(list) || list.length === 0) fail(key, 'at least one piece of evidence is required');
+  if (!Array.isArray(list) || list.length === 0) fail(at, 'at least one piece of evidence is required');
   list.forEach((e, i) => {
-    const path = `${key}.${i}`;
+    const path = `${at}.${i}`;
     if (!isObject(e)) fail(path, 'must be an object');
     const kind = text(e, 'kind', `${path}.kind`);
     if (v1 && !V1_EVIDENCE_KINDS.includes(kind)) fail(`${path}.kind`, `'${kind}' is not an evidence kind a version 1 line could carry`);
@@ -225,6 +212,32 @@ function literals(o: Obj, version: 1 | 2): void {
 
 function status(o: Obj): void {
   if (has(o, 'status') && (typeof o.status !== 'string' || o.status.length === 0)) fail('status', 'must be a non-empty string');
+}
+
+/**
+ * A `quorum`'s shape, as the schema states it: an array of members
+ * `{author, agentSessionId, ts, evidence}`, each with a `verdict` of
+ * `verified` or `refuted` on an ADDENDUM. The rules across the members and
+ * the line (spec: Agent quorum) are checkQuorum's.
+ */
+function quorumShape(o: Obj, type: 'TB' | 'ADDENDUM'): void {
+  if (!has(o, 'quorum')) return;
+  const members = o.quorum;
+  if (!Array.isArray(members)) fail('quorum', 'a quorum is an array of members');
+  members.forEach((m, i) => {
+    const path = `quorum.${i}`;
+    if (!isObject(m)) fail(path, 'a quorum member is an object');
+    if (typeof m.author !== 'string') fail(`${path}.author`, 'must be a string');
+    if (typeof m.agentSessionId !== 'string') fail(`${path}.agentSessionId`, 'must be a string');
+    if (typeof m.ts !== 'string' || !isRfc3339(m.ts)) {
+      if (typeof m.ts === 'string' && isLeapSecond(m.ts)) fail(`${path}.ts`, 'a leap second (:60) is not a time this codec reads');
+      fail(`${path}.ts`, 'must be an RFC 3339 date-time');
+    }
+    evidenceList(m, 'evidence', false, `${path}.evidence`);
+    if (type === 'ADDENDUM' && m.verdict !== 'verified' && m.verdict !== 'refuted') {
+      fail(`${path}.verdict`, "a quorum ADDENDUM member's verdict is verified or refuted");
+    }
+  });
 }
 
 function identity(o: Obj, key: string, options: { reserved?: 'detector' } = {}): void {
@@ -304,7 +317,7 @@ function decodeV2(o: Obj, raw: string): DecodedTruthLine {
   const type = o.type as TruthLineType;
   if (typeof o.ts !== 'string' || !isRfc3339(o.ts)) {
     // JSON Schema's date-time takes 23:59:60 UTC; stenographer's codec (Date.parse) refuses every leap second
-    if (typeof o.ts === 'string' && RFC3339_RE.exec(o.ts)?.[6] === '60') fail('ts', 'a leap second (:60) is not a time this codec reads');
+    if (typeof o.ts === 'string' && isLeapSecond(o.ts)) fail('ts', 'a leap second (:60) is not a time this codec reads');
     fail('ts', 'must be an RFC 3339 date-time');
   }
   if (typeof o.author !== 'string' || o.author.length === 0) fail('author', 'must be a non-empty string');
@@ -320,6 +333,7 @@ function decodeV2(o: Obj, raw: string): DecodedTruthLine {
       if (!has(o, 'signedBy')) fail('signedBy', 'is required (an identity, or null on a backfilled TB)');
       if (o.signedBy !== null) identity(o, 'signedBy');
       literals(o, 2);
+      quorumShape(o, 'TB');
       status(o);
       // The backfill's second-class TBs are the one place 'migration' authors one, unsigned
       if (!(identityKey(o.author as string) === MIGRATION_AUTHOR && o.signedBy === null)) identity(o, 'author');
@@ -337,6 +351,7 @@ function decodeV2(o: Obj, raw: string): DecodedTruthLine {
     case 'ADDENDUM':
       evidenceList(o, 'evidence', false);
       nullableString(o, 'note', 'note', true);
+      quorumShape(o, 'ADDENDUM');
       identity(o, 'author');
       break;
     case 'RULING':
@@ -369,6 +384,11 @@ function decodeV2(o: Obj, raw: string): DecodedTruthLine {
     }
   }
   checkLinks(o, type, links);
+  // Agents settle only together: a quorum keeps rules 1–6, and appears only on a TB or an ADDENDUM
+  if (has(o, 'quorum')) {
+    const issues = checkQuorum(o);
+    if (issues.length > 0) throw new TruthLineError(issues.map((issue) => `quorum: ${issue}`).join('; '));
+  }
 
   let hash: string;
   try {
@@ -407,6 +427,8 @@ function decodeV1(o: Obj, raw: string): DecodedTruthLine {
     verifyBy(o, true);
     if (has(o, 'contests') && o.contests !== null) id(o, 'contests');
   }
+  // 0.x wrote no quorum; an agent's settlement is a v2 line
+  if (has(o, 'quorum')) fail('quorum', 'a v1 line carries no quorum: agents settle claims together only on v2 lines');
   return { version: 1, type, line: o, text: raw, seq: null, prevHash: null, hash: null };
 }
 

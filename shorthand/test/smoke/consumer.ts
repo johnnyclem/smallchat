@@ -23,7 +23,15 @@ import {
   parseWikiLines,
   selectCurrentTruth,
   canonicalizeJcs,
+  checkQuorum,
+  evidenceClass,
+  QUORUM_WINDOW_MS,
+  SETTLING_EVIDENCE_KINDS,
+  type TruthEvidenceClass,
+  type TruthQuorumMember,
+  type TruthQuorumSubject,
   type TruthSelection,
+  type TruthSignerFile,
   type WikiParseResult,
 } from '@shorthand/core/truth';
 import { WikiRenderer, type WikiPage } from '@shorthand/core/wiki';
@@ -73,6 +81,14 @@ export async function smoke(): Promise<void> {
   const read: WikiParseResult = parseWikiLines('');
   const selection: TruthSelection = selectCurrentTruth(read.entries);
   const jcs: string = canonicalizeJcs({ b: 1, a: [true, null] });
+  const settling: TruthEvidenceClass = evidenceClass(SETTLING_EVIDENCE_KINDS[0]);
+  const members: TruthQuorumMember[] = [
+    { author: 'agent:a', agentSessionId: 's1', ts: '2026-09-01T12:00:00Z', evidence: [{ kind: 'commit', ref: 'a1b2c3' }], verdict: 'verified' },
+  ];
+  const subject: TruthQuorumSubject = { type: 'ADDENDUM', author: 'agent:a', ts: '2026-09-01T12:00:00Z', evidence: members[0].evidence, quorum: members };
+  const issues: string[] = checkQuorum(subject);
+  const registry: TruthSignerFile = { signers: [{ id: 'kim', role: 'human', keys: [{ alg: 'ed25519', id: 'kim/1', publicKey: 'AAAA' }] }] };
+  const window: number = QUORUM_WINDOW_MS;
 
   const pages: WikiPage[] = new WikiRenderer().render(engine.getState(), []);
   const ingester = new SourceIngester();
@@ -88,5 +104,5 @@ export async function smoke(): Promise<void> {
   }).run(STARTER_FIXTURES.slice(0, 1));
   const gate: boolean = report.gate.passed;
 
-  void [tokens, level, snapshot, state, score, selection, jcs, pages, events, checked, recall, gate];
+  void [tokens, level, snapshot, state, score, selection, jcs, settling, issues, registry, window, pages, events, checked, recall, gate];
 }

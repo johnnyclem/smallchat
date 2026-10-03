@@ -56,8 +56,14 @@ const frame = engine.buildContextFrame(200);
 assert.ok(frame.tokenUsage <= 200);
 assert.equal(frame.tokenUsage, estimateTokens(renderContextFrame(frame)));
 
-const { canonicalizeJcs } = modules['./truth'];
+const { canonicalizeJcs, evidenceClass, checkQuorum, QUORUM_MIN_MEMBERS } = modules['./truth'];
 assert.equal(canonicalizeJcs({ b: 1, a: [true, null] }), '{"a":[true,null],"b":1}');
+assert.equal(evidenceClass('commit'), 'settling');
+assert.equal(evidenceClass('chat'), 'question');
+// One agent session alone settles nothing
+const alone = { author: 'agent:a', agentSessionId: 's1', ts: '2026-09-01T12:00:00Z', evidence: [{ kind: 'commit', ref: 'a1b2c3' }], verdict: 'verified' };
+assert.equal(QUORUM_MIN_MEMBERS, 2);
+assert.match(checkQuorum({ type: 'ADDENDUM', author: 'agent:a', ts: alone.ts, evidence: alone.evidence, quorum: [alone] }).join(), /at least 2 members/);
 
 const { ContextShiftBenchmark, KeywordJudge, STARTER_FIXTURES } = modules['./benchmark'];
 const { RegexInterpreter } = modules['./interpreter'];

@@ -74,5 +74,21 @@
   {
     "line": 19,
     "reason": "an empty status"
+  },
+  {
+    "line": 20,
+    "reason": "a quorum of one member"
+  },
+  {
+    "line": 21,
+    "reason": "a quorum ADDENDUM whose members carry no verdict"
+  },
+  {
+    "line": 22,
+    "reason": "a quorum TB without literals: the agreement it certifies would name nothing (quorum rule 5)"
+  },
+  {
+    "line": 23,
+    "reason": "a v1 line (no schemaVersion) carrying a quorum: agents settle together only on v2 lines"
   }
 ]

@@ -26,5 +26,62 @@
     "line": 5,
     "outcome": "held",
     "note": "a refutation of a UV this ledger does not hold"
+  },
+  {
+    "line": 6,
+    "outcome": "proposal",
+    "reason": "agent-without-quorum",
+    "note": "a TB an agent signed alone: agents settle claims only as a quorum"
+  },
+  {
+    "line": 7,
+    "outcome": "held",
+    "note": "an agent's verification without a quorum"
+  },
+  {
+    "line": 8,
+    "outcome": "inserted",
+    "status": "active",
+    "note": "a TB a person signed"
+  },
+  {
+    "line": 9,
+    "outcome": "inserted",
+    "status": "open",
+    "note": "a UV that contests it"
+  },
+  {
+    "line": 10,
+    "outcome": "held",
+    "after": [
+      8,
+      9
+    ],
+    "heldReason": "would override TB",
+    "note": "an agent quorum verifying a UV that contests a TB: that would override the TB, which only a person does (stenographer imports it after lines `after`)"
+  },
+  {
+    "line": 11,
+    "outcome": "held",
+    "heldReason": "evidence kind 'benchmark'",
+    "note": "a quorum member citing only an evidence kind this version does not know: it decodes, and the import fails closed"
+  },
+  {
+    "line": 12,
+    "outcome": "held",
+    "heldReason": "link type 'corroborates'",
+    "note": "a quorum ADDENDUM whose only link has a type this version does not know: it decodes, and the import fails closed"
+  },
+  {
+    "line": 13,
+    "outcome": "held",
+    "heldReason": "lists no links",
+    "note": "a quorum ADDENDUM that lists no links: checked for agreeing verdicts only, and held, since what it changes is unknown"
+  },
+  {
+    "line": 14,
+    "outcome": "held",
+    "heldReason": "is not held here",
+    "note": "members 900 000.9 ms apart: rule 4 reads timestamps to the millisecond, so it decodes (held: its UV is not in this ledger)"
   }
 ]

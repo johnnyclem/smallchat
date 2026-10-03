@@ -13,7 +13,9 @@
  * held). A reader does not import: the parts that apply to it are that
  * `inserted` lines are read with that status, that `proposal` lines never
  * become current truth (for the reasons a reader applies: unsigned,
- * unverifiable, an unknown status), and that `held` lines change no status.
+ * unverifiable, a TB an agent signed without a quorum, an unknown status),
+ * and that `held` lines change no status (`after` and `heldReason` describe
+ * stenographer's import, which a reader may ignore).
  * Each describe block says how its expected file is read.
  */
 
@@ -117,7 +119,7 @@ describe('valid/ledger.jsonl: one ledger, every kind of wiki line', () => {
     const entryLines = lines(file).filter((l) => ['TB', 'UV'].includes(parse(l).type));
     expect(serializeWikiEntries(result.entries)).toEqual(entryLines);
     expect(result.lines.map((l) => l.text)).toEqual(lines(file));
-    expect(result.head).toEqual({ seq: 15, hash: parse(lines(file)[14]).hash });
+    expect(result.head).toEqual({ seq: 19, hash: parse(lines(file)[18]).hash });
   });
 });
 
@@ -193,7 +195,8 @@ describe('valid/unknown.jsonl: what a newer writer may send', () => {
 
   it("reads stenographer's import outcomes as a reader: unknown statuses never become truth", () => {
     // 'inserted' and 'unknown-value' lines are read and current (a reader
-    // folds statuses; evidence and verifyBy kinds are not its to judge);
+    // folds statuses; the evidence and verifyBy kinds of a person's entries
+    // are not its to judge, unlike those an agent's TB cites, quorum.test.ts);
     // 'unknown-status' lines are history; the 'held' TRANSITION is kept
     // and moves its target to a status no one knows, which fails closed.
     const result = parseWikiLines(read(file));
@@ -349,10 +352,11 @@ describe('the zero-dependency codec agrees with the JSON Schema', () => {
   // Mutate valid fixture lines one field at a time (re-hashed, so only the
   // mutation is wrong): whatever the codec accepts, the schema must accept,
   // and whatever the schema accepts but the codec refuses must be one of the
-  // rules JSON Schema can't express (hash, identity, links), or a leap
-  // second, which date-time allows at 23:59 UTC and stenographer's codec
-  // refuses (SH-REV-C5).
-  const CODEC_ONLY = /anonymous|reserved|control character|cannot carry the link|only the links it writes|contests link|contests field|each link once|hash mismatch|canonicalized|leap second/;
+  // rules JSON Schema can't express (hash, identity, links, the agent quorum
+  // rules across members and the line), or a leap second, which date-time
+  // allows at 23:59 UTC and stenographer's codec refuses (SH-REV-C5).
+  const CODEC_ONLY =
+    /anonymous|reserved|control character|cannot carry the link|only the links it writes|contests link|contests field|each link once|hash mismatch|canonicalized|leap second|^quorum: .*\(rule [1-6]\)/;
   const valid = ['valid/ledger.jsonl', 'valid/proposals.jsonl', 'valid/unknown.jsonl', 'valid/routing.jsonl'].flatMap((f) => lines(f));
   const POOL: unknown[] = [null, '', ' ', 0, -1, 1, 1.5, 'x', 'Assistant', 'migration', [], {}, true, '2026-13-01T00:00:00Z', '2026-02-30T00:00:00Z', '2026-09-01T10:00:60.000Z', '2026-09-01T23:59:60Z', '2026-09-01T23:59:60+01:00', '2026-09-01t10:00:00z', 'a'.repeat(300), 'ab'.repeat(32), '\u0007'];
 

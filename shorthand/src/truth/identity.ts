@@ -108,15 +108,31 @@ export function assertAccountableAuthor(author: string): void {
 
 export type TruthSignerRole = 'human' | 'agent' | 'detector';
 
+/**
+ * A signer's public key, reserved for key signing in 1.x: a 1.0 reader
+ * accepts `keys` and ignores it, so a registry that lists keys reads on a
+ * 1.0 install. A registry never holds a private key.
+ */
+export interface TruthSignerKey {
+  /** The signature algorithm, e.g. `ed25519`. */
+  alg: string;
+  /** Names this key among the signer's keys. */
+  id: string;
+  publicKey: string;
+}
+
 export interface TruthSigner {
   /** The handle. A trailing `*` (e.g. `agent:*`) matches any identity with that prefix. */
   id: string;
+  /** Who is an agent, for the agent quorum, is this role (spec/truth-format, "Agent quorum"). */
   role: TruthSignerRole;
   /** Other spellings that resolve to `id`. */
   aliases?: string[];
+  /** Public keys for 1.x key signing: accepted and ignored in 1.0. */
+  keys?: TruthSignerKey[];
 }
 
-/** stenographer's registry file: `{"signers": [{"id", "role", "aliases?"}]}`. */
+/** stenographer's registry file: `{"signers": [{"id", "role", "aliases?", "keys?"}]}`. Fields this version doesn't use are ignored. */
 export interface TruthSignerFile {
   signers: TruthSigner[];
 }

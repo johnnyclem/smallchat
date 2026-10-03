@@ -169,6 +169,16 @@ describe('smallchat import surface', () => {
   });
 });
 
+describe('truth-format contract additions before the first publish', () => {
+  it('@shorthand/core/truth and the root export the evidence classes and the agent quorum', () => {
+    const names = ['EVIDENCE_KINDS', 'SETTLING_EVIDENCE_KINDS', 'evidenceClass', 'QUORUM_WINDOW_MS', 'QUORUM_MIN_MEMBERS', 'checkQuorum'];
+    expect(missing(truth, names)).toEqual([]);
+    expect(missing(root as Record<string, unknown>, names)).toEqual([]);
+    expect(truth.evidenceClass('chat')).toBe('question');
+    expect(truth.QUORUM_WINDOW_MS).toBe(900_000);
+  });
+});
+
 describe('root barrel', () => {
   it('re-exports each module’s canonical API', () => {
     expect(missing(root as Record<string, unknown>, [

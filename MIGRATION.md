@@ -87,9 +87,19 @@ Truth Format v2 (TRANSITION lines for status changes, `prevHash`/`hash`,
 `sinceSeq`, the suite PROPOSAL envelope; the bare `shorthand-compaction`
 proposal format is read-only), unknown or missing statuses fail closed
 (history, never ground truth), an open UV contesting a TB is always
-attached to it; OR-Set removes propagate and G-Set keyless entries get
-replica-scoped ids (the CRDTs converge, property-tested); the importance
-state-delta signal reads at most 16 KB of prose per message.
+attached to it, and agents settle claims only together: a TB an agent
+signs is ground truth only when its line carries a `quorum` of two or
+more agent sessions that agreed from different angles (settling evidence
+of two kinds, no item shared) within 15 minutes (otherwise it is
+inadmissible, `'agent-without-quorum'`; a person may still sign alone, on
+any evidence). `CONSUMPTION_RULES` now tells an agent that a verdict it
+files with `resolve_uv` settles only that way or when a person rules:
+update any prompt or snapshot that embeds the old text. The evidence
+kinds `chat`, `ticket` and `doc` are known, and `evidenceClass(kind)` says
+which kinds can settle a claim. OR-Set removes propagate and G-Set
+keyless entries get replica-scoped ids (the CRDTs converge,
+property-tested); the importance state-delta signal reads at most 16 KB
+of prose per message.
 
 `@smallchat/core@1.0.0` depends on `@shorthand/core@^1.0.0` from the
 registry (0.x pointed at a `file:./shorthand` copy that only resolved
