@@ -243,6 +243,17 @@ describe('valid/routing.jsonl: valid lines stenographer does not simply take as 
     }
   });
 
+  it("keeps a TB quorum member's verdict, a field only an ADDENDUM's members define, whatever its value", () => {
+    // Line 17: on a TB member, verdict is an unknown field. The reader reads nothing from it, keeps it as
+    // written on the typed member, and writes the line back verbatim
+    const line = lines('valid/routing.jsonl')[16];
+    expect(parse(line).quorum[0].verdict).toBe('bogus');
+    const result = parseWikiLines([line], { signers: signers() });
+    const [entry] = result.entries;
+    expect(entry.type === 'TB' && entry.quorum?.map((m) => (m as { verdict?: unknown }).verdict)).toEqual(['bogus', undefined]);
+    expect(serializeWikiEntries(result.entries)).toEqual([line]);
+  });
+
   it('without a signer registry, an identity that passes the identity rules is accepted', () => {
     const mallory = lines('valid/routing.jsonl')[1];
     const [entry] = parseWikiLines([mallory]).entries;

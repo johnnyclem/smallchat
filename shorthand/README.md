@@ -2,7 +2,7 @@
 
 This directory is an exact copy of `@shorthand/core` 1.0.0 from the
 [short-hand](https://github.com/johnnyclem/short-hand) repository
-(commit `052c835cf2a40c9dfa8e800c7404500b996c4af9`), written by
+(commit `61cc1adc3c211277ad9b427da1acab4e8daeb952`), written by
 `scripts/sync-shorthand.mjs`. It is not a fork: do not edit it. Change
 short-hand, then run `SHORTHAND_DIR=../short-hand npm run sync:shorthand`.
 `npm run check:shorthand` (and `src/shorthand-mirror.test.ts`, in CI) fails

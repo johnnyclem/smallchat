@@ -125,7 +125,11 @@ export interface TruthQuorumMember {
   agentSessionId: string;
   ts: string;
   evidence: TruthEvidence[];
-  /** ADDENDUM members: the verdict the session filed. */
+  /**
+   * ADDENDUM members: the verdict the session filed. A TB's members define
+   * no verdict: one there is an unknown field, kept as written whatever its
+   * value and read by nothing (stenographer's spec, "Agent quorum").
+   */
   verdict?: 'verified' | 'refuted';
 }
 

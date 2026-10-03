@@ -158,5 +158,15 @@
     "line": 32,
     "reason": "quorum rule 4 at its edge: 900 001 ms from the earliest member to the latest",
     "error": "900001 ms"
+  },
+  {
+    "line": 33,
+    "reason": "quorum rule 2, identity keys lowercased with Final_Sigma: the line's author agent:ΟΔΥΣΣΕΥΣ keys to agent:οδυσσευς (final ς), not to the member agent:οδυσσευσ (σ), and no other member is it, so the writer is not a member. This line breaks no other rule: a reader that lowercases every Σ to σ reads the author as that member and wrongly takes it",
+    "error": "agent:ΟΔΥΣΣΕΥΣ is not a quorum member"
+  },
+  {
+    "line": 34,
+    "reason": "quorum rule 3, commit refs lowercased with Final_Sigma: abcΣ lowercases to abcς, so two members cite one commit. This line breaks no other rule: a reader that lowercases every Σ to σ reads abcσ, another commit, and wrongly takes it",
+    "error": "both cite commit abcς"
   }
 ]

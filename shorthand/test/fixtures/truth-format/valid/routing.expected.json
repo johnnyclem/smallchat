@@ -83,5 +83,23 @@
     "outcome": "held",
     "heldReason": "is not held here",
     "note": "members 900 000.9 ms apart: rule 4 reads timestamps to the millisecond, so it decodes (held: its UV is not in this ledger)"
+  },
+  {
+    "line": 15,
+    "outcome": "proposal",
+    "reason": "unknown-value",
+    "note": "a TB an agent quorum signed, one of whose members cites only an evidence kind this version does not know ('benchmark'): it decodes (rule 3 refuses no line over an unknown kind), and the import fails closed: filed for a person, never truth, and not agent-without-quorum"
+  },
+  {
+    "line": 16,
+    "outcome": "proposal",
+    "reason": "unknown-value",
+    "note": "a TB an agent quorum signed whose members keep rule 3 with two known settling kinds (commit, file), one of them also citing 'benchmark': it decodes, and the import still fails closed on the unknown kind: filed for a person, never truth"
+  },
+  {
+    "line": 17,
+    "outcome": "inserted",
+    "status": "active",
+    "note": "a TB an agent quorum signed, one of whose members carries verdict 'bogus': only an ADDENDUM's members define verdict, so on a TB member it is an unknown field, whatever its value. It decodes, and the import takes the TB as truth and keeps the field, as for a TB member without it"
   }
 ]
