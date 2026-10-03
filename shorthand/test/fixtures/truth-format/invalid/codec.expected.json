@@ -168,5 +168,15 @@
     "line": 34,
     "reason": "quorum rule 3, commit refs lowercased with Final_Sigma: abcΣ lowercases to abcς, so two members cite one commit. This line breaks no other rule: a reader that lowercases every Σ to σ reads abcσ, another commit, and wrongly takes it",
     "error": "both cite commit abcς"
+  },
+  {
+    "line": 35,
+    "reason": "quorum rule 5, read from x-steno.links: members who say verified on a line whose x-steno link refutes, beside a top-level links: null, a field this version does not define, which neither hides the rule nor stands in for x-steno.links",
+    "error": "quorum member 1's verdict verified is not the one its line's refutes link applies"
+  },
+  {
+    "line": 36,
+    "reason": "quorum rule 5, read from x-steno.links: members who say verified on a line whose x-steno link refutes, beside a top-level links: [], a field this version does not define, which neither hides the rule nor stands in for x-steno.links",
+    "error": "quorum member 1's verdict verified is not the one its line's refutes link applies"
   }
 ]

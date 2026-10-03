@@ -90,5 +90,9 @@
   {
     "line": 23,
     "reason": "a v1 line (no schemaVersion) carrying a quorum: agents settle together only on v2 lines"
+  },
+  {
+    "line": 24,
+    "reason": "a quorum ADDENDUM member whose verdict is neither verified nor refuted (on a TB member, verdict is an unknown field; on an ADDENDUM member it is one of the two)"
   }
 ]

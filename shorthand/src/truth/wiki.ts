@@ -26,9 +26,10 @@
  *   registry, unlisted authors and signers are unverifiable; a TB an agent
  *   signed is truth only with a quorum whose members are all agents (the
  *   codec has checked the quorum's rules), and never when it cites an
- *   evidence kind this version doesn't know (the rules don't refuse one,
- *   so nothing shows two settling angles); two lines giving one id
- *   different content, unknown fields included, are a conflict.
+ *   evidence kind or carries a link type this version doesn't know (the
+ *   rules don't refuse one, so nothing shows two settling angles); two
+ *   lines giving one id different content, unknown fields included, are a
+ *   conflict.
  * - **Never rewrite.** Unknown fields and values are kept, never coerced,
  *   and a parsed entry serializes back to the exact line it was read from.
  * - **Several files** (one per teammate) fold one by one, then each entry
@@ -40,6 +41,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { canonicalize } from './jcs.js';
 import {
+  LINK_TYPES,
   TRUTH_STATUSES,
   TruthLineError,
   checkTruthChain,
@@ -556,23 +558,50 @@ function agentWithoutQuorum(entry: TruthTbEntry, registry: TruthSignerRegistry |
 }
 
 /**
- * Why a TB an agent signed can't be truth for this reader because of an
- * evidence kind it doesn't know, or null. The quorum rules don't refuse a
- * line over such a kind (it may be a newer writer's settling kind), so this
- * reader can't tell that the members settle from different angles: it fails
- * closed instead (spec/truth-format, "Unknown values", "Evidence classes"),
- * as stenographer's import does (reason `unknown-value`). A person may sign
- * on evidence of any class, so a person's TB is not refused here.
+ * Why a TB an agent signed can't be truth for this reader because of a value
+ * it doesn't know, or null: an evidence kind on its line or in its quorum,
+ * or a link type in its `x-steno.links`. The codec refuses no line over
+ * either (it may be a newer writer's: a settling kind, a new relation), and
+ * the quorum rules read only the kinds and link types a reader knows, so
+ * this reader can't tell what the agents settled, or that they agree from
+ * different angles: it fails closed instead (spec/truth-format, "Unknown
+ * values", "An unknown evidence kind fails closed"), as stenographer's
+ * import does (reason `unknown-value`, naming the first such value, evidence
+ * kinds first). A version 1 line's links are not checked by the codec, and
+ * stenographer drops those it doesn't take, so only a version 2 line's
+ * count. A person may sign on evidence of any class, and a person's TB is
+ * not refused here.
  */
-function agentUnknownKind(entry: TruthTbEntry, registry: TruthSignerRegistry | null): string | null {
+function agentUnknownValue(entry: TruthTbEntry, registry: TruthSignerRegistry | null): string | null {
   if (!entry.signedBy || !isAgent(entry.signedBy, registry)) return null;
+  const signed = `TB ${entry.id} is signed by agent ${entry.signedBy}`;
   const items = [...entry.evidence, ...(entry.quorum ?? []).flatMap((m) => m.evidence)];
-  const unknown = items.find((e) => !(EVIDENCE_KINDS as readonly string[]).includes(e.kind));
-  if (!unknown) return null;
-  return (
-    `TB ${entry.id} is signed by agent ${entry.signedBy} and cites evidence kind '${unknown.kind}', which this version doesn't know: ` +
-    "it settles nothing for this reader, which can't tell that the quorum agrees from different angles"
-  );
+  const kind = items.find((e) => !(EVIDENCE_KINDS as readonly string[]).includes(e.kind));
+  if (kind) {
+    return (
+      `${signed} and cites evidence kind '${kind.kind}', which this version doesn't know: ` +
+      "it settles nothing for this reader, which can't tell that the quorum agrees from different angles"
+    );
+  }
+  const link = entry.source?.version === 2 ? unknownLinkType(entry.xSteno) : null;
+  if (link !== null) {
+    return (
+      `${signed} and carries link type '${link}' in x-steno.links, which this version doesn't know: ` +
+      "an agent's settlement carrying a value this reader can't read settles nothing for it"
+    );
+  }
+  return null;
+}
+
+/** The first link type in `x-steno.links` this version doesn't know, or null. */
+function unknownLinkType(xSteno: Record<string, unknown> | undefined): string | null {
+  const links = xSteno?.links;
+  if (!Array.isArray(links)) return null;
+  for (const l of links) {
+    const type = typeof l === 'object' && l !== null ? (l as { type?: unknown }).type : undefined;
+    if (typeof type === 'string' && !(LINK_TYPES as readonly string[]).includes(type)) return type;
+  }
+  return null;
 }
 
 /** Why `identity`, which `isAgent` says is not an agent, isn't one. */
@@ -607,10 +636,11 @@ function admit(
     }
   }
   // Agents settle only together, from different angles: an agent's TB is truth only with a
-  // quorum of agents, and only when this reader knows every evidence kind it cites (it fails
-  // closed on one it doesn't, ahead of the quorum check, as stenographer's import does)
+  // quorum of agents, and only when this reader knows every evidence kind it cites and every
+  // link type it carries (it fails closed on one it doesn't, ahead of the quorum check, as
+  // stenographer's import does)
   if (entry.type === 'TB') {
-    const unknown = agentUnknownKind(entry, registry);
+    const unknown = agentUnknownValue(entry, registry);
     if (unknown) return refuse('unknown-value', unknown);
     const why = agentWithoutQuorum(entry, registry);
     if (why) return refuse('agent-without-quorum', why);

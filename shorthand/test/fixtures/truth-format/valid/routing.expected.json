@@ -101,5 +101,29 @@
     "outcome": "inserted",
     "status": "active",
     "note": "a TB an agent quorum signed, one of whose members carries verdict 'bogus': only an ADDENDUM's members define verdict, so on a TB member it is an unknown field, whatever its value. It decodes, and the import takes the TB as truth and keeps the field, as for a TB member without it"
+  },
+  {
+    "line": 18,
+    "outcome": "held",
+    "heldReason": "is not held here",
+    "note": "a quorum ADDENDUM that verifies its UV, with a top-level links: [{\"type\":\"overrides\"}]: it decodes (rule 5 reads x-steno.links, whose link the members' verdicts match, and a field the format doesn't define never refuses a line), and is held only because its UV is not in this ledger: imported after it, it resolves the UV and keeps the field"
+  },
+  {
+    "line": 19,
+    "outcome": "held",
+    "heldReason": "is not held here",
+    "note": "a quorum ADDENDUM whose members say refuted and whose x-steno link refutes its UV, with a top-level links holding a verifies link: it decodes (rule 5 reads x-steno.links, whose link the members' verdicts match, and a field the format doesn't define never refuses a line), and is held only because its UV is not in this ledger: imported after it, it resolves the UV and keeps the field"
+  },
+  {
+    "line": 20,
+    "outcome": "held",
+    "heldReason": "is not held here",
+    "note": "a quorum ADDENDUM that verifies its UV, with a top-level links: \"corroborates\", a string: it decodes (rule 5 reads x-steno.links, whose link the members' verdicts match, and a field the format doesn't define never refuses a line), and is held only because its UV is not in this ledger: imported after it, it resolves the UV and keeps the field"
+  },
+  {
+    "line": 21,
+    "outcome": "proposal",
+    "reason": "unknown-value",
+    "note": "a TB an agent quorum signed whose x-steno.links carries a link type this version does not know ('corroborates'): it decodes (the link rules and the quorum rules refuse no line over an unknown link type), and the import fails closed: filed for a person, never truth"
   }
 ]

@@ -1,13 +1,13 @@
 # Written by scripts/sync-shorthand.mjs. Do not edit files under shorthand/ by hand: re-run the script.
 repository: https://github.com/johnnyclem/short-hand
 package: @shorthand/core@1.0.0
-commit: 61cc1adc3c211277ad9b427da1acab4e8daeb952
+commit: a9f228b607d1576f98f6342e2bd46c8162ec72b5
 uncommitted-changes: no
 files:
   61022f949eb49fe0ee5b774835be844845b3d71d9001f676d9ac82bd433e49a7  .gitignore
   cad9044bed6084d0f538b1e31c91e379439b62b02b12570d3fefb99e9e69d968  LICENSE
-  cccd3865f7d1d44beb32d8eb7af57af3bc73788d6be1ae3e5371d1eaa706a6ea  README.md
-  3b0d008ed38b8cf84250d127065177171f8e94a1dcfb05cf9ee8fd46d19766db  package.json
+  8aeb41b2a42fb079c44c6cdd49a90f1db4b57e8ea014add37552f5151d00c3a1  README.md
+  d7521c54ddb244672ff6c2c0d79857acf588daa2f71ec4b1ecb576e0681bba4c  package.json
   f5c67d70155ac797ad5574252efefff1e16d3af85d637e57bbc73a8e9e7e54b6  src/benchmark/context-shift-benchmark.test.ts
   fc3188f772d2ea1c0c9576d4ddec707cb73d5ec666295690f7b4f833f73d9b16  src/benchmark/context-shift-benchmark.ts
   2f0e94f6e9210890d4be375c0e4f3f40882980ac7b66157e9af028a2b1963da8  src/benchmark/fixtures.ts
@@ -91,7 +91,7 @@ files:
   4c841e4975dd1c25aa67d2f687de3ea49fc478144674b0231d05e975605620e7  src/package-surface.test.ts
   ab91ebe28b2dfcd215c56968815be70e6c17f5bf2bde6d72bcafa828ea854b0a  src/truth/compaction-bridge.test.ts
   227b5fea53ac8b500f5c18e8595ba14e1a5cf70d365f81078cc4c69d11bdeff2  src/truth/compaction-bridge.ts
-  3759d73e68042b14af6cf48957e51ac58eb140f2d1a39e37fd1708a4d68f6a4c  src/truth/conformance.test.ts
+  b91099a0d65d028c9b642dc2e7dad560df18b418931bf2f26fd3a6b29693f28e  src/truth/conformance.test.ts
   aea704f4313141f5cc1ae3bca66d86ac0ff752b3b9d54cf42c19015fd296e83a  src/truth/format.ts
   cf5904b51468c68825a5ff00f8d0fc65d2c67d253273f32ef182f4b43dfe86d0  src/truth/identity.ts
   c71f2bb1b3e2fceba8677b3dc101bef1310bc8b4873c666e32f597f87e1f762c  src/truth/index.ts
@@ -101,13 +101,13 @@ files:
   ba209b5c18f67e0fd54bcfe58508b19b36a22f55bd59125082e8d76ce30bac0c  src/truth/proposal-export.ts
   6474a7958210ab76ae1f946d9d814428c9bfdb794acbde327d4c77820a43e953  src/truth/proposals.test.ts
   1438792803b0d2f4ff9ad8bb73772a2399ff679899e4033173cd61bb3e58c2a0  src/truth/proposals.ts
-  b8eb5ce8897c8d8b1049ad3c3442a58598f9e90c3cbfb9478bfc4c723f3ba401  src/truth/quorum.test.ts
-  67ec1ab8941123609293b2075d5cd7fc3c71a61dd459eb122c12283a020e4156  src/truth/quorum.ts
+  d83ae32886c110de2313509b276dca9dbb1138282eed39f5a344bcd7e2c1fe7c  src/truth/quorum.test.ts
+  0bd73e51a9de8b4f4c1f784aeca774e95ca03b40dfd41ddfb82a1d7288f38dab  src/truth/quorum.ts
   9d73ecd7e23cce36d45ae50e9de722353cf8f46fd83f1e29637d1a3c37e0d7c6  src/truth/time.ts
-  47921e2b8842d95d7f33940d6e592c9a12e33a192f714b0de777e81e0669b253  src/truth/types.ts
+  d1eb7cec89511c6de657e5798f7d58ed4c0db4da96d60288cc326ad8f581e230  src/truth/types.ts
   63e895286de5e016566b37305638cf97c76a6c309c1ff3263aabe99174adc574  src/truth/wiki-v2.test.ts
   2a34e1ed6ef2254f7fee14264f7be058ba9c902353072920435ef5076a17ea01  src/truth/wiki.test.ts
-  4e5f05ba6ce905cdc173b8af64a74aee66d53424592fa32d82204989a2c54b9a  src/truth/wiki.ts
+  b7183e8396d98e56f88bf2999d8001b4927280d8988b8a4a5e5a0e6563f8efd9  src/truth/wiki.ts
   9500422c5cab172f33553cddbfd1ef971128340794a792745a750ee61e36e460  src/types.ts
   04c7ce37d5cbc952560127505f5774014a9ee1e42777b44e8bdf719fcc678aba  src/utils.ts
   149e01d08eb45851cec60ae6cd240d2d8f384da9bdb2e0f6bd5df6eb7018e908  src/verification/index.ts
@@ -117,15 +117,15 @@ files:
   e7f06d45fcb08d4796bed485fe175b3ae25e7269d1141d7063a32321135b35f9  src/wiki/index.ts
   ebda88e49c03f7c00798a8adbf9db7ac68138ac1416e4c25865cf196b08371fb  src/wiki/wiki-renderer.test.ts
   720cfd6bb35a33bdfc96ced2c0ac93759c1da9615ab6517bc16716e9798898a5  src/wiki/wiki-renderer.ts
-  9e4bbb586728987ad4838b9a4086fc818468c27c4718d894afb8999b65285bac  test/fixtures/truth-format/README.md
-  c0d408c5b7ae0e110091a80f65d5ca1fa6572a540e8fd53a416de76583538064  test/fixtures/truth-format/SOURCE
+  e19e0e3147bd39eb202404cf54e74705a155bbfdc7911bb54f260bf137fd68ef  test/fixtures/truth-format/README.md
+  6d14cf8d51c9c66dc6f78663077338195b74dcd8e53c5db0fc40b8c6a495a4e0  test/fixtures/truth-format/SOURCE
   1b0aa09734cf40666d1c903589f4839261fa8b66394d0c7cf87bfe27d6c4c2f4  test/fixtures/truth-format/invalid/chain-fork.jsonl
   365570d5fbd0c7d11cd307b31f0ef5ba897cc08149cfbc72a70075e2806dab46  test/fixtures/truth-format/invalid/chain-gap.jsonl
   4a84ad7bc1a8c3aca734f7f35406765224450b135571e62503930156f9e3b31a  test/fixtures/truth-format/invalid/chain.expected.json
-  b75c8a5af7c15fdb4112aee30ce1b235baa9551068214871180d87670854bd40  test/fixtures/truth-format/invalid/codec.expected.json
-  646e098113075a55bc5622d5f93082688c55bdebe1cba52ab7611528d0857fd6  test/fixtures/truth-format/invalid/codec.jsonl
-  77e9067859d510e71b581daaf40c2600743cfc4b628f57467213ab04b56d0957  test/fixtures/truth-format/invalid/schema.expected.json
-  ff56ec4e2fef314da350cdca818c71e380dec724cb2516aba955dbc9179def3b  test/fixtures/truth-format/invalid/schema.jsonl
+  5344280b730251d720b003de500076fc4c2fb0c868bdc1858852945004249d4a  test/fixtures/truth-format/invalid/codec.expected.json
+  276ff26e169e5819ccaba25c8b10ef2739df0f00a49bb133dfa645104ca86f09  test/fixtures/truth-format/invalid/codec.jsonl
+  fffdb412b3ae2bde9bd0fcd3b1f3cb4be3eeb0f45aa7a7058feee6875786a871  test/fixtures/truth-format/invalid/schema.expected.json
+  6981575c3f63c8fc979d090676b041fb90bd4c3c0ad0da331eb4ec2ec2e73d7a  test/fixtures/truth-format/invalid/schema.jsonl
   f547cc70890a3807284db0412cf0504dfc3e736f475f5ad8391106aee9ebe594  test/fixtures/truth-format/signers.json
   c3eb6fcd9cc13e69c3d31f31ba9c17d3288507f483bcbfd0c196fcb92ac98f5f  test/fixtures/truth-format/v1/legacy.expected.json
   06f3a5eb867d808a1159cdc8a4df9d910a7295fb0b66a1346751a65ef3847740  test/fixtures/truth-format/v1/legacy.jsonl
@@ -133,8 +133,8 @@ files:
   7b2283cc2c4f988e38af9293c4a589eb67badc513b4d3422ab7348a2933d8d83  test/fixtures/truth-format/valid/ledger.jsonl
   3c99d97a7402e9cb8fff68b0b08ce505af6fd194ff451d3217eb469d53b95398  test/fixtures/truth-format/valid/proposals.expected.json
   34c11e5c80fa04b947850de0d73e53a0a859d780d320eb9a59a4823bcc42f541  test/fixtures/truth-format/valid/proposals.jsonl
-  8170f378954ea1385a092606917a5f538c2b0b596bb7523e37aca2df759df939  test/fixtures/truth-format/valid/routing.expected.json
-  08d131c56bedec93ef1f204ead34acf546b88401fd3c5a2b5b148912a0f4ed2f  test/fixtures/truth-format/valid/routing.jsonl
+  6d553dbe0f39d819313569cac1a720284a54d4654ff4c59d7158a8686091c650  test/fixtures/truth-format/valid/routing.expected.json
+  eda7384d32cb341a8d5b30c320d542ab099b9330266bae15e3fe194f245e2e6e  test/fixtures/truth-format/valid/routing.jsonl
   f0ae027285db844c17c63e8c87630f9fe82c1683af76b8d891d8d7b2d89debd7  test/fixtures/truth-format/valid/unknown.expected.json
   98b7d0e926ffe41b56b5dbc3e04a2b639487c9ecf0f6d09448ec8147a540535f  test/fixtures/truth-format/valid/unknown.jsonl
   16b77007483b93a07047e3fff9ef017eee8f448177d396763e3f1fcdea484dbd  test/fixtures/truth-format/wiki-line.v2.schema.json

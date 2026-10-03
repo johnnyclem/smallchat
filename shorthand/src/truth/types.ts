@@ -277,10 +277,13 @@ export interface TruthEntrySource {
  *   sessions agreeing from different angles within 15 minutes; otherwise a
  *   person signs it (spec/truth-format, "Agent quorum").
  * - `unknown-value`: a TB an agent signed that cites an evidence kind this
- *   version doesn't know, on its line or in its quorum. The quorum rules
- *   don't refuse a line over such a kind, so this reader can't tell that the
- *   members agree from different angles, and fails closed (spec/truth-format,
- *   "Unknown values", "Evidence classes"). A person's TB may cite any kind.
+ *   version doesn't know, on its line or in its quorum, or, on a version 2
+ *   line, carries a link type it doesn't know in `x-steno.links`, with or
+ *   without a quorum. The codec and the quorum rules don't refuse a line over
+ *   such a value (it may be a newer writer's), so this reader can't tell what
+ *   the members settled, or that they agree from different angles, and fails
+ *   closed (spec/truth-format, "Unknown values", "Evidence classes"). A
+ *   person's TB may cite any kind and carry any link type.
  * - `conflict`: two lines (or two files) give the same id different content:
  *   its fields compared as JCS, unknown fields included, the chain fields
  *   (`schemaVersion`, `seq`, `prevHash`, `hash`) and `x-steno` aside.

@@ -2,7 +2,7 @@
   "name": "@shorthand/core",
   "version": "1.0.0",
   "private": true,
-  "description": "Mirror of @shorthand/core 1.0.0 from the short-hand repository (commit 61cc1adc3c21), written by scripts/sync-shorthand.mjs. Development only; never published from here. See README.md and SOURCE.",
+  "description": "Mirror of @shorthand/core 1.0.0 from the short-hand repository (commit a9f228b607d1), written by scripts/sync-shorthand.mjs. Development only; never published from here. See README.md and SOURCE.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

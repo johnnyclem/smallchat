@@ -1,18 +1,18 @@
 # Copied by scripts/sync-truth-fixtures.mjs. Do not edit these files by hand: re-run the script.
 repository: https://github.com/johnnyclem/stenographer
 path: spec/truth-format
-commit: bffa86b2e06a6202bbd31e88f19ed7e536613046
-spec-last-changed: bffa86b2e06a6202bbd31e88f19ed7e536613046
+commit: 0848b44a4a544b41ac9e6ea8679c2736769ef0f5
+spec-last-changed: 0848b44a4a544b41ac9e6ea8679c2736769ef0f5
 uncommitted-changes: no
 files:
-  9e4bbb586728987ad4838b9a4086fc818468c27c4718d894afb8999b65285bac  README.md
+  e19e0e3147bd39eb202404cf54e74705a155bbfdc7911bb54f260bf137fd68ef  README.md
   1b0aa09734cf40666d1c903589f4839261fa8b66394d0c7cf87bfe27d6c4c2f4  invalid/chain-fork.jsonl
   365570d5fbd0c7d11cd307b31f0ef5ba897cc08149cfbc72a70075e2806dab46  invalid/chain-gap.jsonl
   4a84ad7bc1a8c3aca734f7f35406765224450b135571e62503930156f9e3b31a  invalid/chain.expected.json
-  b75c8a5af7c15fdb4112aee30ce1b235baa9551068214871180d87670854bd40  invalid/codec.expected.json
-  646e098113075a55bc5622d5f93082688c55bdebe1cba52ab7611528d0857fd6  invalid/codec.jsonl
-  77e9067859d510e71b581daaf40c2600743cfc4b628f57467213ab04b56d0957  invalid/schema.expected.json
-  ff56ec4e2fef314da350cdca818c71e380dec724cb2516aba955dbc9179def3b  invalid/schema.jsonl
+  5344280b730251d720b003de500076fc4c2fb0c868bdc1858852945004249d4a  invalid/codec.expected.json
+  276ff26e169e5819ccaba25c8b10ef2739df0f00a49bb133dfa645104ca86f09  invalid/codec.jsonl
+  fffdb412b3ae2bde9bd0fcd3b1f3cb4be3eeb0f45aa7a7058feee6875786a871  invalid/schema.expected.json
+  6981575c3f63c8fc979d090676b041fb90bd4c3c0ad0da331eb4ec2ec2e73d7a  invalid/schema.jsonl
   f547cc70890a3807284db0412cf0504dfc3e736f475f5ad8391106aee9ebe594  signers.json
   c3eb6fcd9cc13e69c3d31f31ba9c17d3288507f483bcbfd0c196fcb92ac98f5f  v1/legacy.expected.json
   06f3a5eb867d808a1159cdc8a4df9d910a7295fb0b66a1346751a65ef3847740  v1/legacy.jsonl
@@ -20,8 +20,8 @@ files:
   7b2283cc2c4f988e38af9293c4a589eb67badc513b4d3422ab7348a2933d8d83  valid/ledger.jsonl
   3c99d97a7402e9cb8fff68b0b08ce505af6fd194ff451d3217eb469d53b95398  valid/proposals.expected.json
   34c11e5c80fa04b947850de0d73e53a0a859d780d320eb9a59a4823bcc42f541  valid/proposals.jsonl
-  8170f378954ea1385a092606917a5f538c2b0b596bb7523e37aca2df759df939  valid/routing.expected.json
-  08d131c56bedec93ef1f204ead34acf546b88401fd3c5a2b5b148912a0f4ed2f  valid/routing.jsonl
+  6d553dbe0f39d819313569cac1a720284a54d4654ff4c59d7158a8686091c650  valid/routing.expected.json
+  eda7384d32cb341a8d5b30c320d542ab099b9330266bae15e3fe194f245e2e6e  valid/routing.jsonl
   f0ae027285db844c17c63e8c87630f9fe82c1683af76b8d891d8d7b2d89debd7  valid/unknown.expected.json
   98b7d0e926ffe41b56b5dbc3e04a2b639487c9ecf0f6d09448ec8147a540535f  valid/unknown.jsonl
   16b77007483b93a07047e3fff9ef017eee8f448177d396763e3f1fcdea484dbd  wiki-line.v2.schema.json

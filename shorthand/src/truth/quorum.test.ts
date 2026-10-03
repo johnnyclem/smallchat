@@ -536,6 +536,64 @@ describe('reader admission: an agent signs a TB only together with other agent s
     expect(classifyEntry(read(person, REGISTRY))).toBe('ground-truth');
   });
 
+  it('an agent TB carrying a link type this version does not know fails closed, with or without a quorum (unknown-value)', () => {
+    // Case 148 of the three-way differential run, verbatim. The link rules and the quorum rules refuse no
+    // line over an unknown link type (a newer writer's), so the line decodes; a reader that admits truth
+    // fails closed on it instead (spec: "Unknown values", "An unknown evidence kind fails closed"), as
+    // stenographer's import (unknown-value) and smallchat-swift do
+    const case148 =
+      '{"schemaVersion":2,"seq":1,"id":"TBQ","type":"TB","ts":"2026-09-01T10:14:00.000Z","author":"agent:codex","claim":"searchV1 is gone; searchV2 replaced it.","evidence":[{"kind":"commit","ref":"c4fe0b1"},{"kind":"file","ref":"src/api/search.ts:1"}],"signedBy":"agent:codex","literals":[{"dead":"searchV1","current":"searchV2"}],"quorum":[{"author":"agent:claude-code","agentSessionId":"sess_a","ts":"2026-09-01T10:13:00.000Z","evidence":[{"kind":"commit","ref":"c4fe0b1"}]},{"author":"agent:codex","agentSessionId":"sess_b","ts":"2026-09-01T10:14:00.000Z","evidence":[{"kind":"file","ref":"src/api/search.ts:1"}]}],"status":"active","x-steno":{"origin":"local","provenance":{"kind":"manual"},"agentSessionId":null,"targetRef":null,"links":[{"fromId":"TBQ","toId":"TB-OLD","type":"corroborates"}]},"prevHash":null,"hash":"54d5e9586a8e05541d5141f3c326f7f7289bcbe7753816e35f4dfb7382f133b4"}';
+    expect(truthLineHash(case148)).toBe('54d5e9586a8e05541d5141f3c326f7f7289bcbe7753816e35f4dfb7382f133b4');
+    expect(decodeTruthLine(case148)).toMatchObject({ version: 2, type: 'TB' });
+    expect(checkQuorum(JSON.parse(case148))).toEqual([]);
+    for (const signers of [null, REGISTRY]) {
+      const result = parseWikiLines([case148], { signers });
+      expect(result.errors).toEqual([]);
+      const [entry] = result.entries;
+      expect(entry.inadmissible).toMatchObject({ reason: 'unknown-value' });
+      expect(entry.inadmissible!.detail).toContain("link type 'corroborates'");
+      expect(classifyEntry(entry)).toBe('history');
+      // Kept as written all the same
+      expect(serializeWikiEntries(result.entries)).toEqual([case148]);
+      expect(wikiLineToEntry(case148, { signers }).inadmissible).toMatchObject({ reason: 'unknown-value' });
+    }
+
+    const withLinks = (body: Record<string, unknown>, links: Array<{ fromId: string; toId: string; type: string }>) => ({
+      ...body,
+      'x-steno': { links },
+    });
+    const SIGNS = { fromId: 'TBQ1', toId: 'PROP-1', type: 'signs' };
+    // Beside a known link, and on a link into the TB that another entry writes
+    const inbound = withLinks(quorumTb(), [SIGNS, { fromId: 'TB-OLD', toId: 'TBQ1', type: 'corroborates' }]);
+    expect(checkQuorum(inbound)).toEqual([]);
+    for (const signers of [null, REGISTRY]) {
+      const entry = read(inbound, signers);
+      expect(entry.inadmissible).toMatchObject({ reason: 'unknown-value' });
+      expect(entry.inadmissible!.detail).toContain("link type 'corroborates'");
+    }
+    // Weighed ahead of the quorum check, as stenographer's import does: an agent TB without one is unknown-value too
+    const lone = withLinks(alone(), [{ fromId: 'TBQ1', toId: 'TB-OLD', type: 'corroborates' }]);
+    for (const signers of [null, REGISTRY]) expect(read(lone, signers).inadmissible).toMatchObject({ reason: 'unknown-value' });
+    // An unknown evidence kind is named first, as stenographer names the first unknown value it reads
+    const [a, b] = quorumTb().quorum;
+    const benched = [a, { ...b, evidence: [FILE, { kind: 'benchmark', ref: 'bench/retry-budget' }] }];
+    const both = withLinks(quorumTb({ quorum: benched, evidence: benched.flatMap((m) => m.evidence) }), [{ fromId: 'TBQ1', toId: 'TB-OLD', type: 'corroborates' }]);
+    expect(read(both).inadmissible).toMatchObject({ reason: 'unknown-value' });
+    expect(read(both).inadmissible!.detail).toContain("evidence kind 'benchmark'");
+
+    // Known link types only: the same quorum TB is truth
+    for (const signers of [null, REGISTRY]) expect(classifyEntry(read(withLinks(quorumTb(), [SIGNS]), signers))).toBe('ground-truth');
+    // A person's TB is a person's act: a reader keeps its unknown link and reads its status, as for an unknown kind
+    const person = withLinks({ ...alone(), author: 'kim', signedBy: 'kim' }, [{ fromId: 'TBQ1', toId: 'TB-OLD', type: 'corroborates' }]);
+    expect(classifyEntry(read(person, REGISTRY))).toBe('ground-truth');
+    expect(classifyEntry(read({ ...person, author: AGENT }, REGISTRY))).toBe('ground-truth');
+    // A version 1 line's links are not the codec's to check, and stenographer drops the ones it doesn't take,
+    // so an agent's v1 TB stays what it was: unverifiable, or without a quorum when the host admits v1 TBs
+    const { schemaVersion: _v, ...v1 } = { ...lone, schemaVersion: 1 };
+    expect(parseWikiLines([JSON.stringify(v1)]).entries[0].inadmissible).toMatchObject({ reason: 'unverifiable' });
+    expect(parseWikiLines([JSON.stringify(v1)], { admitV1Tbs: true }).entries[0].inadmissible).toMatchObject({ reason: 'agent-without-quorum' });
+  });
+
   it('a TB a person signs needs no quorum, and an agent may still draft what a person signs', () => {
     expect(classifyEntry(read({ ...alone(), author: 'kim', signedBy: 'kim' }))).toBe('ground-truth');
     expect(classifyEntry(read({ ...alone(), author: AGENT, signedBy: 'kim' }, REGISTRY))).toBe('ground-truth');

@@ -13,7 +13,8 @@
  * held). A reader does not import: the parts that apply to it are that
  * `inserted` lines are read with that status, that `proposal` lines never
  * become current truth (for the reasons a reader applies: unsigned,
- * unverifiable, a TB an agent signed without a quorum, an unknown status),
+ * unverifiable, a TB an agent signed without a quorum, or citing an
+ * evidence kind or carrying a link type it doesn't know, an unknown status),
  * and that `held` lines change no status (`after` and `heldReason` describe
  * stenographer's import, which a reader may ignore).
  * Each describe block says how its expected file is read.
@@ -29,6 +30,7 @@ import { Ajv2020 } from 'ajv/dist/2020.js';
 import addFormatsModule from 'ajv-formats';
 import { canonicalize } from './jcs.js';
 import { checkTruthChain, decodeTruthLine, truthLineHash, type DecodedTruthLine } from './format.js';
+import { checkQuorum } from './quorum.js';
 import { parseProposalLines } from './proposals.js';
 import { classifyEntry, parseWikiLines, serializeWikiEntries, truthStatusTable } from './wiki.js';
 import type { TruthSignerFile } from './identity.js';
@@ -223,12 +225,16 @@ describe('valid/routing.jsonl: valid lines stenographer does not simply take as 
 
   it('pass the schema and the codec, and read (each on its own) as routing.expected.json says', () => {
     const fixture = lines('valid/routing.jsonl');
-    for (const w of expected<Want[]>('valid/routing.expected.json')) {
+    const want = expected<Want[]>('valid/routing.expected.json');
+    // Every line has its outcome, so a line a re-sync adds is never left unchecked
+    expect(want.map((w) => w.line)).toEqual(fixture.map((_, i) => i + 1));
+    for (const w of want) {
       const line = fixture[w.line - 1];
       expect(schemaValid(line), `line ${w.line}: ${ajv.errorsText(validate.errors)}`).toBe(true);
       // A single line part-way through a stream is a valid partial stream
       const result = parseWikiLines([line], { signers: signers() });
       expect(result.errors, `line ${w.line}`).toEqual([]);
+      expect(result.lines.map((l) => l.text), `line ${w.line}`).toEqual([line]);
       const entry = result.entries.find((e) => e.id === parse(line).id);
       if (w.outcome === 'inserted') {
         expect(entry!.status, `line ${w.line}`).toBe(w.status);
@@ -240,6 +246,45 @@ describe('valid/routing.jsonl: valid lines stenographer does not simply take as 
         expect(entry, `line ${w.line}`).toBeUndefined();
         expect(result.transitions, `line ${w.line}`).toEqual([]);
       }
+    }
+  });
+
+  it('reads rule 5 of a quorum ADDENDUM from x-steno.links alone, whatever top-level links it carries (lines 18-20)', () => {
+    // Each keeps rule 5 against its x-steno link and carries a `links` field the format doesn't define,
+    // which neither hides a break nor refuses the line. Their UV is in ledger.jsonl: stenographer imports
+    // each after it and sees it resolved; a reader applies no ADDENDUM, so it checks the rule and keeps the line
+    const fixture = lines('valid/routing.jsonl');
+    const uvs = new Set(lines('valid/ledger.jsonl').map(parse).filter((l) => l.type === 'UV').map((l) => l.id));
+    const tops: unknown[] = [];
+    for (const n of [18, 19, 20]) {
+      const line = parse(fixture[n - 1]);
+      expect(line.type, `line ${n}`).toBe('ADDENDUM');
+      expect(line, `line ${n}`).toHaveProperty('links');
+      tops.push(line.links);
+      const [link] = line['x-steno'].links as Array<{ fromId: string; toId: string; type: string }>;
+      expect(uvs.has(link.toId), `line ${n}: its UV is in ledger.jsonl`).toBe(true);
+      expect(checkQuorum(line), `line ${n}`).toEqual([]);
+      // The same line with its x-steno link turned the other way breaks rule 5, the top-level links aside
+      const flipped = { ...line, 'x-steno': { ...line['x-steno'], links: [{ ...link, type: link.type === 'verifies' ? 'refutes' : 'verifies' }] } };
+      flipped.hash = truthLineHash(flipped);
+      expect(() => decodeTruthLine(JSON.stringify(flipped)), `line ${n}`).toThrow(/rule 5/);
+    }
+    expect(tops).toEqual([[{ type: 'overrides' }], [expect.objectContaining({ type: 'verifies' })], 'corroborates']);
+  });
+
+  it('files a TB an agent quorum signed whose x-steno.links carries a link type this version does not know (line 21)', () => {
+    // The quorum keeps its rules and the codec takes the line; the reader, which admits truth, fails closed
+    // on the link type it can't read, as stenographer's import (unknown-value) and smallchat-swift do
+    const line = lines('valid/routing.jsonl')[20];
+    expect(parse(line)['x-steno'].links.map((l: { type: string }) => l.type)).toEqual(['corroborates']);
+    expect(checkQuorum(parse(line))).toEqual([]);
+    for (const options of [{}, { signers: signers() }]) {
+      const result = parseWikiLines([line], options);
+      const [entry] = result.entries;
+      expect(entry.inadmissible).toMatchObject({ reason: 'unknown-value' });
+      expect(entry.inadmissible!.detail).toContain("link type 'corroborates'");
+      expect(classifyEntry(entry)).toBe('history');
+      expect(serializeWikiEntries(result.entries)).toEqual([line]);
     }
   });
 

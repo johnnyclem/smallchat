@@ -35,7 +35,8 @@
  * key starts with `agent:` — is the reader's admission rule (wiki.ts): a TB
  * an agent signs is truth only with a quorum whose members are all agents.
  * The reader also fails closed where these rules can't: an agent's TB that
- * cites an evidence kind it doesn't know is never truth (`unknown-value`).
+ * cites an evidence kind or carries a link type it doesn't know is never
+ * truth (`unknown-value`).
  * The reference is stenographer's src/truth/quorum.ts; the golden fixtures
  * pin this one to it.
  */
