@@ -13,7 +13,10 @@
  * held). A reader does not import: the parts that apply to it are that
  * `inserted` lines are read with that status, that `proposal` lines never
  * become current truth (for the reasons a reader applies: unsigned,
- * unverifiable, an unknown status), and that `held` lines change no status.
+ * unverifiable, a TB an agent signed without a quorum, or citing an
+ * evidence kind or carrying a link type it doesn't know, an unknown status),
+ * and that `held` lines change no status (`after` and `heldReason` describe
+ * stenographer's import, which a reader may ignore).
  * Each describe block says how its expected file is read.
  */
 
@@ -27,6 +30,7 @@ import { Ajv2020 } from 'ajv/dist/2020.js';
 import addFormatsModule from 'ajv-formats';
 import { canonicalize } from './jcs.js';
 import { checkTruthChain, decodeTruthLine, truthLineHash, type DecodedTruthLine } from './format.js';
+import { checkQuorum } from './quorum.js';
 import { parseProposalLines } from './proposals.js';
 import { classifyEntry, parseWikiLines, serializeWikiEntries, truthStatusTable } from './wiki.js';
 import type { TruthSignerFile } from './identity.js';
@@ -117,7 +121,7 @@ describe('valid/ledger.jsonl: one ledger, every kind of wiki line', () => {
     const entryLines = lines(file).filter((l) => ['TB', 'UV'].includes(parse(l).type));
     expect(serializeWikiEntries(result.entries)).toEqual(entryLines);
     expect(result.lines.map((l) => l.text)).toEqual(lines(file));
-    expect(result.head).toEqual({ seq: 15, hash: parse(lines(file)[14]).hash });
+    expect(result.head).toEqual({ seq: 19, hash: parse(lines(file)[18]).hash });
   });
 });
 
@@ -193,7 +197,8 @@ describe('valid/unknown.jsonl: what a newer writer may send', () => {
 
   it("reads stenographer's import outcomes as a reader: unknown statuses never become truth", () => {
     // 'inserted' and 'unknown-value' lines are read and current (a reader
-    // folds statuses; evidence and verifyBy kinds are not its to judge);
+    // folds statuses; the evidence and verifyBy kinds of a person's entries
+    // are not its to judge, unlike those an agent's TB cites, quorum.test.ts);
     // 'unknown-status' lines are history; the 'held' TRANSITION is kept
     // and moves its target to a status no one knows, which fails closed.
     const result = parseWikiLines(read(file));
@@ -220,12 +225,16 @@ describe('valid/routing.jsonl: valid lines stenographer does not simply take as 
 
   it('pass the schema and the codec, and read (each on its own) as routing.expected.json says', () => {
     const fixture = lines('valid/routing.jsonl');
-    for (const w of expected<Want[]>('valid/routing.expected.json')) {
+    const want = expected<Want[]>('valid/routing.expected.json');
+    // Every line has its outcome, so a line a re-sync adds is never left unchecked
+    expect(want.map((w) => w.line)).toEqual(fixture.map((_, i) => i + 1));
+    for (const w of want) {
       const line = fixture[w.line - 1];
       expect(schemaValid(line), `line ${w.line}: ${ajv.errorsText(validate.errors)}`).toBe(true);
       // A single line part-way through a stream is a valid partial stream
       const result = parseWikiLines([line], { signers: signers() });
       expect(result.errors, `line ${w.line}`).toEqual([]);
+      expect(result.lines.map((l) => l.text), `line ${w.line}`).toEqual([line]);
       const entry = result.entries.find((e) => e.id === parse(line).id);
       if (w.outcome === 'inserted') {
         expect(entry!.status, `line ${w.line}`).toBe(w.status);
@@ -238,6 +247,56 @@ describe('valid/routing.jsonl: valid lines stenographer does not simply take as 
         expect(result.transitions, `line ${w.line}`).toEqual([]);
       }
     }
+  });
+
+  it('reads rule 5 of a quorum ADDENDUM from x-steno.links alone, whatever top-level links it carries (lines 18-20)', () => {
+    // Each keeps rule 5 against its x-steno link and carries a `links` field the format doesn't define,
+    // which neither hides a break nor refuses the line. Their UV is in ledger.jsonl: stenographer imports
+    // each after it and sees it resolved; a reader applies no ADDENDUM, so it checks the rule and keeps the line
+    const fixture = lines('valid/routing.jsonl');
+    const uvs = new Set(lines('valid/ledger.jsonl').map(parse).filter((l) => l.type === 'UV').map((l) => l.id));
+    const tops: unknown[] = [];
+    for (const n of [18, 19, 20]) {
+      const line = parse(fixture[n - 1]);
+      expect(line.type, `line ${n}`).toBe('ADDENDUM');
+      expect(line, `line ${n}`).toHaveProperty('links');
+      tops.push(line.links);
+      const [link] = line['x-steno'].links as Array<{ fromId: string; toId: string; type: string }>;
+      expect(uvs.has(link.toId), `line ${n}: its UV is in ledger.jsonl`).toBe(true);
+      expect(checkQuorum(line), `line ${n}`).toEqual([]);
+      // The same line with its x-steno link turned the other way breaks rule 5, the top-level links aside
+      const flipped = { ...line, 'x-steno': { ...line['x-steno'], links: [{ ...link, type: link.type === 'verifies' ? 'refutes' : 'verifies' }] } };
+      flipped.hash = truthLineHash(flipped);
+      expect(() => decodeTruthLine(JSON.stringify(flipped)), `line ${n}`).toThrow(/rule 5/);
+    }
+    expect(tops).toEqual([[{ type: 'overrides' }], [expect.objectContaining({ type: 'verifies' })], 'corroborates']);
+  });
+
+  it('files a TB an agent quorum signed whose x-steno.links carries a link type this version does not know (line 21)', () => {
+    // The quorum keeps its rules and the codec takes the line; the reader, which admits truth, fails closed
+    // on the link type it can't read, as stenographer's import (unknown-value) and smallchat-swift do
+    const line = lines('valid/routing.jsonl')[20];
+    expect(parse(line)['x-steno'].links.map((l: { type: string }) => l.type)).toEqual(['corroborates']);
+    expect(checkQuorum(parse(line))).toEqual([]);
+    for (const options of [{}, { signers: signers() }]) {
+      const result = parseWikiLines([line], options);
+      const [entry] = result.entries;
+      expect(entry.inadmissible).toMatchObject({ reason: 'unknown-value' });
+      expect(entry.inadmissible!.detail).toContain("link type 'corroborates'");
+      expect(classifyEntry(entry)).toBe('history');
+      expect(serializeWikiEntries(result.entries)).toEqual([line]);
+    }
+  });
+
+  it("keeps a TB quorum member's verdict, a field only an ADDENDUM's members define, whatever its value", () => {
+    // Line 17: on a TB member, verdict is an unknown field. The reader reads nothing from it, keeps it as
+    // written on the typed member, and writes the line back verbatim
+    const line = lines('valid/routing.jsonl')[16];
+    expect(parse(line).quorum[0].verdict).toBe('bogus');
+    const result = parseWikiLines([line], { signers: signers() });
+    const [entry] = result.entries;
+    expect(entry.type === 'TB' && entry.quorum?.map((m) => (m as { verdict?: unknown }).verdict)).toEqual(['bogus', undefined]);
+    expect(serializeWikiEntries(result.entries)).toEqual([line]);
   });
 
   it('without a signer registry, an identity that passes the identity rules is accepted', () => {
@@ -349,10 +408,11 @@ describe('the zero-dependency codec agrees with the JSON Schema', () => {
   // Mutate valid fixture lines one field at a time (re-hashed, so only the
   // mutation is wrong): whatever the codec accepts, the schema must accept,
   // and whatever the schema accepts but the codec refuses must be one of the
-  // rules JSON Schema can't express (hash, identity, links), or a leap
-  // second, which date-time allows at 23:59 UTC and stenographer's codec
-  // refuses (SH-REV-C5).
-  const CODEC_ONLY = /anonymous|reserved|control character|cannot carry the link|only the links it writes|contests link|contests field|each link once|hash mismatch|canonicalized|leap second/;
+  // rules JSON Schema can't express (hash, identity, links, the agent quorum
+  // rules across members and the line), or a leap second, which date-time
+  // allows at 23:59 UTC and stenographer's codec refuses (SH-REV-C5).
+  const CODEC_ONLY =
+    /anonymous|reserved|control character|cannot carry the link|only the links it writes|contests link|contests field|each link once|hash mismatch|canonicalized|leap second|^quorum: .*\(rule [1-6]\)/;
   const valid = ['valid/ledger.jsonl', 'valid/proposals.jsonl', 'valid/unknown.jsonl', 'valid/routing.jsonl'].flatMap((f) => lines(f));
   const POOL: unknown[] = [null, '', ' ', 0, -1, 1, 1.5, 'x', 'Assistant', 'migration', [], {}, true, '2026-13-01T00:00:00Z', '2026-02-30T00:00:00Z', '2026-09-01T10:00:60.000Z', '2026-09-01T23:59:60Z', '2026-09-01T23:59:60+01:00', '2026-09-01t10:00:00z', 'a'.repeat(300), 'ab'.repeat(32), '\u0007'];
 

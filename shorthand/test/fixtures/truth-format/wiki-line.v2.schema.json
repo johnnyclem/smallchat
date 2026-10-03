@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/johnnyclem/stenographer/blob/master/spec/truth-format/wiki-line.v2.schema.json",
   "title": "Stenographer truth format v2: one JSONL line",
-  "description": "One line of a truth stream: a TB, UV, ADDENDUM, RULING, PROPOSAL or TRANSITION line. The schema checks structure and is open where readers must be: unknown fields are allowed (and preserved), and status, kind and source values are open strings. The codec also checks what JSON Schema cannot: the hash, the chain across lines, identity rules (anonymous, generic and reserved identities compare case- and width-insensitively) and the link rules in README.md. A line that passes this schema can still be refused.",
+  "description": "One line of a truth stream: a TB, UV, ADDENDUM, RULING, PROPOSAL or TRANSITION line. The schema checks structure and is open where readers must be: unknown fields are allowed (and preserved), and status, kind and source values are open strings. The codec also checks what JSON Schema cannot: the hash, the chain across lines, identity rules (anonymous, generic and reserved identities compare case- and width-insensitively), the link rules and the agent quorum rules in README.md. A line that passes this schema can still be refused.",
   "type": "object",
   "properties": {
     "schemaVersion": {
@@ -144,7 +144,7 @@
       "type": "object",
       "properties": {
         "kind": {
-          "description": "An open string. Known: commit, file, test, claimed-command, wiki, message, and command (only on entries recorded before 1.0).",
+          "description": "An open string. Known: commit, file, test, claimed-command, wiki, message, chat, ticket, doc, and command (only on entries recorded before 1.0). Settling: commit, file, test, claimed-command, wiki. Every other kind, and any kind a reader doesn't know, is question-class (README, Evidence classes).",
           "type": "string",
           "minLength": 1
         },
@@ -309,6 +309,65 @@
         }
       }
     },
+    "quorumMember": {
+      "description": "One agent session that agreed: who, which session, when, and the evidence it brought (README, Agent quorum).",
+      "type": "object",
+      "properties": {
+        "author": {
+          "$ref": "#/$defs/identity"
+        },
+        "agentSessionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "ts": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "evidence": {
+          "$ref": "#/$defs/evidenceList"
+        }
+      },
+      "required": [
+        "author",
+        "agentSessionId",
+        "ts",
+        "evidence"
+      ]
+    },
+    "quorum": {
+      "description": "The agent sessions that settled a claim together: at least two (README, Agent quorum). The codec also checks the rules across the members and the line: distinct sessions (trimmed), the writer a member, settling evidence of two kinds with no item shared (refs compared normalized for their kind), every timestamp within 15 minutes to the millisecond, agreeing verdicts, a TB's literals, and the line's evidence the members' own.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/quorumMember"
+      },
+      "minItems": 2
+    },
+    "addendumQuorum": {
+      "description": "An ADDENDUM's quorum: each member also carries its verdict, the one the addendum's link applies.",
+      "type": "array",
+      "items": {
+        "allOf": [
+          {
+            "$ref": "#/$defs/quorumMember"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "verdict": {
+                "enum": [
+                  "verified",
+                  "refuted"
+                ]
+              }
+            },
+            "required": [
+              "verdict"
+            ]
+          }
+        ]
+      },
+      "minItems": 2
+    },
     "tb": {
       "title": "TB: an asserted tombstone",
       "type": "object",
@@ -323,7 +382,7 @@
           "$ref": "#/$defs/evidenceList"
         },
         "signedBy": {
-          "description": "Null only on a backfilled TB (author 'migration'), which is never truth on its own.",
+          "description": "Null only on a backfilled TB (author 'migration'), which is never truth on its own. An agent's signature counts only with a quorum.",
           "anyOf": [
             {
               "$ref": "#/$defs/identity"
@@ -340,6 +399,10 @@
           },
           "minItems": 1
         },
+        "quorum": {
+          "description": "Present when agents settled it: the agent sessions that agreed (README, Agent quorum). A TB an agent signs needs one, and a TB with one carries the literals its members agreed on.",
+          "$ref": "#/$defs/quorum"
+        },
         "status": {
           "$ref": "#/$defs/status"
         }
@@ -349,7 +412,12 @@
         "claim",
         "evidence",
         "signedBy"
-      ]
+      ],
+      "dependentRequired": {
+        "quorum": [
+          "literals"
+        ]
+      }
     },
     "uv": {
       "title": "UV: an unverified assertion",
@@ -405,6 +473,10 @@
             "string",
             "null"
           ]
+        },
+        "quorum": {
+          "description": "Present when agents resolved a UV: the agent sessions whose verdicts agree (README, Agent quorum). An agent's verification or refutation needs one; no quorum overrides.",
+          "$ref": "#/$defs/addendumQuorum"
         }
       },
       "required": [

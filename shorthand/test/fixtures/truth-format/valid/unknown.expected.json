@@ -25,7 +25,7 @@
     {
       "line": 1,
       "outcome": "inserted",
-      "note": "an unknown field is ignored (and preserved by readers that re-serialize)"
+      "note": "the unknown field is kept with the entry and exported again verbatim"
     },
     {
       "line": 2,

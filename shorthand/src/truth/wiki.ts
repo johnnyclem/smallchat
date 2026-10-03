@@ -23,8 +23,13 @@
  *   struck TB.
  * - **Admission.** An unsigned TB is never truth on its own; a v1 TB has no
  *   hash and is unverifiable (unless the host opts in); with a signer
- *   registry, unlisted authors and signers are unverifiable; two lines
- *   giving one id different content are a conflict.
+ *   registry, unlisted authors and signers are unverifiable; a TB an agent
+ *   signed is truth only with a quorum whose members are all agents (the
+ *   codec has checked the quorum's rules), and never when it cites an
+ *   evidence kind or carries a link type this version doesn't know (the
+ *   rules don't refuse one, so nothing shows two settling angles); two
+ *   lines giving one id different content, unknown fields included, are a
+ *   conflict.
  * - **Never rewrite.** Unknown fields and values are kept, never coerced,
  *   and a parsed entry serializes back to the exact line it was read from.
  * - **Several files** (one per teammate) fold one by one, then each entry
@@ -36,6 +41,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { canonicalize } from './jcs.js';
 import {
+  LINK_TYPES,
   TRUTH_STATUSES,
   TruthLineError,
   checkTruthChain,
@@ -51,11 +57,14 @@ import {
   type TruthSignerFile,
   type TruthSignerRegistry,
 } from './identity.js';
+import { AGENT_PREFIX, hasAgentPrefix } from './quorum.js';
+import { EVIDENCE_KINDS } from './types.js';
 import type {
   ConsumptionAction,
   TruthEvidence,
   TruthInadmissible,
   TruthLedgerEntry,
+  TruthQuorumMember,
   TruthSelection,
   TruthTbEntry,
   TruthTombstonedLiteral,
@@ -73,8 +82,12 @@ export interface TruthReadOptions {
   /**
    * Whose entries count, in stenographer's signers.json shape (or a list,
    * or a registry). With one, a TB is truth only when its author and signer
-   * are listed (as a person or an agent), and a UV only when its author is.
-   * Without one, any identity that passes the identity rules is accepted.
+   * are listed (as a person or an agent), and a UV only when its author is;
+   * an agent is an identity it lists with role `agent`. Without one, any
+   * identity that passes the identity rules is accepted, and an agent is an
+   * identity whose key starts with `agent:`. Either way, a TB an agent
+   * signed is truth only with a quorum whose members are all agents, citing
+   * only evidence kinds this version knows.
    */
   signers?: TruthSignerFile | TruthSigner[] | TruthSignerRegistry | null;
   /**
@@ -146,7 +159,7 @@ export interface WikiParseResult {
   lines: TruthLineRecord[];
   /** The last v2 line read: keep it and pass it as `previous` next time. */
   head: StreamHead | null;
-  /** Ids two lines (or two files) gave different content. Those entries are not truth. */
+  /** Ids two lines (or two files) gave different content (unknown fields included). Those entries are not truth. */
   conflicts: Array<{ id: string; files: string[] }>;
 }
 
@@ -166,17 +179,17 @@ export function literalValidationError(literal: unknown): string | null {
 }
 
 /** Keys the codec maps to typed fields; anything else rides in `extra`. */
-const TB_KEYS = new Set(['id', 'type', 'ts', 'author', 'claim', 'evidence', 'signedBy', 'literals', 'status', 'x-steno']);
+const TB_KEYS = new Set(['id', 'type', 'ts', 'author', 'claim', 'evidence', 'signedBy', 'literals', 'quorum', 'status', 'x-steno']);
 const UV_KEYS = new Set(['id', 'type', 'ts', 'author', 'assertion', 'basis', 'verifyBy', 'contests', 'status', 'x-steno']);
 
 function extraKeys(line: Record<string, unknown>, known: Set<string>): Record<string, unknown> | undefined {
-  let extra: Record<string, unknown> | undefined;
-  for (const [key, value] of Object.entries(line)) {
-    if (known.has(key)) continue;
-    (extra ??= {})[key] = value;
-  }
-  return extra;
+  const unknown = Object.entries(line).filter(([key]) => !known.has(key));
+  // fromEntries defines each key as an own field, so even a `__proto__` field stays one
+  return unknown.length > 0 ? Object.fromEntries(unknown) : undefined;
 }
+
+/** A v2 line's chain fields: where the line sits in its writer's stream, not what the entry says. */
+const CHAIN_KEYS = new Set(['schemaVersion', 'seq', 'prevHash', 'hash']);
 
 function entryOf(d: DecodedTruthLine, lineNo: number, file?: string): TruthLedgerEntry {
   const line = d.line;
@@ -208,6 +221,7 @@ function entryOf(d: DecodedTruthLine, lineNo: number, file?: string): TruthLedge
       status: lineStatus,
     };
     if (Array.isArray(line.literals) && line.literals.length > 0) entry.literals = line.literals as TruthTombstonedLiteral[];
+    if (Array.isArray(line.quorum)) entry.quorum = line.quorum as TruthQuorumMember[];
     if (xSteno !== undefined) entry.xSteno = xSteno;
     const extra = extraKeys(line, TB_KEYS);
     if (extra) entry.extra = extra;
@@ -249,12 +263,20 @@ function transitionOf(d: DecodedTruthLine, lineNo: number, file?: string): Truth
   };
 }
 
-/** What two copies of one entry must agree on, compared as JCS bytes (key order never matters). */
+/**
+ * What two copies of one entry must agree on, compared as JCS bytes (key
+ * order never matters): its fields, unknown ones included (stenographer's
+ * Importing rules 2 and 10). The chain fields differ between two writers'
+ * copies of one entry, and `x-steno` is each ledger's own record, so
+ * neither counts.
+ */
 function bodyKey(e: TruthLedgerEntry): string {
+  const unknown = Object.entries(e.extra ?? {}).filter(([key]) => !CHAIN_KEYS.has(key));
+  const extra = unknown.length > 0 ? Object.fromEntries(unknown) : null;
   return canonicalize(
     e.type === 'TB'
-      ? { type: e.type, author: e.author, claim: e.claim, evidence: e.evidence, signedBy: e.signedBy, literals: e.literals ?? null }
-      : { type: e.type, author: e.author, assertion: e.assertion, basis: e.basis, verifyBy: e.verifyBy, contests: e.contests },
+      ? { type: e.type, author: e.author, claim: e.claim, evidence: e.evidence, signedBy: e.signedBy, literals: e.literals ?? null, quorum: e.quorum ?? null, extra }
+      : { type: e.type, author: e.author, assertion: e.assertion, basis: e.basis, verifyBy: e.verifyBy, contests: e.contests, extra },
   );
 }
 
@@ -277,7 +299,10 @@ export function wikiLineToEntry(line: WikiEntryLine | string, options: TruthRead
  * The wire line for an entry. An entry read from a stream gives back the
  * line it was read from, never a rewrite (its `status` may have been folded
  * from a later TRANSITION; the line's own does not change). An entry built
- * by hand is written in the version 1 shape.
+ * by hand is written in the version 1 shape, which carries no quorum: one
+ * whose `quorum` (or an `extra` field of that name) is set throws
+ * `TruthLineError` rather than give a line every reader refuses. Only a
+ * version 2 line carries a quorum, and only stenographer writes those.
  */
 export function entryToWikiLine(entry: TruthLedgerEntry): WikiEntryLine {
   if (entry.source) return JSON.parse(entry.source.text) as WikiEntryLine;
@@ -292,10 +317,11 @@ export function entryToWikiLine(entry: TruthLedgerEntry): WikiEntryLine {
       signedBy: entry.signedBy,
       // Only present when given, so literal-free TBs keep their exact shape
       ...(entry.literals && entry.literals.length > 0 ? { literals: entry.literals } : {}),
+      ...(entry.quorum ? { quorum: entry.quorum } : {}),
       ...status,
     };
     if (entry.xSteno !== undefined) line['x-steno'] = entry.xSteno;
-    return entry.extra ? { ...entry.extra, ...line } : line;
+    return versionOneLine(entry, entry.extra ? { ...entry.extra, ...line } : line);
   }
 
   const line: WikiEntryLine = {
@@ -307,7 +333,18 @@ export function entryToWikiLine(entry: TruthLedgerEntry): WikiEntryLine {
     ...status,
   };
   if (entry.xSteno !== undefined) line['x-steno'] = entry.xSteno;
-  return entry.extra ? { ...entry.extra, ...line } : line;
+  return versionOneLine(entry, entry.extra ? { ...entry.extra, ...line } : line);
+}
+
+/** The version 1 line an entry built by hand is written as; a v1 line carries no quorum (the codec refuses one). */
+function versionOneLine(entry: TruthLedgerEntry, line: WikiEntryLine): WikiEntryLine {
+  if (line.quorum !== undefined) {
+    throw new TruthLineError(
+      `quorum: ${entry.type} ${entry.id} was built by hand, so it is written as a version 1 line, and a v1 line carries no quorum: ` +
+        'agents settle claims together only on v2 lines, which stenographer writes',
+    );
+  }
+  return line;
 }
 
 // ---------------------------------------------------------------------------
@@ -494,6 +531,87 @@ function listed(registry: TruthSignerRegistry, identity: string): boolean {
   return role === 'human' || role === 'agent';
 }
 
+/**
+ * Who is an agent (spec/truth-format, "Agent quorum"): with a signer
+ * registry, an identity it lists with role `agent` (its role decides, not
+ * its name); without one, an identity whose key starts with `agent:`.
+ */
+function isAgent(identity: string, registry: TruthSignerRegistry | null): boolean {
+  return registry ? registry.lookup(identity)?.role === 'agent' : hasAgentPrefix(identity);
+}
+
+/**
+ * Why a TB an agent signed can't be truth, or null: agents settle a claim
+ * only together, so it needs a quorum (whose rules the codec checked) whose
+ * members are all agents. With a registry, an unlisted `agent:` name is no
+ * witness.
+ */
+function agentWithoutQuorum(entry: TruthTbEntry, registry: TruthSignerRegistry | null): string | null {
+  if (!entry.signedBy || !isAgent(entry.signedBy, registry)) return null;
+  const outsider = entry.quorum?.find((m) => !isAgent(m.author, registry));
+  if (entry.quorum && !outsider) return null;
+  const why = outsider ? `a quorum that isn't all agents (quorum member ${outsider.author} is not an agent: ${notAnAgent(outsider.author, registry)})` : 'no quorum';
+  return (
+    `TB ${entry.id} is signed by agent ${entry.signedBy} with ${why}: agents settle a claim only as two or more agent sessions ` +
+    'agreeing from different angles within 15 minutes, or a person signs it'
+  );
+}
+
+/**
+ * Why a TB an agent signed can't be truth for this reader because of a value
+ * it doesn't know, or null: an evidence kind on its line or in its quorum,
+ * or a link type in its `x-steno.links`. The codec refuses no line over
+ * either (it may be a newer writer's: a settling kind, a new relation), and
+ * the quorum rules read only the kinds and link types a reader knows, so
+ * this reader can't tell what the agents settled, or that they agree from
+ * different angles: it fails closed instead (spec/truth-format, "Unknown
+ * values", "An unknown evidence kind fails closed"), as stenographer's
+ * import does (reason `unknown-value`, naming the first such value, evidence
+ * kinds first). A version 1 line's links are not checked by the codec, and
+ * stenographer drops those it doesn't take, so only a version 2 line's
+ * count. A person may sign on evidence of any class, and a person's TB is
+ * not refused here.
+ */
+function agentUnknownValue(entry: TruthTbEntry, registry: TruthSignerRegistry | null): string | null {
+  if (!entry.signedBy || !isAgent(entry.signedBy, registry)) return null;
+  const signed = `TB ${entry.id} is signed by agent ${entry.signedBy}`;
+  const items = [...entry.evidence, ...(entry.quorum ?? []).flatMap((m) => m.evidence)];
+  const kind = items.find((e) => !(EVIDENCE_KINDS as readonly string[]).includes(e.kind));
+  if (kind) {
+    return (
+      `${signed} and cites evidence kind '${kind.kind}', which this version doesn't know: ` +
+      "it settles nothing for this reader, which can't tell that the quorum agrees from different angles"
+    );
+  }
+  const link = entry.source?.version === 2 ? unknownLinkType(entry.xSteno) : null;
+  if (link !== null) {
+    return (
+      `${signed} and carries link type '${link}' in x-steno.links, which this version doesn't know: ` +
+      "an agent's settlement carrying a value this reader can't read settles nothing for it"
+    );
+  }
+  return null;
+}
+
+/** The first link type in `x-steno.links` this version doesn't know, or null. */
+function unknownLinkType(xSteno: Record<string, unknown> | undefined): string | null {
+  const links = xSteno?.links;
+  if (!Array.isArray(links)) return null;
+  for (const l of links) {
+    const type = typeof l === 'object' && l !== null ? (l as { type?: unknown }).type : undefined;
+    if (typeof type === 'string' && !(LINK_TYPES as readonly string[]).includes(type)) return type;
+  }
+  return null;
+}
+
+/** Why `identity`, which `isAgent` says is not an agent, isn't one. */
+function notAnAgent(identity: string, registry: TruthSignerRegistry | null): string {
+  if (!registry) return `its name doesn't start with '${AGENT_PREFIX}'`;
+  const role = registry.lookup(identity)?.role;
+  if (!role) return "the signer registry doesn't list it";
+  return `the signer registry lists it as ${role === 'human' ? 'a person' : `a ${role}`}`;
+}
+
 /** Sets `entry.inadmissible` when the reader will not take it as truth whatever its status. */
 function admit(
   entry: TruthLedgerEntry,
@@ -516,6 +634,16 @@ function admit(
     if (entry.type === 'TB' && !listed(registry, entry.signedBy!)) {
       return refuse('unverifiable', `TB ${entry.id}: signer '${entry.signedBy}' is not in the signer registry`);
     }
+  }
+  // Agents settle only together, from different angles: an agent's TB is truth only with a
+  // quorum of agents, and only when this reader knows every evidence kind it cites and every
+  // link type it carries (it fails closed on one it doesn't, ahead of the quorum check, as
+  // stenographer's import does)
+  if (entry.type === 'TB') {
+    const unknown = agentUnknownValue(entry, registry);
+    if (unknown) return refuse('unknown-value', unknown);
+    const why = agentWithoutQuorum(entry, registry);
+    if (why) return refuse('agent-without-quorum', why);
   }
 }
 
@@ -631,8 +759,9 @@ export function truthStatusTable(
 /**
  * Serialize entries back to JSONL lines (no trailing newline). An entry
  * read from a stream is written back exactly as read; an entry built by
- * hand in the version 1 shape. A stream's TRANSITION, ADDENDUM and RULING
- * lines are not entries: to write a whole stream back, use
+ * hand in the version 1 shape, and one of those carrying a quorum throws
+ * `TruthLineError` (see `entryToWikiLine`). A stream's TRANSITION, ADDENDUM
+ * and RULING lines are not entries: to write a whole stream back, use
  * `result.lines.map((l) => l.text)` (or `writeWikiFile(path, result)`).
  */
 export function serializeWikiEntries(entries: TruthLedgerEntry[]): string[] {
@@ -647,7 +776,9 @@ export function readWikiFile(path: string, options: TruthReadOptions = {}): Wiki
 /**
  * Write entries (see `serializeWikiEntries`), or a parsed stream's lines
  * verbatim, to a file — one line each. Truth streams are stenographer's to
- * write (one writer per file); this is for copies and fixtures.
+ * write (one writer per file); this is for copies and fixtures. Every line
+ * is built before the file is touched, so an entry `serializeWikiEntries`
+ * refuses leaves the file untouched.
  */
 export function writeWikiFile(path: string, content: TruthLedgerEntry[] | WikiParseResult): void {
   const lines = Array.isArray(content) ? serializeWikiEntries(content) : content.lines.map((l) => l.text);

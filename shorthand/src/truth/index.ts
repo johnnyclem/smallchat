@@ -7,8 +7,9 @@
  * hash-chained stream (or several, one per teammate), folds each entry's
  * status from its TRANSITION lines, carries current truth through
  * compaction under the §7 consumption rules (failing closed on anything it
- * does not understand or cannot verify), and may emit candidates back as a
- * hash-chained PROPOSAL stream — never as signed truth.
+ * does not understand or cannot verify, and on a TB an agent signed without
+ * a quorum of agents), and may emit candidates back as a hash-chained
+ * PROPOSAL stream — never as signed truth.
  */
 
 // Types
@@ -39,11 +40,17 @@ export type {
   TbProposalDraft,
   WrittenProposalLine,
   InvariantProposalLine,
+  TruthEvidenceClass,
+  TruthQuorumMember,
 } from './types.js';
-export { CONSUMPTION_RULES, TRUTH_SOURCE_PREFIX, ulid } from './types.js';
+export { CONSUMPTION_RULES, TRUTH_SOURCE_PREFIX, ulid, EVIDENCE_KINDS, SETTLING_EVIDENCE_KINDS, evidenceClass } from './types.js';
+
+// The agent quorum: agents settle claims only together
+export type { TruthQuorumSubject } from './quorum.js';
+export { QUORUM_WINDOW_MS, QUORUM_MIN_MEMBERS, checkQuorum } from './quorum.js';
 
 // Identities and the signer registry
-export type { TruthSigner, TruthSignerFile, TruthSignerRegistry, TruthSignerRole } from './identity.js';
+export type { TruthSigner, TruthSignerFile, TruthSignerKey, TruthSignerRegistry, TruthSignerRole } from './identity.js';
 export {
   MIGRATION_AUTHOR,
   DETECTOR_PREFIX,

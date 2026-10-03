@@ -53,5 +53,130 @@
     "line": 11,
     "reason": "a detector authoring a TRANSITION",
     "error": "reserved"
+  },
+  {
+    "line": 12,
+    "reason": "quorum rule 1: two members from one agent session",
+    "error": "share agent session"
+  },
+  {
+    "line": 13,
+    "reason": "quorum rule 1: a member with a generic identity",
+    "error": "anonymous or generic"
+  },
+  {
+    "line": 14,
+    "reason": "quorum rule 2: the line's author is not a member",
+    "error": "is not a quorum member"
+  },
+  {
+    "line": 15,
+    "reason": "quorum rule 2: a quorum TB signed by someone other than its author",
+    "error": "signed by its author"
+  },
+  {
+    "line": 16,
+    "reason": "quorum rule 3: a member with no settling evidence (chat is question-class)",
+    "error": "cites no settling evidence"
+  },
+  {
+    "line": 17,
+    "reason": "quorum rule 3: an evidence item two members both cite",
+    "error": "both cite"
+  },
+  {
+    "line": 18,
+    "reason": "quorum rule 3: one settling kind only",
+    "error": "two settling kinds"
+  },
+  {
+    "line": 19,
+    "reason": "quorum rule 4: members more than 15 minutes apart",
+    "error": "more than 15 minutes"
+  },
+  {
+    "line": 20,
+    "reason": "quorum rule 5: a member's verdict is not the one the addendum's link applies",
+    "error": "verdict refuted"
+  },
+  {
+    "line": 21,
+    "reason": "quorum rule 5: a quorum ADDENDUM that overrides a TB",
+    "error": "never overrides"
+  },
+  {
+    "line": 22,
+    "reason": "quorum rule 6: the line's evidence lacks a member's item",
+    "error": "lacks quorum member"
+  },
+  {
+    "line": 23,
+    "reason": "quorum rule 6: the line's evidence holds an item no member cites",
+    "error": "no quorum member cites"
+  },
+  {
+    "line": 24,
+    "reason": "a quorum on a UV line",
+    "error": "only on TB and ADDENDUM lines"
+  },
+  {
+    "line": 25,
+    "reason": "quorum rule 1: a member whose session is White_Space only (schema minLength 1 lets it through)",
+    "error": "names no agent session"
+  },
+  {
+    "line": 26,
+    "reason": "quorum rule 1: two members' sessions equal once trimmed of White_Space",
+    "error": "share agent session"
+  },
+  {
+    "line": 27,
+    "reason": "quorum rule 3: one commit in two spellings (case)",
+    "error": "both cite commit"
+  },
+  {
+    "line": 28,
+    "reason": "quorum rule 3: one commit in two spellings (an abbreviated hash and the full one)",
+    "error": "both cite commit"
+  },
+  {
+    "line": 29,
+    "reason": "quorum rule 3: one file in two spellings ('./', '//')",
+    "error": "both cite file"
+  },
+  {
+    "line": 30,
+    "reason": "quorum rule 3: one command in two spellings (runs of White_Space)",
+    "error": "both cite claimed-command"
+  },
+  {
+    "line": 31,
+    "reason": "quorum rule 4: the line's ts more than 15 minutes after its members, which lie a minute apart",
+    "error": "more than 15 minutes"
+  },
+  {
+    "line": 32,
+    "reason": "quorum rule 4 at its edge: 900 001 ms from the earliest member to the latest",
+    "error": "900001 ms"
+  },
+  {
+    "line": 33,
+    "reason": "quorum rule 2, identity keys lowercased with Final_Sigma: the line's author agent:ΟΔΥΣΣΕΥΣ keys to agent:οδυσσευς (final ς), not to the member agent:οδυσσευσ (σ), and no other member is it, so the writer is not a member. This line breaks no other rule: a reader that lowercases every Σ to σ reads the author as that member and wrongly takes it",
+    "error": "agent:ΟΔΥΣΣΕΥΣ is not a quorum member"
+  },
+  {
+    "line": 34,
+    "reason": "quorum rule 3, commit refs lowercased with Final_Sigma: abcΣ lowercases to abcς, so two members cite one commit. This line breaks no other rule: a reader that lowercases every Σ to σ reads abcσ, another commit, and wrongly takes it",
+    "error": "both cite commit abcς"
+  },
+  {
+    "line": 35,
+    "reason": "quorum rule 5, read from x-steno.links: members who say verified on a line whose x-steno link refutes, beside a top-level links: null, a field this version does not define, which neither hides the rule nor stands in for x-steno.links",
+    "error": "quorum member 1's verdict verified is not the one its line's refutes link applies"
+  },
+  {
+    "line": 36,
+    "reason": "quorum rule 5, read from x-steno.links: members who say verified on a line whose x-steno link refutes, beside a top-level links: [], a field this version does not define, which neither hides the rule nor stands in for x-steno.links",
+    "error": "quorum member 1's verdict verified is not the one its line's refutes link applies"
   }
 ]

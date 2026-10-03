@@ -26,5 +26,104 @@
     "line": 5,
     "outcome": "held",
     "note": "a refutation of a UV this ledger does not hold"
+  },
+  {
+    "line": 6,
+    "outcome": "proposal",
+    "reason": "agent-without-quorum",
+    "note": "a TB an agent signed alone: agents settle claims only as a quorum"
+  },
+  {
+    "line": 7,
+    "outcome": "held",
+    "note": "an agent's verification without a quorum"
+  },
+  {
+    "line": 8,
+    "outcome": "inserted",
+    "status": "active",
+    "note": "a TB a person signed"
+  },
+  {
+    "line": 9,
+    "outcome": "inserted",
+    "status": "open",
+    "note": "a UV that contests it"
+  },
+  {
+    "line": 10,
+    "outcome": "held",
+    "after": [
+      8,
+      9
+    ],
+    "heldReason": "would override TB",
+    "note": "an agent quorum verifying a UV that contests a TB: that would override the TB, which only a person does (stenographer imports it after lines `after`)"
+  },
+  {
+    "line": 11,
+    "outcome": "held",
+    "heldReason": "evidence kind 'benchmark'",
+    "note": "a quorum member citing only an evidence kind this version does not know: it decodes, and the import fails closed"
+  },
+  {
+    "line": 12,
+    "outcome": "held",
+    "heldReason": "link type 'corroborates'",
+    "note": "a quorum ADDENDUM whose only link has a type this version does not know: it decodes, and the import fails closed"
+  },
+  {
+    "line": 13,
+    "outcome": "held",
+    "heldReason": "lists no links",
+    "note": "a quorum ADDENDUM that lists no links: checked for agreeing verdicts only, and held, since what it changes is unknown"
+  },
+  {
+    "line": 14,
+    "outcome": "held",
+    "heldReason": "is not held here",
+    "note": "members 900 000.9 ms apart: rule 4 reads timestamps to the millisecond, so it decodes (held: its UV is not in this ledger)"
+  },
+  {
+    "line": 15,
+    "outcome": "proposal",
+    "reason": "unknown-value",
+    "note": "a TB an agent quorum signed, one of whose members cites only an evidence kind this version does not know ('benchmark'): it decodes (rule 3 refuses no line over an unknown kind), and the import fails closed: filed for a person, never truth, and not agent-without-quorum"
+  },
+  {
+    "line": 16,
+    "outcome": "proposal",
+    "reason": "unknown-value",
+    "note": "a TB an agent quorum signed whose members keep rule 3 with two known settling kinds (commit, file), one of them also citing 'benchmark': it decodes, and the import still fails closed on the unknown kind: filed for a person, never truth"
+  },
+  {
+    "line": 17,
+    "outcome": "inserted",
+    "status": "active",
+    "note": "a TB an agent quorum signed, one of whose members carries verdict 'bogus': only an ADDENDUM's members define verdict, so on a TB member it is an unknown field, whatever its value. It decodes, and the import takes the TB as truth and keeps the field, as for a TB member without it"
+  },
+  {
+    "line": 18,
+    "outcome": "held",
+    "heldReason": "is not held here",
+    "note": "a quorum ADDENDUM that verifies its UV, with a top-level links: [{\"type\":\"overrides\"}]: it decodes (rule 5 reads x-steno.links, whose link the members' verdicts match, and a field the format doesn't define never refuses a line), and is held only because its UV is not in this ledger: imported after it, it resolves the UV and keeps the field"
+  },
+  {
+    "line": 19,
+    "outcome": "held",
+    "heldReason": "is not held here",
+    "note": "a quorum ADDENDUM whose members say refuted and whose x-steno link refutes its UV, with a top-level links holding a verifies link: it decodes (rule 5 reads x-steno.links, whose link the members' verdicts match, and a field the format doesn't define never refuses a line), and is held only because its UV is not in this ledger: imported after it, it resolves the UV and keeps the field"
+  },
+  {
+    "line": 20,
+    "outcome": "held",
+    "heldReason": "is not held here",
+    "note": "a quorum ADDENDUM that verifies its UV, with a top-level links: \"corroborates\", a string: it decodes (rule 5 reads x-steno.links, whose link the members' verdicts match, and a field the format doesn't define never refuses a line), and is held only because its UV is not in this ledger: imported after it, it resolves the UV and keeps the field"
+  },
+  {
+    "line": 21,
+    "outcome": "proposal",
+    "reason": "unknown-value",
+    "note": "a TB an agent quorum signed whose x-steno.links carries a link type this version does not know ('corroborates'): it decodes (the link rules and the quorum rules refuse no line over an unknown link type), and the import fails closed: filed for a person, never truth"
   }
 ]

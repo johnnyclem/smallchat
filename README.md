@@ -255,7 +255,7 @@ evaluation of the ecosystem, with corrections at the top of each page.
 
 ```bash
 npm test                        # ~1,400 tests: runtime, compiler, embeddings, MCP, transports, satellites
-npm test --workspace=shorthand  # ~680 tests of the @shorthand/core mirror (CRDT properties, truth v2 fixtures)
+npm test --workspace=shorthand  # ~720 tests of the @shorthand/core mirror (CRDT properties, truth v2 fixtures)
 npm run check:shorthand         # shorthand/ still matches the short-hand release it mirrors
 npm run build && npm run test:pack   # pack, install and load the package as npm would publish it
 npm run test:traces             # golden dispatch traces (after a build)
