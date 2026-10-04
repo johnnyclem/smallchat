@@ -228,7 +228,7 @@ export type { LLMClient, MicroCheckRequest, DecomposeRequest, DecomposeResponse,
 // 0.4.0: Pre-Flight Verification (Pillar 2)
 export { verify, computeKeywordOverlap } from './runtime/verification.js';
 export type { VerificationResult, VerificationOptions } from './runtime/verification.js';
-export { JevJudge, jevTrigger, JEV_ABSTAIN } from './runtime/jev-judge.js';
+export { AMBIGUOUS_CONFIDENCE, JevJudge, jevTrigger, JEV_ABSTAIN } from './runtime/jev-judge.js';
 export type { JevCandidate, JevJudgeOptions, JevJudgeRequest, JevTrigger, JevVerdict } from './runtime/jev-judge.js';
 
 // 0.4.0: Intent Decomposition (Pillar 3)

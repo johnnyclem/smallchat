@@ -11,17 +11,17 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 describe("jevTrigger", () => {
-  it("flags a thin top-two gap as ambiguous even at high confidence", () => {
-    expect(jevTrigger("high", 0.91, 0.88, 0.05)).toBe("ambiguous");
+  it("flags the runtime's own ambiguous case: more than one candidate at or under 0.90", () => {
+    expect(jevTrigger("high", 0.88, 2)).toBe("ambiguous");
   });
 
-  it("flags a clear medium match as low-confidence", () => {
-    expect(jevTrigger("medium", 0.7, 0.4, 0.05)).toBe("low-confidence");
+  it("flags a lone medium match as low-confidence", () => {
+    expect(jevTrigger("medium", 0.7, 1)).toBe("low-confidence");
   });
 
-  it("does not ask when the winner is high and alone", () => {
-    expect(jevTrigger("high", 0.96, 0.7, 0.05)).toBeNull();
-    expect(jevTrigger("exact", 0.99, null, 0.05)).toBeNull();
+  it("does not ask when the winner is above 0.90, even with a runner-up", () => {
+    expect(jevTrigger("high", 0.91, 2)).toBeNull();
+    expect(jevTrigger("exact", 0.99, 1)).toBeNull();
   });
 });
 

@@ -1,17 +1,27 @@
 /**
  * Jev judge — TypeSafe System One model as the verifier for a thin shortlist.
  *
- * smallchat still retrieves. Jev is asked only when the local rank is not
- * enough to dispatch on its own: the best candidate is below HIGH, or the
- * top two candidates sit inside a margin. It may only return an id from the
- * shortlist it was shown. A miss, a low probability, a network error, or the
- * abstain option all decline. Decline never authorizes a dispatch.
+ * smallchat still retrieves. Jev is asked only when the runtime itself would
+ * not trust the rank: the best candidate is below HIGH, or more than one
+ * candidate remains and the winner is at or under AMBIGUOUS_CONFIDENCE (the
+ * same 0.90 the dispatch path uses to mark a result ambiguous). It may only
+ * return an id from the shortlist it was shown. A miss, a low probability, a
+ * network error, or the abstain option all decline. Decline never authorizes
+ * a dispatch.
+ *
+ * Request and response match @typesafe-ai/sdk 0.6.0: POST {base}/v1/systemone,
+ * body { model, state, questions }, answer at answers.<name> with
+ * { type: "choice", choice, confidence, probabilities }.
  */
 
 export const DEFAULT_JEV_ENDPOINT = "https://api.typesafe.ai/v1/systemone";
 export const DEFAULT_JEV_MODEL = "jev-latest";
-export const DEFAULT_JEV_MARGIN = 0.05;
 export const DEFAULT_JEV_ACCEPT = 0.7;
+/**
+ * Same cutoff dispatch uses when it stamps metadata.ambiguous: more than one
+ * candidate and a winner at or under this score. Not a tier threshold.
+ */
+export const AMBIGUOUS_CONFIDENCE = 0.9;
 export const DEFAULT_JEV_MAX_CANDIDATES = 8;
 /** Criteria key Jev may pick to refuse the whole shortlist. Never a tool id. */
 export const JEV_ABSTAIN = "__none__";
@@ -29,8 +39,6 @@ export interface JevJudgeOptions {
   apiKey: string;
   endpoint?: string;
   model?: string;
-  /** Score gap below which the top two candidates count as ambiguous. Default 0.05. */
-  margin?: number;
   /** Minimum probability on the chosen id. Default 0.7. */
   acceptThreshold?: number;
   /** Shortlist cap sent as choice criteria, plus the abstain option. Default 8. */
@@ -64,11 +72,9 @@ interface ChoiceAnswer {
 export function jevTrigger(
   bestTier: string,
   bestScore: number,
-  secondScore: number | null,
-  margin: number,
+  candidateCount: number,
 ): JevTrigger | null {
-  const ambiguous = secondScore !== null && bestScore - secondScore < margin;
-  if (ambiguous) return "ambiguous";
+  if (candidateCount > 1 && bestScore <= AMBIGUOUS_CONFIDENCE) return "ambiguous";
   if (bestTier === "medium" || bestTier === "low") return "low-confidence";
   return null;
 }
@@ -76,7 +82,6 @@ export function jevTrigger(
 export class JevJudge {
   readonly endpoint: string;
   readonly model: string;
-  readonly margin: number;
   readonly acceptThreshold: number;
   readonly maxCandidates: number;
   readonly timeoutMs: number;
@@ -88,7 +93,6 @@ export class JevJudge {
     this.apiKey = options.apiKey;
     this.endpoint = options.endpoint ?? DEFAULT_JEV_ENDPOINT;
     this.model = options.model ?? DEFAULT_JEV_MODEL;
-    this.margin = options.margin ?? DEFAULT_JEV_MARGIN;
     this.acceptThreshold = options.acceptThreshold ?? DEFAULT_JEV_ACCEPT;
     this.maxCandidates = options.maxCandidates ?? DEFAULT_JEV_MAX_CANDIDATES;
     this.timeoutMs = options.timeoutMs ?? 4000;

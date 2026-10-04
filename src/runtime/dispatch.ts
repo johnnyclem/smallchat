@@ -19,7 +19,7 @@ import { compileArgumentValidator, InputSchemaError } from '../core/argument-val
 import type { ArgumentCoercion } from '../core/argument-validator.js';
 import type { LLMClient, ToolSummary } from '../core/llm-client.js';
 import { NULL_LLM_CLIENT } from '../core/llm-client.js';
-import { JevJudge, jevTrigger } from './jev-judge.js';
+import { AMBIGUOUS_CONFIDENCE, JevJudge, jevTrigger } from './jev-judge.js';
 import type { JevJudgeOptions } from './jev-judge.js';
 import { verify } from './verification.js';
 import { decompose, executeDecomposition } from './decomposition.js';
@@ -80,9 +80,11 @@ export interface DispatchConfig {
   /** LLM client for verification, decomposition, refinement (optional — features degrade without it) */
   llmClient?: LLMClient;
   /**
-   * Jev judge for a thin shortlist. Asked only when the best candidate is
-   * below HIGH, or the top two sit inside `margin`. Absent means the
-   * existing verifier path is unchanged. A decline never authorizes a dispatch.
+   * Jev judge for a shortlist the runtime would not trust. Asked when the
+   * best candidate is below HIGH, or more than one candidate remains and the
+   * winner is at or under AMBIGUOUS_CONFIDENCE (the same cutoff that stamps
+   * metadata.ambiguous). Absent means the existing verifier path is unchanged.
+   * A decline never authorizes a dispatch.
    */
   jev?: JevJudge | JevJudgeOptions;
   /** Strict mode: verify every dispatch below EXACT, and raise the search floor to MEDIUM */
@@ -1062,21 +1064,20 @@ async function resolveInternal(
   let llmApproved = false;
   let jevDeclined = false;
   if (context.jev && ranked.length > 0) {
-    const second = ranked[1];
-    const trigger = jevTrigger(bestTier, best.score, second ? second.score : null, context.jev.margin);
+    const trigger = jevTrigger(bestTier, best.score, ranked.length);
     if (trigger) {
       const shortlist = ranked
         .filter(c => computeTier(c.score, context.thresholds) !== 'none')
         .slice(0, context.jev.maxCandidates);
-      const verdict = await context.jev.judge({
-        intent,
-        trigger,
-        candidates: shortlist.map(c => ({
+      const described = await Promise.all(shortlist.map(async c => {
+        const schema = c.imp.schema ?? await c.imp.schemaLoader().catch(() => null);
+        return {
           toolId: c.toolId,
-          description: c.imp.schema?.description || c.selector.canonical,
+          description: schema?.description || c.selector.canonical,
           score: c.score,
-        })),
-      });
+        };
+      }));
+      const verdict = await context.jev.judge({ intent, trigger, candidates: described });
       step('verification', verdict.reason, {
         judge: 'jev',
         trigger: verdict.trigger,
@@ -1556,7 +1557,7 @@ async function dispatchIntent(
   });
 
   // Annotate ambiguous results so callers know another tool was close
-  if (resolution.candidates.length > 1 && (resolution.confidence ?? 0) <= 0.90) {
+  if (resolution.candidates.length > 1 && (resolution.confidence ?? 0) <= AMBIGUOUS_CONFIDENCE) {
     result.metadata = {
       ...result.metadata,
       ambiguous: true,
