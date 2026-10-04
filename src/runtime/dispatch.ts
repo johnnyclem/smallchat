@@ -19,6 +19,8 @@ import { compileArgumentValidator, InputSchemaError } from '../core/argument-val
 import type { ArgumentCoercion } from '../core/argument-validator.js';
 import type { LLMClient, ToolSummary } from '../core/llm-client.js';
 import { NULL_LLM_CLIENT } from '../core/llm-client.js';
+import { AMBIGUOUS_CONFIDENCE, JevJudge, jevTrigger } from './jev-judge.js';
+import type { JevJudgeOptions } from './jev-judge.js';
 import { verify } from './verification.js';
 import { decompose, executeDecomposition } from './decomposition.js';
 import type { DecompositionResult } from './decomposition.js';
@@ -77,6 +79,14 @@ export class UnrecognizedIntent extends Error {
 export interface DispatchConfig {
   /** LLM client for verification, decomposition, refinement (optional — features degrade without it) */
   llmClient?: LLMClient;
+  /**
+   * Jev judge for a shortlist the runtime would not trust. Asked when the
+   * best candidate is below HIGH, or more than one candidate remains and the
+   * winner is at or under AMBIGUOUS_CONFIDENCE (the same cutoff that stamps
+   * metadata.ambiguous). Absent means the existing verifier path is unchanged.
+   * A decline never authorizes a dispatch.
+   */
+  jev?: JevJudge | JevJudgeOptions;
   /** Strict mode: verify every dispatch below EXACT, and raise the search floor to MEDIUM */
   strict?: boolean;
   /** Custom tier thresholds */
@@ -183,6 +193,8 @@ export class DispatchContext {
   readonly observer: DispatchObserver;
   readonly semanticMap: SemanticMap;
   readonly llmClient: LLMClient;
+  /** Configured Jev judge, or null when RuntimeOptions.jev is unset. */
+  readonly jev: JevJudge | null;
   readonly strict: boolean;
   readonly thresholds: TierThresholds;
   readonly requireLLMForSubHighDispatch: boolean;
@@ -227,6 +239,7 @@ export class DispatchContext {
     this.selectorNamespace = selectorNamespace ?? new SelectorNamespace();
     this.intentPins = intentPins ?? new IntentPinRegistry();
     this.llmClient = dispatchConfig?.llmClient ?? NULL_LLM_CLIENT;
+    this.jev = dispatchConfig?.jev instanceof JevJudge ? dispatchConfig.jev : dispatchConfig?.jev ? new JevJudge(dispatchConfig.jev) : null;
     this.strict = dispatchConfig?.strict ?? false;
     this.thresholds = dispatchConfig?.thresholds ?? { ...DEFAULT_THRESHOLDS };
     this.requireLLMForSubHighDispatch = dispatchConfig?.requireLLMForSubHighDispatch ?? true;
@@ -1044,11 +1057,52 @@ async function resolveInternal(
     if (d) return finish('resolved', 'decomposed', ranked, null, { decomposition: d });
   }
 
-  // 12. VERIFICATION — below HIGH, or below EXACT in strict mode. The best
-  // candidate and every alternate get the same strategies, the LLM included.
+  // 12. JEV — only for a below-HIGH winner or a thin top-two margin.
+  // Retrieval already happened. Jev may confirm an id from the shortlist;
+  // anything else declines, and a decline does not authorize dispatch.
   let chosen: Candidate | null = best;
   let llmApproved = false;
-  const needsVerification = subHigh(bestTier) || (context.strict && bestTier !== 'exact');
+  let jevDeclined = false;
+  if (context.jev && ranked.length > 0) {
+    const trigger = jevTrigger(bestTier, best.score, ranked.length);
+    if (trigger) {
+      const shortlist = ranked
+        .filter(c => computeTier(c.score, context.thresholds) !== 'none')
+        .slice(0, context.jev.maxCandidates);
+      const described = await Promise.all(shortlist.map(async c => {
+        const schema = c.imp.schema ?? await c.imp.schemaLoader().catch(() => null);
+        return {
+          toolId: c.toolId,
+          description: schema?.description || c.selector.canonical,
+          score: c.score,
+        };
+      }));
+      const verdict = await context.jev.judge({ intent, trigger, candidates: described });
+      step('verification', verdict.reason, {
+        judge: 'jev',
+        trigger: verdict.trigger,
+        toolId: verdict.toolId,
+        probability: verdict.probability,
+        confidence: verdict.confidence,
+      });
+      const match = verdict.toolId ? ranked.find(c => c.toolId === verdict.toolId) : undefined;
+      if (match) {
+        chosen = match;
+        llmApproved = true;
+      } else {
+        jevDeclined = true;
+      }
+    }
+  }
+
+  if (jevDeclined) {
+    return disambiguate('verification-failed', ranked, `Jev declined to judge "${intent}"`);
+  }
+
+  // 13. VERIFICATION — below HIGH, or below EXACT in strict mode. Skipped
+  // when Jev already approved a shortlisted id. The best candidate and every
+  // alternate get the same strategies, the LLM included.
+  const needsVerification = !llmApproved && (subHigh(bestTier) || (context.strict && bestTier !== 'exact'));
   if (needsVerification) {
     const llmVerifier = typeof llm.microCheck === 'function';
     if (subHigh(bestTier) && context.requireLLMForSubHighDispatch && !llmVerifier) {
@@ -1086,7 +1140,7 @@ async function resolveInternal(
     }
   }
 
-  // 13. POLICY — the same rule set as every other path.
+  // 14. POLICY — the same rule set as every other path.
   const verdict = await judge(chosen, llmApproved);
   step('policy', verdict.reason, { code: verdict.code, toolId: chosen.toolId });
   if (!verdict.allow) {
@@ -1503,7 +1557,7 @@ async function dispatchIntent(
   });
 
   // Annotate ambiguous results so callers know another tool was close
-  if (resolution.candidates.length > 1 && (resolution.confidence ?? 0) <= 0.90) {
+  if (resolution.candidates.length > 1 && (resolution.confidence ?? 0) <= AMBIGUOUS_CONFIDENCE) {
     result.metadata = {
       ...result.metadata,
       ambiguous: true,

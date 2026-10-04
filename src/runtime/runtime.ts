@@ -5,6 +5,8 @@ import { ToolClass } from '../core/tool-class.js';
 import { OverloadTable } from '../core/overload-table.js';
 import { DispatchContext, toolkit_dispatch, smallchat_dispatchStream, smallchat_dispatchStreamById, dispatchById, resolveIntent } from './dispatch.js';
 import type { DispatchConfig, DispatchByIdOptions, DispatchOptions, RegisteredTool, Resolution, ResolveOptions } from './dispatch.js';
+import type { JevJudgeOptions } from './jev-judge.js';
+import type { JevJudge } from './jev-judge.js';
 import type { SCMethodSignature } from '../core/sc-types.js';
 import { DispatchBuilder } from './dispatch-builder.js';
 import { SelectorNamespace } from '../core/selector-namespace.js';
@@ -64,6 +66,7 @@ export class ToolRuntime {
 
     const dispatchConfig: DispatchConfig = {
       llmClient: options?.llmClient,
+      jev: options?.jev,
       strict: options?.strict,
       thresholds: options?.thresholds,
       observerOptions: options?.observerOptions,
@@ -605,6 +608,11 @@ export interface RuntimeOptions {
   rateLimiter?: import('../core/semantic-rate-limiter.js').SemanticRateLimiterOptions;
   /** 0.4.0: Pluggable LLM client for verification, decomposition, refinement */
   llmClient?: LLMClient;
+  /**
+   * Jev judge for below-HIGH or ambiguous shortlists. Unset leaves dispatch
+   * unchanged. See runtime/jev-judge.ts.
+   */
+  jev?: JevJudge | JevJudgeOptions;
   /** 0.4.0: Enable --strict mode — verify all dispatches, treat ambiguity as error */
   strict?: boolean;
   /** 0.4.0: Custom confidence tier thresholds */
