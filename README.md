@@ -8,7 +8,7 @@
 
 Your agent has 50 tools. The LLM sees all 50 in its context window every single turn, burning tokens and degrading selection accuracy. You write routing logic, maintain tool registries, and pray the model picks the right one.
 
-**smallchat infers which tool to call.** The LLM expresses intent. The runtime resolves it — semantically, deterministically (same artifact, embedder and runtime state ⇒ same choice and proof digest), in milliseconds (cache hits in microseconds), with an auditable proof of *why* — and asks instead of guessing when nothing matches cleanly. No prompt stuffing. No selection lottery.
+**smallchat infers which tool to call.** The LLM expresses intent. The runtime resolves it — semantically, deterministically (same artifact, embedder and runtime state ⇒ same choice and proof digest, with no judge configured or when replaying recorded judge verdicts), in milliseconds (cache hits in microseconds), with an auditable proof of *why* — and asks instead of guessing when nothing matches cleanly. No prompt stuffing. No selection lottery.
 
 > **Tool inference is the durable idea.** Compiling tools out of the context window saves tokens — a real win *today*. But token prices fall. What does not get cheaper is choosing the *right* tool from thousands, reproducibly, in milliseconds, with a proof you can audit and govern. smallchat is built so that the token savings are a present-era *benefit* of tool inference, not its reason to exist. Even when tokens cost nothing, the inference engine still earns its place.
 
@@ -27,11 +27,11 @@ An agent in production needs two things: **what it knows** and **what it can do*
 | Layer | Problem | Example |
 |-------|---------|---------|
 | Knowledge layer | Pre-compile documents and data into governed, answer-shaped artifacts so the agent answers from a resolved source instead of re-deriving it. (Moving retrieval upstream also cuts tokens.) | RAG pipelines, enterprise knowledge engines |
-| **Dispatch layer** | **Infer *which tool to call* from a natural-language intent — semantically, reproducibly (same artifact, embedder and state ⇒ same choice), in milliseconds, with an auditable resolution proof. (Moving tool-selection upstream also cuts tokens.)** | **smallchat** |
+| **Dispatch layer** | **Infer *which tool to call* from a natural-language intent — semantically, reproducibly (same artifact, embedder and state ⇒ same choice, with no judge configured or replaying recorded judge verdicts), in milliseconds, with an auditable resolution proof. (Moving tool-selection upstream also cuts tokens.)** | **smallchat** |
 
 > The parenthetical token savings is what sells the idea in 2026. The reproducible, auditable selection is what keeps it useful after that.
 
-smallchat runs **in the agent process** — no SaaS dependency, no external round-trip. Your tool registry lives with your agent.
+smallchat runs **in the agent process** — no SaaS dependency, no external round-trip. Your tool registry lives with your agent. (The one exception is opt-in: a [shortlist judge](./packages/docs/docs/concepts/judge.md), if you configure one, is asked to break near-ties over the network.)
 
 An agent backed by any knowledge engine still has to decide whether to run a query, post to Slack, or write a file. That decision is exactly what smallchat handles. The two layers compose cleanly:
 
@@ -160,10 +160,11 @@ await upstreams.close(); // stops stdio upstream MCP servers
 **1.0.0** (unreleased; see [CHANGELOG](./CHANGELOG.md) and [MIGRATION](./MIGRATION.md) — it is a breaking release):
 
 - **Resolve is separate from execute.** `runtime.resolve(intent)` proposes at most one tool and runs nothing; `dispatchById(toolId, args)` runs exactly the named tool; `dispatch()` runs a match only when the dispatch policy allows it. Anything that ran nothing is an `isError` result with `metadata.outcome` (`DispatchOutcome`), and `execContent()` throws `DispatchError` instead of returning an error payload as content.
-- **One dispatch policy on every path.** Below HIGH confidence a tool runs only with an LLM verifier's approval (`requireLLMForSubHighDispatch` is on by default; without an `LLMClient` such matches are `needs-disambiguation`). Destructive tools run only by exact id, a pinned phrase or EXACT similarity. Intent pins gate every tool their selector reaches, overloads and other classes included.
-- **Exact by construction.** Arguments are validated against each tool's JSON Schema before anything runs; artifacts (format 1.0) are content-hashed and pinned to the embedder that produced their vectors; every decision carries a replayable proof with a canonical call digest. `spec/` holds the cross-implementation vectors (call digest, tool id, ranking, resolve outcomes, artifact).
+- **One dispatch policy on every path.** Below HIGH confidence a tool runs only with an LLM verifier's (or the shortlist judge's) approval (`requireLLMForSubHighDispatch` is on by default; without either, such matches are `needs-disambiguation`). Destructive tools run only by exact id, a pinned phrase or EXACT similarity. Intent pins gate every tool their selector reaches, overloads and other classes included.
+- **Exact by construction.** Arguments are validated against each tool's JSON Schema before anything runs; artifacts (format 1.0) are content-hashed and pinned to the embedder that produced their vectors; every decision carries a replayable proof with a canonical call digest. `spec/` holds the cross-implementation vectors (call digest, tool id, ranking, resolve outcomes, artifact, shortlist judge).
 - **Intents are never interned.** Runtime intents are embedded on their own and never enter the selector table, so they cannot leak into the tool list, shadow tools in suggestions, or change how later intents rank.
 - **`smallchat serve` is an exact MCP aggregator** on the official SDK (stdio by default, Streamable HTTP with a bearer token), with `smallchat_resolve` for semantic lookup; replay, explain and a hash-chained decision log make decisions checkable.
+- **An optional shortlist judge** (`RuntimeOptions.judge`, a vendor-neutral `ShortlistJudge`; spec in `spec/judge/`) may break near-ties: it is never asked for an EXACT winner or one the policy refuses, is offered only near-ties of the winner that it could then run, and an unreachable or failing judge leaves the decision what it would be without one (the call still waits up to the judge's timeout, records the attempt in its proof and is not cached). Its verdicts are recorded and replay without the network. TypeSafe's Jev is the experimental `@smallchat/core/jev` (it sends the intent and the offered tools' descriptions to TypeSafe).
 - **The root entry is the inference core.** Compaction, CRDT memory, importance scoring and truth-ledger interop (stenographer's Truth Format v2) come from `@shorthand/core` 1.0, a registry dependency: import `@shorthand/core/<module>` (the `@smallchat/core/compaction`, `/crdt`, `/importance` and `/truth` subpaths re-export it and are deprecated). Memex and dream are experimental (`@smallchat/core/memex`, `@smallchat/core/dream`).
 
 ### 0.5.0

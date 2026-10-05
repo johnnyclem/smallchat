@@ -13,6 +13,7 @@ const sidebars: SidebarsConfig = {
         'concepts/index',
         'concepts/selector-table',
         'concepts/dispatch',
+        'concepts/judge',
         'concepts/tool-class',
         'concepts/resolution-cache',
         'concepts/sc-object',

@@ -117,4 +117,25 @@ describe('release docs', () => {
       expect(migration, needle).toContain(needle);
     }
   });
+
+  it('documents the shortlist judge where dispatch is described (PR #91 review)', () => {
+    // Determinism is stated with its judge boundary, not unconditionally.
+    expect(read('README.md')).toMatch(/proof digest, with no judge configured or when replaying recorded judge verdicts/);
+    expect(read('docs/REFERENCE.md')).toMatch(/shortlist judge's\s+verdicts/);
+    expect(read('ARCHITECTURE.md')).toContain('with no shortlist judge configured');
+    // The option, the page and the egress disclosure.
+    expect(read('packages/docs/docs/api/runtime.md')).toMatch(/^\| `judge` \|/m);
+    expect(read('packages/docs/sidebars.ts')).toContain("'concepts/judge'");
+    const page = read('packages/docs/docs/concepts/judge.md');
+    for (const needle of ['@smallchat/core/jev', 'What is sent', 'redactIntent', 'never call', 'judge-approved', 'judge-declined']) {
+      expect(page, needle).toContain(needle);
+    }
+    expect(read('spec/resolve/README.md')).toContain('assume no shortlist judge');
+    expect(read('spec/ranking/README.md')).toMatch(/shortlist judge's verdicts/);
+    // An unreachable judge leaves the decision, not the proof, the latency or the cache, as without one.
+    for (const file of ['README.md', 'ARCHITECTURE.md', 'CHANGELOG.md', 'docs/REFERENCE.md', 'packages/docs/docs/concepts/judge.md',
+      'packages/docs/docs/concepts/dispatch.md', 'packages/docs/docs/api/runtime.md', 'spec/judge/README.md']) {
+      expect(read(file), file).not.toMatch(/judge changes nothing|exactly what it is without one|decides exactly as without/);
+    }
+  });
 });
