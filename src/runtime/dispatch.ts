@@ -1,4 +1,4 @@
-import type { Embedder, ExecuteOptions, ToolIMP, ToolProtocol, ToolResult, ToolSelector, VectorIndex, DispatchEvent, InferenceDelta, InferenceStream, ToolRefinementNeeded, ValidationError } from '../core/types.js';
+import type { Embedder, ExecuteOptions, ToolIMP, ToolProtocol, ToolResult, ToolSchema, ToolSelector, VectorIndex, DispatchEvent, InferenceDelta, InferenceStream, ToolRefinementNeeded, ValidationError } from '../core/types.js';
 import { ResolutionCache } from '../core/resolution-cache.js';
 import { SelectorTable, intentKey, intentSelector } from '../core/selector-table.js';
 import { SemanticRateLimiter, DEFAULT_PRINCIPAL } from '../core/semantic-rate-limiter.js';
@@ -8,7 +8,7 @@ import { unwrapValue } from '../core/sc-object.js';
 import { SelectorNamespace } from '../core/selector-namespace.js';
 import { OverloadAmbiguityError, SignatureValidationError } from '../core/overload-table.js';
 import { IntentPinRegistry } from '../core/intent-pin.js';
-import { compareRanked, computeTier, DEFAULT_THRESHOLDS, quantizeScore } from '../core/confidence.js';
+import { AMBIGUOUS_CONFIDENCE, compareRanked, computeTier, DEFAULT_THRESHOLDS, quantizeScore } from '../core/confidence.js';
 import type { ConfidenceTier, TierThresholds } from '../core/confidence.js';
 import { addProofStep, createProof, finalizeProof, proofClock } from '../core/proof.js';
 import type { CandidateSource, DecisionCode, ProofCandidate, ProofStage, ResolutionOutcome, ResolutionProof } from '../core/proof.js';
@@ -19,9 +19,9 @@ import { compileArgumentValidator, InputSchemaError } from '../core/argument-val
 import type { ArgumentCoercion } from '../core/argument-validator.js';
 import type { LLMClient, ToolSummary } from '../core/llm-client.js';
 import { NULL_LLM_CLIENT } from '../core/llm-client.js';
-import { AMBIGUOUS_CONFIDENCE, JevJudge, jevTrigger } from './jev-judge.js';
-import type { JevJudgeOptions } from './jev-judge.js';
-import { verify } from './verification.js';
+import { acceptJudgeAnswer, compareToolIds, judgeDescription, judgeSettings, judgeTrigger, replayJudgeVerdict, withinJudgeMargin } from '../core/judge.js';
+import type { JudgeAnswer, JudgeRequest, JudgeSettings, JudgeTrigger, JudgeVerdict, RecordedJudgeVerdict, ShortlistJudge } from '../core/judge.js';
+import { validateArgsAgainstSchema, verify } from './verification.js';
 import { decompose, executeDecomposition } from './decomposition.js';
 import type { DecompositionResult } from './decomposition.js';
 import { refine } from './refinement.js';
@@ -80,13 +80,19 @@ export interface DispatchConfig {
   /** LLM client for verification, decomposition, refinement (optional — features degrade without it) */
   llmClient?: LLMClient;
   /**
-   * Jev judge for a shortlist the runtime would not trust. Asked when the
-   * best candidate is below HIGH, or more than one candidate remains and the
-   * winner is at or under AMBIGUOUS_CONFIDENCE (the same cutoff that stamps
-   * metadata.ambiguous). Absent means the existing verifier path is unchanged.
-   * A decline never authorizes a dispatch.
+   * Shortlist judge (core/judge.ts, spec/judge): an optional tie-breaker.
+   * Asked only for a MEDIUM or LOW winner, or a HIGH winner whose runner-up
+   * is within the margin; never for EXACT or NONE, nor for a winner the
+   * policy refuses. It may only pick among near-ties it could then run
+   * (the policy and the deterministic verification would pass them). An
+   * approval stands in for the LLM verifier's check; a decline is
+   * needs-disambiguation; an unreachable or failing judge leaves the
+   * decision what it would be without one, though the call waits up to
+   * the judge's timeoutMs, records the attempt and is not cached. The
+   * judge sends the intent and the offered tools' descriptions wherever it
+   * runs. Unset: no judge.
    */
-  jev?: JevJudge | JevJudgeOptions;
+  judge?: ShortlistJudge;
   /** Strict mode: verify every dispatch below EXACT, and raise the search floor to MEDIUM */
   strict?: boolean;
   /** Custom tier thresholds */
@@ -193,8 +199,10 @@ export class DispatchContext {
   readonly observer: DispatchObserver;
   readonly semanticMap: SemanticMap;
   readonly llmClient: LLMClient;
-  /** Configured Jev judge, or null when RuntimeOptions.jev is unset. */
-  readonly jev: JevJudge | null;
+  /** The shortlist judge (null when RuntimeOptions.judge is unset) */
+  readonly judge: ShortlistJudge | null;
+  /** Its validated margin, maxCandidates and acceptThreshold (null without a judge) */
+  readonly judgeSettings: JudgeSettings | null;
   readonly strict: boolean;
   readonly thresholds: TierThresholds;
   readonly requireLLMForSubHighDispatch: boolean;
@@ -239,7 +247,8 @@ export class DispatchContext {
     this.selectorNamespace = selectorNamespace ?? new SelectorNamespace();
     this.intentPins = intentPins ?? new IntentPinRegistry();
     this.llmClient = dispatchConfig?.llmClient ?? NULL_LLM_CLIENT;
-    this.jev = dispatchConfig?.jev instanceof JevJudge ? dispatchConfig.jev : dispatchConfig?.jev ? new JevJudge(dispatchConfig.jev) : null;
+    this.judge = checkJudge(dispatchConfig?.judge);
+    this.judgeSettings = this.judge ? judgeSettings(this.judge) : null;
     this.strict = dispatchConfig?.strict ?? false;
     this.thresholds = dispatchConfig?.thresholds ?? { ...DEFAULT_THRESHOLDS };
     this.requireLLMForSubHighDispatch = dispatchConfig?.requireLLMForSubHighDispatch ?? true;
@@ -559,6 +568,15 @@ export class DispatchContext {
   }
 }
 
+/** A configured shortlist judge, checked for the shape dispatch relies on (or null). */
+function checkJudge(judge: ShortlistJudge | undefined): ShortlistJudge | null {
+  if (judge === undefined || judge === null) return null;
+  if (typeof judge.judge !== 'function') throw new TypeError('RuntimeOptions.judge must have a judge(request) method');
+  if (typeof judge.name !== 'string' || judge.name.trim() === '') throw new TypeError('RuntimeOptions.judge must have a non-empty name');
+  if (typeof judge.model !== 'string' || judge.model.trim() === '') throw new TypeError('RuntimeOptions.judge must have a non-empty model');
+  return judge;
+}
+
 /** Canonical tool id of an IMP: `<providerId>/<toolName>`. */
 export function toolIdOf(imp: Pick<ToolIMP, 'providerId' | 'toolName'>): string {
   return `${imp.providerId}/${imp.toolName}`;
@@ -584,6 +602,16 @@ export interface ResolveOptions {
   args?: Record<string, unknown>;
   /** Who is asking — scopes the rate limiter and feedback (DispatchOptions.principal) */
   principal?: string;
+  /**
+   * The shortlist judge for this call. Omitted: the runtime's
+   * (RuntimeOptions.judge). `false`: none; the call decides as a runtime
+   * without one. A recorded verdict (a proof's or a decision-log line's
+   * `judge`): it answers in the judge's place and no judge is called, which
+   * is how replay reproduces judged decisions without the network.
+   */
+  judge?: false | RecordedJudgeVerdict;
+  /** Aborts a pending judge request; the call then decides as without one */
+  signal?: AbortSignal;
 }
 
 /** One ranked candidate of a resolution. */
@@ -639,6 +667,18 @@ interface ResolveRun {
   depth: number;
   /** intentKeys of the intents this one was decomposed from */
   ancestors: readonly string[];
+  /** ResolveOptions.judge (undefined: the runtime's judge, asked live) */
+  judge?: false | RecordedJudgeVerdict;
+  /** The caller's signal, passed to the judge request */
+  signal?: AbortSignal;
+  /** explain(intent): with `judge` false, note whether the runtime's judge would have been asked */
+  judgeProbe?: JudgeProbe;
+}
+
+/** Whether a live dispatch would ask the runtime's judge (explain never asks it). */
+export interface JudgeProbe {
+  /** Why it would be asked and the tool ids it would be offered (presentation order); null: it would not be asked */
+  wouldAsk: { trigger: JudgeTrigger; offered: string[] } | null;
 }
 
 /** Nearest tools offered as refinement options start at this similarity. */
@@ -671,23 +711,47 @@ function rank(candidates: Candidate[]): Candidate[] {
  *
  * Order: pinned phrase → learned exact intent → cache → (rate limit) →
  * ranked candidates (vector and overload matches, learned similar-intent
- * boosts, protocol conformance). Every candidate passes the pin gate; the
- * chosen one passes verification (below HIGH, or in strict mode) and the
- * dispatch policy (runtime/policy.ts). Anything the policy refuses is
- * needs-disambiguation.
+ * boosts, protocol conformance). Every candidate passes the pin gate; a
+ * shortlist judge, when configured, may pick among near-ties of the winner
+ * (core/judge.ts); the chosen one passes verification (below HIGH, or in
+ * strict mode) and the dispatch policy (runtime/policy.ts). Anything the
+ * policy refuses is needs-disambiguation.
  *
  * Determinism: for the same artifact, embedder and runtime state
  * (registered classes, pins, semantic map, negative examples, cache), the
  * same intent text yields the same outcome, candidates and proofDigest.
  * Scores are quantized to 1e-4 and ties ordered by canonical tool id;
  * other intents the process has seen do not enter into it. An LLM
- * verifier's answers are an input like any other.
+ * verifier's answers and a shortlist judge's verdicts are inputs like any
+ * other; with no judge, or a recorded verdict (`options.judge`), nothing
+ * depends on the network.
  */
 export async function resolveIntent(
   context: DispatchContext,
   intent: string,
   options: ResolveOptions = {},
 ): Promise<Resolution> {
+  return (await resolveLogged(context, intent, options)).resolution;
+}
+
+/**
+ * resolveIntent as explain(intent) runs it: learning off, and no judge
+ * asked (a recorded verdict in `options.judge` still answers in its
+ * place). When the runtime has a judge and none answered, `wouldAsk` says
+ * whether a live dispatch would have asked it, and about which tools.
+ */
+export async function resolveForExplain(
+  context: DispatchContext,
+  intent: string,
+  options: Omit<ResolveOptions, 'learn'> = {},
+): Promise<{ resolution: Resolution; wouldAsk?: JudgeProbe['wouldAsk'] }> {
+  const judge = options.judge ?? false;
+  const probe: JudgeProbe | undefined = judge === false && context.judge ? { wouldAsk: null } : undefined;
+  const r = await resolveLogged(context, intent, { ...options, learn: false, judge }, probe);
+  return { resolution: r.resolution, ...(probe ? { wouldAsk: probe.wouldAsk } : {}) };
+}
+
+async function resolveLogged(context: DispatchContext, intent: string, options: ResolveOptions, judgeProbe?: JudgeProbe): Promise<InternalResolution> {
   const r = await resolveInternal(context, intent, {
     learn: options.learn ?? false,
     args: options.args,
@@ -695,9 +759,12 @@ export async function resolveIntent(
     allowDecomposition: false,
     depth: 0,
     ancestors: [],
+    ...(options.judge !== undefined ? { judge: options.judge } : {}),
+    ...(options.signal ? { signal: options.signal } : {}),
+    ...(judgeProbe ? { judgeProbe } : {}),
   });
   context.logDecision('resolve', r.resolution.proof, 'none', options.principal);
-  return r.resolution;
+  return r;
 }
 
 async function resolveInternal(
@@ -739,7 +806,7 @@ async function resolveInternal(
   });
 
   /** Pin gate + dispatch policy for one candidate. */
-  const judge = async (c: Candidate, llmApproved: boolean): Promise<PolicyVerdict> => {
+  const policy = async (c: Candidate, llmApproved: boolean): Promise<PolicyVerdict> => {
     let similarity = c.similarity;
     const via = c.selector.canonical;
     if (similarity !== null && (isDestructive(c.imp.annotations, context.policyOptions) || context.isPinnedTool(c.toolId, via))) {
@@ -828,7 +895,7 @@ async function resolveInternal(
     const owner = pinMatch ? context.toolForSelector(pinMatch.canonical) : null;
     if (pinMatch && owner) {
       const c: Candidate = { imp: owner.imp, toolId: owner.toolId, selector: owner.selector, score: 1, similarity: null, source: 'pin' };
-      const verdict = await judge(c, false);
+      const verdict = await policy(c, false);
       step('intent_pin', `"${intent}" is a pinned phrase of ${pinMatch.canonical} → ${c.toolId}`, { pin: pinMatch.canonical, policy: pinMatch.policy });
       if (verdict.allow) return finish('resolved', 'pin-exact', [c], c, { imp: c.imp });
       step('policy', verdict.reason, { code: verdict.code, toolId: c.toolId });
@@ -850,7 +917,7 @@ async function resolveInternal(
         source: 'semantic-map-exact',
       };
       const usable = !(context.strict && computeTier(c.score, context.thresholds) !== 'exact');
-      const verdict = await judge(c, false);
+      const verdict = await policy(c, false);
       if (usable && verdict.allow) {
         step('semantic_map', `Learned preference (exact, ${learned.reinforcements}x reinforced) → ${c.toolId} at ${c.score.toFixed(3)}`, { selector: learned.selectorId, reinforcements: learned.reinforcements });
         return finish('resolved', 'learned-exact', [c], c, { imp: c.imp });
@@ -876,7 +943,7 @@ async function resolveInternal(
         source: 'cache',
       };
       const usable = !(context.strict && computeTier(c.score, context.thresholds) !== 'exact');
-      const verdict = await judge(c, false);
+      const verdict = await policy(c, false);
       if (usable && verdict.allow) {
         step('cache', `Cache hit → ${c.toolId} at ${c.score.toFixed(3)}`, { toolId: c.toolId });
         return finish('resolved', 'cache', [c], c, { imp: c.imp });
@@ -1050,6 +1117,8 @@ async function resolveInternal(
   const best = ranked[0];
   const bestTier = computeTier(best.score, context.thresholds);
   const subHigh = (t: ConfidenceTier) => t === 'medium' || t === 'low';
+  /** Whether a candidate of this tier is verified before it runs (step 13). */
+  const verified = (t: ConfidenceTier) => subHigh(t) || (context.strict && t !== 'exact');
 
   // 11. LOW-tier decomposition (dispatch only): a compound intent may need several tools.
   if (bestTier === 'low') {
@@ -1057,53 +1126,110 @@ async function resolveInternal(
     if (d) return finish('resolved', 'decomposed', ranked, null, { decomposition: d });
   }
 
-  // 12. JEV — only for a below-HIGH winner or a thin top-two margin.
-  // Retrieval already happened. Jev may confirm an id from the shortlist;
-  // anything else declines, and a decline does not authorize dispatch.
+  // 12. JUDGE (optional; core/judge.ts, spec/judge) — a below-HIGH winner,
+  // or a HIGH winner with a runner-up within the margin; never EXACT, and
+  // never a winner the policy refuses. The judge may only pick among
+  // near-ties of the winner it could then run: the policy would allow them
+  // and the deterministic verification an approval still gets (step 13)
+  // would pass. Unavailable: decide as without a judge. Declined:
+  // needs-disambiguation. A recorded verdict (replay) answers in the
+  // judge's place; nothing is called.
   let chosen: Candidate | null = best;
   let llmApproved = false;
-  let jevDeclined = false;
-  if (context.jev && ranked.length > 0) {
-    const trigger = jevTrigger(bestTier, best.score, ranked.length);
-    if (trigger) {
-      const shortlist = ranked
-        .filter(c => computeTier(c.score, context.thresholds) !== 'none')
-        .slice(0, context.jev.maxCandidates);
-      const described = await Promise.all(shortlist.map(async c => {
-        const schema = c.imp.schema ?? await c.imp.schemaLoader().catch(() => null);
-        return {
-          toolId: c.toolId,
-          description: schema?.description || c.selector.canonical,
-          score: c.score,
-        };
-      }));
-      const verdict = await context.jev.judge({ intent, trigger, candidates: described });
-      step('verification', verdict.reason, {
-        judge: 'jev',
-        trigger: verdict.trigger,
-        toolId: verdict.toolId,
-        probability: verdict.probability,
-        confidence: verdict.confidence,
+  let judgeAsked = false;
+  let approvedSchema: ToolSchema | null = null;
+  const recorded = run.judge === false ? null : run.judge ?? null;
+  const liveJudge = run.judge === undefined ? context.judge : null;
+  const probe = run.judge === false ? run.judgeProbe ?? null : null;
+  const settings = recorded
+    ? recordedJudgeSettings(recorded, context.judgeSettings)
+    : liveJudge || probe ? context.judgeSettings : null;
+  if (settings) {
+    const trigger = judgeTrigger({ tier: bestTier, bestScore: best.score, runnerUpScore: ranked[1]?.score ?? null, margin: settings.margin });
+    const offered = trigger ? await shortlistFor(ranked, settings, {
+      allowed: c => policy(c, true),
+      // What an approval still has to pass: the required parameters when
+      // the arguments are known and, where the tier is verified, keyword overlap.
+      passes: async (c, schema) => verified(computeTier(c.score, context.thresholds))
+        ? (await verify(c.imp, intent, args ?? {}, undefined, { skipLLMCheck: true, skipSchemaCheck: args === undefined, schema })).pass
+        : args === undefined || validateArgsAgainstSchema(args, schema),
+    }) : [];
+    const ids = offered.map(o => o.candidate.toolId);
+    // A HIGH winner alone is no near-tie: the judge is asked only to choose among two or more.
+    const asks = offered.length > 0 && (subHigh(bestTier) || offered.length > 1);
+    if (trigger && asks && probe) {
+      probe.wouldAsk = { trigger, offered: ids };
+    } else if (trigger && asks) {
+      judgeAsked = true;
+      // A recorded verdict is recorded under its own name and model, never the runtime judge's.
+      const name = recorded ? recorded.name ?? 'recorded' : liveJudge!.name;
+      const configuredModel = recorded ? recorded.model ?? 'unknown' : liveJudge!.model;
+      const judged: JudgeVerdict = recorded
+        ? replayJudgeVerdict(recorded, ids, configuredModel)
+        : acceptJudgeAnswer(await askJudge(liveJudge!, {
+          intent,
+          trigger,
+          candidates: offered.map(o => ({ toolId: o.candidate.toolId, description: judgeDescription(o.schema.description || o.candidate.selector.canonical) })),
+        }, run.signal, settings.timeoutMs), ids, settings.acceptThreshold, configuredModel);
+      proof.judge = {
+        name,
+        model: judged.model,
+        verdict: judged.verdict,
+        toolId: judged.toolId,
+        probability: judged.probability,
+        confidence: judged.confidence,
+        reason: judged.reason,
+        margin: settings.margin,
+        maxCandidates: settings.maxCandidates,
+        ...(judged.requestId !== undefined ? { requestId: judged.requestId } : {}),
+      };
+      step('judge', judgeStepText(name, judged, ids.length, trigger), {
+        judge: name,
+        model: judged.model,
+        verdict: judged.verdict,
+        toolId: judged.toolId,
+        trigger,
+        offered: ids,
       });
-      const match = verdict.toolId ? ranked.find(c => c.toolId === verdict.toolId) : undefined;
-      if (match) {
-        chosen = match;
+      if (judged.verdict === 'declined') {
+        return disambiguate('judge-declined', ranked, `The ${name} judge chose none of the ${ids.length} offered tool(s) for "${intent}" (${judged.reason ?? 'no reason recorded'})`);
+      }
+      const approved = judged.verdict === 'approved' ? offered.find(o => o.candidate.toolId === judged.toolId) : undefined;
+      if (approved) {
+        chosen = approved.candidate;
+        approvedSchema = approved.schema;
         llmApproved = true;
-      } else {
-        jevDeclined = true;
       }
     }
   }
+  const judgeApproved = approvedSchema !== null;
 
-  if (jevDeclined) {
-    return disambiguate('verification-failed', ranked, `Jev declined to judge "${intent}"`);
-  }
-
-  // 13. VERIFICATION — below HIGH, or below EXACT in strict mode. Skipped
-  // when Jev already approved a shortlisted id. The best candidate and every
-  // alternate get the same strategies, the LLM included.
-  const needsVerification = !llmApproved && (subHigh(bestTier) || (context.strict && bestTier !== 'exact'));
-  if (needsVerification) {
+  // 13. VERIFICATION — below HIGH, or below EXACT in strict mode. The best
+  // candidate and every alternate get the same strategies, the LLM included.
+  // A judge's approval stands in for the LLM check only: its choice still
+  // gets the deterministic strategies wherever the ranked winner would
+  // (the shortlist offered only candidates that pass them; this re-checks).
+  if (judgeApproved) {
+    if (verified(computeTier(chosen.score, context.thresholds))) {
+      const v = await verify(chosen.imp, intent, args ?? {}, undefined, {
+        skipLLMCheck: true,
+        skipSchemaCheck: args === undefined,
+        schema: approvedSchema!,
+      });
+      step('verification', v.pass
+        ? `Verification passed for ${chosen.toolId} (overlap ${(v.descriptionOverlap * 100).toFixed(0)}%, judge approved)`
+        : `Verification failed for ${chosen.toolId}: ${v.reason}`, {
+        toolId: chosen.toolId,
+        pass: v.pass,
+        schemaMatch: v.schemaMatch,
+        descriptionOverlap: v.descriptionOverlap,
+        llmConfirmed: null,
+      });
+      if (!v.pass) {
+        return disambiguate('verification-failed', ranked, `${chosen.toolId}, the judge's choice for "${intent}", failed verification`);
+      }
+    }
+  } else if (verified(bestTier)) {
     const llmVerifier = typeof llm.microCheck === 'function';
     if (subHigh(bestTier) && context.requireLLMForSubHighDispatch && !llmVerifier) {
       step('verification', `Best candidate is ${bestTier}; no LLM verifier is configured to approve it`);
@@ -1141,24 +1267,132 @@ async function resolveInternal(
   }
 
   // 14. POLICY — the same rule set as every other path.
-  const verdict = await judge(chosen, llmApproved);
+  const verdict = await policy(chosen, llmApproved);
   step('policy', verdict.reason, { code: verdict.code, toolId: chosen.toolId });
   if (!verdict.allow) {
     return disambiguate(denial(verdict), ranked, verdict.reason);
   }
 
   const chosenTier = computeTier(chosen.score, context.thresholds);
-  const decision: DecisionCode = llmApproved && subHigh(chosenTier)
-    ? 'llm-verified'
-    : subHigh(chosenTier) ? 'verified' : 'ranked';
+  const decision: DecisionCode = judgeApproved
+    ? 'judge-approved'
+    : llmApproved && subHigh(chosenTier)
+      ? 'llm-verified'
+      : subHigh(chosenTier) ? 'verified' : 'ranked';
+  const resolved = finish('resolved', decision, ranked, chosen, { imp: chosen.imp });
 
-  // Learn: cache plain vector resolutions of ordinary tools (never pinned or destructive ones).
-  if (run.learn && chosen.source === 'vector' && !context.isPinnedTool(chosen.toolId, chosen.selector.canonical)
+  // Learn: cache plain vector resolutions of ordinary tools (never pinned or
+  // destructive ones), and only ones ranking alone decided under the
+  // runtime's own judge setting: a resolution the judge took part in is
+  // asked again next time, and one a per-call override (ResolveOptions.judge)
+  // kept from the runtime's judge must not answer later calls in its place.
+  // Stored after the proof is final, so a resolution that fails never leaves
+  // an entry behind.
+  const judgeOverridden = context.judge !== null && run.judge !== undefined;
+  if (run.learn && !judgeAsked && !judgeOverridden && chosen.source === 'vector' && !context.isPinnedTool(chosen.toolId, chosen.selector.canonical)
       && !isDestructive(chosen.imp.annotations, context.policyOptions)) {
     context.cache.store(selector, chosen.imp, chosen.score);
   }
 
-  return finish('resolved', decision, ranked, chosen, { imp: chosen.imp });
+  return resolved;
+}
+
+/** One candidate offered to the shortlist judge, with the schema it is described by. */
+interface OfferedCandidate {
+  candidate: Candidate;
+  schema: ToolSchema;
+}
+
+/**
+ * D2: the candidates a judge is offered — near-ties of the winner that it
+ * could choose and then run: each one's schema loads, the policy would run
+ * it on the judge's approval (`allowed`), and the deterministic checks the
+ * approval still gets would pass (`passes`). At most maxCandidates,
+ * best-ranked first, returned sorted by tool id (rank-neutral). A winner
+ * whose schema cannot be loaded or that the policy refuses means nothing is
+ * offered: a judge breaks ties, it never overrules a refusal.
+ */
+async function shortlistFor(
+  ranked: Candidate[],
+  settings: JudgeSettings,
+  checks: {
+    allowed: (c: Candidate) => Promise<PolicyVerdict>;
+    passes: (c: Candidate, schema: ToolSchema) => Promise<boolean>;
+  },
+): Promise<OfferedCandidate[]> {
+  const best = ranked[0];
+  const offered: OfferedCandidate[] = [];
+  for (const c of ranked) {
+    if (offered.length >= settings.maxCandidates) break;
+    if (!withinJudgeMargin(best.score, c.score, settings.margin)) break;
+    const schema = await toolSchemaOf(c.imp);
+    if (!schema || !(await checks.allowed(c)).allow) {
+      if (c === best) return [];
+      continue;
+    }
+    if (!(await checks.passes(c, schema))) continue;
+    offered.push({ candidate: c, schema });
+  }
+  return offered.sort((a, b) => compareToolIds(a.candidate.toolId, b.candidate.toolId));
+}
+
+/** The settings a recorded verdict was made with, else the runtime's, else the defaults. */
+function recordedJudgeSettings(recorded: RecordedJudgeVerdict, configured: JudgeSettings | null): JudgeSettings {
+  const fallback = configured ?? judgeSettings({});
+  try {
+    return judgeSettings({
+      margin: recorded.margin ?? fallback.margin,
+      maxCandidates: recorded.maxCandidates ?? fallback.maxCandidates,
+      acceptThreshold: fallback.acceptThreshold,
+      timeoutMs: fallback.timeoutMs,
+    });
+  } catch {
+    return fallback;
+  }
+}
+
+/**
+ * Ask a judge, held to `timeoutMs` and the caller's signal whatever the
+ * judge does with them: the deadline answers TIMEOUT and an abort ABORTED
+ * (the request's own signal fires on either, so the judge can stop). A
+ * throw or a rejected promise is unavailable too.
+ */
+async function askJudge(
+  judge: ShortlistJudge,
+  request: Omit<JudgeRequest, 'signal'>,
+  caller: AbortSignal | undefined,
+  timeoutMs: number,
+): Promise<JudgeAnswer> {
+  if (caller?.aborted) return { status: 'unavailable', error: 'ABORTED' };
+  const controller = new AbortController();
+  let settle!: (answer: JudgeAnswer) => void;
+  const stopped = new Promise<JudgeAnswer>(resolve => { settle = resolve; });
+  const stop = (error: 'ABORTED' | 'TIMEOUT'): void => {
+    settle({ status: 'unavailable', error });
+    controller.abort();
+  };
+  const onAbort = (): void => stop('ABORTED');
+  const timer = setTimeout(() => stop('TIMEOUT'), timeoutMs);
+  caller?.addEventListener('abort', onAbort, { once: true });
+  try {
+    // Inside an async function: a judge that throws synchronously rejects instead.
+    const answered = (async () => judge.judge({ ...request, signal: controller.signal }))()
+      .catch((): JudgeAnswer => ({ status: 'unavailable', error: caller?.aborted ? 'ABORTED' : 'NETWORK' }));
+    return await Promise.race([answered, stopped]);
+  } finally {
+    clearTimeout(timer);
+    caller?.removeEventListener('abort', onAbort);
+  }
+}
+
+/** The judge's proof step: fixed wording from its name, model, verdict and tool id only (no numbers, no remote text). */
+function judgeStepText(name: string, judged: JudgeVerdict, offered: number, trigger: JudgeTrigger): string {
+  const who = `${name} (${judged.model})`;
+  switch (judged.verdict) {
+    case 'approved': return `judge-approved: ${who} chose ${judged.toolId} from ${offered} offered (${trigger})`;
+    case 'declined': return `judge-declined: ${who} chose none of the ${offered} offered (${trigger})`;
+    default: return `judge-unavailable: ${who} gave no usable answer (${trigger}); deciding as without a judge`;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1193,6 +1427,28 @@ interface RejectedCall {
 
 /** Input schema of an IMP, loaded at most once per IMP. */
 const schemaByImp = new WeakMap<ToolIMP, { schema: unknown }>();
+
+/**
+ * Full schema of an IMP for the shortlist judge: once loaded, kept for the
+ * IMP; null when it cannot be loaded now (a failed load is tried again
+ * next time, so a transient failure does not exclude the tool for good).
+ */
+const toolSchemaByImp = new WeakMap<ToolIMP, ToolSchema>();
+
+async function toolSchemaOf(imp: ToolIMP): Promise<ToolSchema | null> {
+  if (imp.schema) return imp.schema;
+  const cached = toolSchemaByImp.get(imp);
+  if (cached) return cached;
+  let schema: ToolSchema | null = null;
+  try {
+    // Inside the try: a loader that throws synchronously is a failed load too.
+    schema = (await imp.schemaLoader()) ?? null;
+  } catch {
+    return null;
+  }
+  if (schema) toolSchemaByImp.set(imp, schema);
+  return schema;
+}
 
 async function inputSchemaOf(imp: ToolIMP): Promise<unknown> {
   if (imp.constraints?.inputSchema) return imp.constraints.inputSchema;
@@ -1271,6 +1527,7 @@ function invalidArgumentsResult(toolId: string, errors: ValidationError[], proof
       outcome: 'invalid-arguments',
       toolId,
       validationErrors: errors,
+      ...judgeMetadata(proof),
       proof,
     },
   };
@@ -1305,9 +1562,15 @@ function annotateExecuted(
     callDigest: proof.callDigest,
     confidence: proof.confidence,
     tier: proof.tier,
+    ...judgeMetadata(proof),
     proof,
   };
   return result;
+}
+
+/** `metadata.judge` when a shortlist judge took part: who it was, its verdict and the tool it chose. */
+function judgeMetadata(proof: ResolutionProof): { judge?: { name: string; verdict: string; toolId: string | null } } {
+  return proof.judge ? { judge: { name: proof.judge.name, verdict: proof.judge.verdict, toolId: proof.judge.toolId } } : {};
 }
 
 /**
@@ -1322,7 +1585,7 @@ function abortedResult(toolId: string, proof: ResolutionProof, signal: AbortSign
   return {
     content: { error: `Dispatch of ${toolId} was aborted (${why}); nothing was executed.` },
     isError: true,
-    metadata: { outcome: 'aborted', toolId, proof },
+    metadata: { outcome: 'aborted', toolId, ...judgeMetadata(proof), proof },
   };
 }
 
@@ -1342,6 +1605,7 @@ function notExecutedResult(resolution: Resolution): ToolResult {
     metadata: {
       outcome: resolution.outcome,
       tier: resolution.tier,
+      ...judgeMetadata(resolution.proof),
       proof: resolution.proof,
       ...(resolution.refinement ? { refinement: true, optionCount: options.length } : {}),
       ...(resolution.retryAfterMs !== undefined ? { retryAfterMs: resolution.retryAfterMs } : {}),
@@ -1511,6 +1775,7 @@ async function dispatchIntent(
     allowDecomposition: true,
     depth: frame.depth,
     ancestors: frame.ancestors,
+    ...(frame.signal ? { signal: frame.signal } : {}),
   });
   const { resolution } = r;
 
@@ -1557,6 +1822,7 @@ async function dispatchIntent(
   });
 
   // Annotate ambiguous results so callers know another tool was close
+  // (metadata.judge, set above, says when a judge settled it)
   if (resolution.candidates.length > 1 && (resolution.confidence ?? 0) <= AMBIGUOUS_CONFIDENCE) {
     result.metadata = {
       ...result.metadata,
@@ -1604,6 +1870,7 @@ export async function* smallchat_dispatchStream(
       allowDecomposition: true,
       depth: 0,
       ancestors: [],
+      ...(frame.signal ? { signal: frame.signal } : {}),
     });
   } catch (err) {
     yield streamError(err);
@@ -1741,7 +2008,7 @@ async function* executeAndStream(
     yield {
       type: 'error',
       error: `Invalid arguments for ${toolId}; the tool was not called: ${prepared.errors.map(e => e.message).join('; ')}`,
-      metadata: { validationErrors: prepared.errors, toolId, proof },
+      metadata: { validationErrors: prepared.errors, toolId, ...judgeMetadata(proof), proof },
     };
     return;
   }

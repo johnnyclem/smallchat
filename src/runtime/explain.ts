@@ -7,11 +7,15 @@
  * the dispatch policy's verdict on running it without the caller naming it
  * (runtime/policy.ts — the same function every dispatch path applies).
  * A verdict assumes no LLM approval except for the candidate an LLM
- * verifier actually approved. Nothing executes.
+ * verifier or the shortlist judge actually approved. The judge is
+ * reported from the runtime (whether one is configured), from the proof
+ * (what it decided) and, for an intent explain resolved itself, whether a
+ * live dispatch would ask it; explaining never calls it. Nothing executes.
  */
 
 import type { ToolAnnotations, ToolSelector } from '../core/types.js';
 import type { ProofCandidate, ProofGuards, ProofStep } from '../core/proof.js';
+import type { JudgeRecord, JudgeTrigger } from '../core/judge.js';
 import type { TierThresholds } from '../core/confidence.js';
 import { quantizeScore } from '../core/confidence.js';
 import { cosineSimilarity } from '../core/vector-math.js';
@@ -33,6 +37,16 @@ export interface ExplainedCandidate extends ProofCandidate {
   verdict: PolicyVerdict | null;
 }
 
+/** The shortlist judge as the runtime has it configured (never its credentials). */
+export interface ExplainedJudge {
+  name: string;
+  model: string;
+  margin: number;
+  maxCandidates: number;
+  acceptThreshold: number;
+  timeoutMs: number;
+}
+
 export interface Explanation {
   intent: string;
   outcome: Resolution['outcome'];
@@ -45,13 +59,34 @@ export interface Explanation {
   guards: ProofGuards;
   embedder: EmbedderFingerprint | null;
   artifactHash: string | null;
+  /**
+   * The shortlist judge: `configured`, the runtime's (null without one);
+   * `consulted`, what it decided for this resolution, from the proof (null
+   * when it was not consulted — explain(intent) never consults it);
+   * `wouldAsk`, set when explain(intent) resolved with a judge configured
+   * and none answering: why a live dispatch would ask it and the tools it
+   * would offer, or null when a live dispatch would not ask it (the
+   * outcome shown is then the one a live dispatch makes).
+   */
+  judge: {
+    configured: ExplainedJudge | null;
+    consulted: JudgeRecord | null;
+    wouldAsk?: { trigger: JudgeTrigger; offered: string[] } | null;
+  };
   steps: ProofStep[];
   proofDigest: string;
   resolution: Resolution;
 }
 
-/** Explain a resolution made by `context` (see module doc). */
-export async function explainResolution(context: DispatchContext, resolution: Resolution): Promise<Explanation> {
+/**
+ * Explain a resolution made by `context` (see module doc). `wouldAsk` is
+ * what resolveForExplain found out about the judge it did not ask.
+ */
+export async function explainResolution(
+  context: DispatchContext,
+  resolution: Resolution,
+  wouldAsk?: Explanation['judge']['wouldAsk'],
+): Promise<Explanation> {
   const { proof } = resolution;
   let ownVector: Float32Array | null = null;
   const ownSimilarity = async (selector: ToolSelector): Promise<number> => {
@@ -71,7 +106,7 @@ export async function explainResolution(context: DispatchContext, resolution: Re
     let verdict: PolicyVerdict | null = null;
     if (isEligible && tool) {
       const pins = await context.pinStatesFor(c.toolId, resolution.intent, ownSimilarity, c.selector);
-      const llmApproved = proof.chosen === c.toolId && proof.decision === 'llm-verified';
+      const llmApproved = proof.chosen === c.toolId && (proof.decision === 'llm-verified' || proof.decision === 'judge-approved');
       verdict = evaluateDispatchPolicy(
         { mode: 'intent', toolId: c.toolId, imp: tool.imp, source: c.source, score: c.score, similarity: c.similarity, llmApproved, pins },
         context.policyOptions,
@@ -100,6 +135,13 @@ export async function explainResolution(context: DispatchContext, resolution: Re
     guards: proof.guards,
     embedder: proof.embedder,
     artifactHash: proof.artifactHash,
+    judge: {
+      configured: context.judge && context.judgeSettings
+        ? { name: context.judge.name, model: context.judge.model, ...context.judgeSettings }
+        : null,
+      consulted: proof.judge ?? null,
+      ...(wouldAsk !== undefined && !proof.judge ? { wouldAsk } : {}),
+    },
     steps: proof.steps,
     proofDigest: proof.proofDigest,
     resolution,
@@ -120,6 +162,28 @@ export function formatExplanation(e: Explanation): string {
     `${e.guards.requireLLMForSubHighDispatch ? ' (required below HIGH)' : ''}` +
     `, strict ${e.guards.strict ? 'on' : 'off'}` +
     `${e.guards.treatUnannotatedAsDestructive ? ', unannotated tools count as destructive' : ''}`);
+  const configured = e.judge.configured;
+  const consulted = e.judge.consulted;
+  if (configured) {
+    lines.push(`Judge:       ${configured.name} (${configured.model}), margin ${configured.margin}, up to ${configured.maxCandidates} offered, accepts >= ${configured.acceptThreshold}, waits up to ${configured.timeoutMs}ms`);
+  }
+  if (consulted) {
+    const said = consulted.verdict === 'approved'
+      ? `approved ${consulted.toolId}`
+      : consulted.verdict === 'declined' ? 'declined' : 'unavailable; decided as without a judge';
+    const why = [
+      consulted.verdict === 'approved' ? null : consulted.reason,
+      consulted.probability !== null ? `probability ${consulted.probability.toFixed(3)}` : null,
+    ].filter(part => part !== null).join(', ');
+    lines.push(`Judge said:  ${configured ? '' : `${consulted.name} (${consulted.model}) `}${said}${why ? ` (${why})` : ''}`);
+  } else if (configured) {
+    const wouldAsk = e.judge.wouldAsk;
+    lines.push(wouldAsk === undefined
+      ? 'Judge said:  not consulted for this resolution'
+      : wouldAsk
+        ? `Judge said:  not consulted (explain never calls it); a live dispatch would ask it (${wouldAsk.trigger}) to choose among ${wouldAsk.offered.join(', ')}`
+        : 'Judge said:  not consulted (explain never calls it); a live dispatch would not ask it');
+  }
   lines.push('');
   lines.push(`Outcome:     ${e.outcome}  (decision ${e.decision}, tier ${e.tier.toUpperCase()})`);
   if (e.chosen) lines.push(`Chosen:      ${e.chosen}`);

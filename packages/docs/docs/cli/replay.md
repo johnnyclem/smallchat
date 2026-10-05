@@ -39,7 +39,7 @@ JSONL, one case per line (blank lines and `#` comments are skipped), or JSON (an
 | `{outcome: "needs-disambiguation", candidates?}` | the runtime refuses to pick; every listed id is among its candidates (or its refinement options when nothing reached LOW) |
 | `{outcome: "unresolved"}` | nothing matched |
 
-A case may also carry `args` (used to choose among overloads and in verification), `principal` and `name`.
+A case may also carry `args` (used to choose among overloads and in verification), `principal`, `name` and `judge`: a recorded [shortlist-judge](../concepts/judge.md) verdict (`{"verdict": "approved", "toolId": "…"}`, `{"verdict": "declined"}` or `{"verdict": "unavailable"}`) that answers in the judge's place. Replay never calls a judge; a case without one replays with no judge.
 
 ## What "frozen" means
 
@@ -47,7 +47,7 @@ Cases run through `runtime.resolve()` with learning off: nothing executes, nothi
 
 ## Decision logs
 
-A file whose lines are decision-log records (`serve --decision-log`, `RuntimeOptions.decisionLog`) is recognised automatically: its hash chain is verified, then its intents are re-resolved against the artifact and each outcome, tool id and tier is compared with what was logged. Lines recorded against another artifact or embedder, and decisions that rested on inputs the log does not hold (an LLM verifier's answer, a decomposition, the rate limiter), are reported as skipped.
+A file whose lines are decision-log records (`serve --decision-log`, `RuntimeOptions.decisionLog`) is recognised automatically: its hash chain is verified, then its intents are re-resolved against the artifact and each outcome, tool id and tier is compared with what was logged. A line a shortlist judge took part in carries its verdict (`judge`), which answers in the judge's place, so the line replays without the network. Lines recorded against another artifact or embedder, and decisions that rested on inputs the log does not hold (an LLM verifier's answer, a decomposition, the rate limiter), are reported as skipped.
 
 ## Example traces
 

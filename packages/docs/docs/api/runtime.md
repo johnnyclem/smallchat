@@ -56,8 +56,9 @@ for you.
 | Option | Default | Meaning |
 |---|---|---|
 | `thresholds` | EXACT 0.95, HIGH 0.85, MEDIUM 0.75, LOW 0.60 | Confidence tiers (`spec/ranking/`) |
-| `requireLLMForSubHighDispatch` | `true` | Below HIGH, run a tool only when `llmClient.microCheck` approved it; otherwise the outcome is `needs-disambiguation` |
+| `requireLLMForSubHighDispatch` | `true` | Below HIGH, run a tool only when `llmClient.microCheck` (or the `judge`) approved it; otherwise the outcome is `needs-disambiguation` |
 | `llmClient` | none | Verifier, decomposer and refinement provider |
+| `judge` | none | A `ShortlistJudge` that may break near-ties (never asked for EXACT; unreachable or failing, it leaves the decision as without one, after up to its `timeoutMs`); see [Shortlist judge](../concepts/judge.md). TypeSafe's is `JevJudge` from the experimental `@smallchat/core/jev` |
 | `strict` | `false` | Verify every match below EXACT and raise the search floor to MEDIUM |
 | `intentPins` | none | `IntentPinRegistry` or a list of pins (`exact` / `elevated`) |
 | `treatUnannotatedAsDestructive` | `false` | Tools without MCP annotations run only by id, a pinned phrase or EXACT similarity |
@@ -87,7 +88,12 @@ const r = await runtime.resolve('file a bug about the login page', { args });
 // r.chosen (when resolved), r.tier, r.candidates, r.reason, r.refinement, r.proof
 ```
 
-`options`: `args` (used to choose among overloads), `principal`, `learn`.
+`options`: `args` (used to choose among overloads), `principal`, `learn`,
+`judge` (`false` for no judge, or a recorded verdict such as a proof's
+`judge`, which answers in the judge's place without calling it; on a
+runtime with a judge, either keeps the result out of the cache) and
+`signal` (aborts a pending judge request; the call then decides as without
+one).
 
 ### `runtime.dispatchById(toolId, args, options?)`
 
@@ -145,10 +151,15 @@ nothing goes straight to `done` with an `isError` result.
 Yield only token text (inference deltas, or the chunk content when the tool
 does not stream tokens).
 
-### `runtime.explain(intent, options?)`
+### `runtime.explain(intent | resolution, options?)`
 
-Resolve without learning and explain the decision: every candidate with its
-tier, MCP hints, pin state and the dispatch policy's verdict. Nothing runs.
+Explain a decision: every candidate with its tier, MCP hints, pin state and
+the dispatch policy's verdict, and the shortlist judge (`judge.configured`,
+`judge.consulted`). Given an intent, it resolves without learning and
+without consulting a judge (explain never calls the network), and
+`judge.wouldAsk` says whether a live dispatch would ask the configured
+judge, and about which tools; given a `Resolution`, it explains that
+decision as it was made, the judge's verdict included. Nothing runs.
 
 ## Refinement and feedback
 

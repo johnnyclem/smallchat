@@ -10,7 +10,11 @@
  * Files are JSONL (one case per line; blank lines and lines starting with
  * `#` are ignored) or JSON (an array of cases, or `{"cases": [...]}`).
  * A case may also carry `args` (passed to resolution, which uses them to
- * choose among overloads and in verification), `principal`, and `name`.
+ * choose among overloads and in verification), `principal`, `name`, and
+ * `judge`: a recorded shortlist-judge verdict (`{"verdict": "approved",
+ * "toolId": "…"}`, `{"verdict": "declined"}` or `{"verdict":
+ * "unavailable"}`) that answers in the judge's place. A case without one
+ * replays with no judge: replay never calls a judge or the network.
  *
  * Expectations:
  *   - `{toolId, tier?}` (or `{outcome: "resolved", toolId, tier?}`): the
@@ -21,18 +25,21 @@
  *     (or, when it has none at or above LOW, among its refinement options).
  *   - `{outcome: "unresolved"}`: nothing matched.
  *
- * Cases run through `runtime.resolve()` with learning off: nothing
- * executes, nothing is cached, the semantic map and feedback are read but
- * never written, and the order of cases (or files) cannot change a
- * result. The same artifact, embedder, policy and learned state give the
- * same results on one platform; see spec/ranking for the score
- * quantization that keeps small cross-platform float differences out.
+ * Cases run through `runtime.resolve()` with learning off and no live
+ * judge: nothing executes, nothing is cached, nothing is sent over the
+ * network, the semantic map and feedback are read but never written, and
+ * the order of cases (or files) cannot change a result. The same
+ * artifact, embedder, policy and learned state give the same results on
+ * one platform; see spec/ranking for the score quantization that keeps
+ * small cross-platform float differences out.
  */
 
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import type { ConfidenceTier } from '../core/confidence.js';
 import type { ResolutionOutcome } from '../core/proof.js';
+import type { RecordedJudgeVerdict } from '../core/judge.js';
+import { isRecordedJudgeVerdict } from '../core/judge.js';
 import { isDecisionRecord, replayDecisionLog, verifyDecisionLog } from './decision-log.js';
 import type { DecisionReplayReport } from './decision-log.js';
 import type { ToolRuntime } from './runtime.js';
@@ -51,6 +58,8 @@ export interface TraceCase {
   principal?: string;
   /** Optional label shown in reports */
   name?: string;
+  /** A recorded shortlist-judge verdict to answer with (absent: no judge) */
+  judge?: RecordedJudgeVerdict;
 }
 
 /** A case with where it came from. */
@@ -78,6 +87,9 @@ function checkCase(value: unknown, where: string): TraceCase {
   if (c.args !== undefined && (c.args === null || typeof c.args !== 'object' || Array.isArray(c.args))) fail('"args" must be a JSON object');
   if (c.principal !== undefined && typeof c.principal !== 'string') fail('"principal" must be a string');
   if (c.name !== undefined && typeof c.name !== 'string') fail('"name" must be a string');
+  if (c.judge !== undefined && !isRecordedJudgeVerdict(c.judge)) {
+    fail('"judge" must be a recorded verdict: {"verdict": "approved", "toolId": "…"}, {"verdict": "declined"} or {"verdict": "unavailable"}');
+  }
   const e = c.expect as Record<string, unknown> | undefined;
   if (e === null || typeof e !== 'object' || Array.isArray(e)) fail('"expect" must be a JSON object');
 
@@ -104,6 +116,7 @@ function checkCase(value: unknown, where: string): TraceCase {
     ...(c.args !== undefined ? { args: c.args as Record<string, unknown> } : {}),
     ...(c.principal !== undefined ? { principal: c.principal as string } : {}),
     ...(c.name !== undefined ? { name: c.name as string } : {}),
+    ...(c.judge !== undefined ? { judge: c.judge as RecordedJudgeVerdict } : {}),
   };
 }
 
@@ -275,6 +288,7 @@ export async function replayTraces(runtime: ToolRuntime, cases: readonly LoadedT
     try {
       resolution = await runtime.resolve(c.intent, {
         learn: false,
+        judge: c.judge ?? false,
         ...(c.args !== undefined ? { args: c.args } : {}),
         ...(c.principal !== undefined ? { principal: c.principal } : {}),
       });

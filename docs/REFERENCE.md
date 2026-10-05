@@ -108,16 +108,71 @@ sub-intent of a decomposition:
    `treatUnannotatedAsDestructive: true` extends this to tools with no
    annotations.
 4. Below HIGH (MEDIUM/LOW), a tool runs only after an LLM verifier
-   (`LLMClient.microCheck`) approves it for this intent. This is
-   `requireLLMForSubHighDispatch`, on by default; without an `LLMClient`,
-   sub-HIGH matches are `needs-disambiguation`. Alternates are verified
-   with the same strategies as the best candidate.
+   (`LLMClient.microCheck`) or the shortlist judge (below) approves it for
+   this intent. This is `requireLLMForSubHighDispatch`, on by default;
+   without either, sub-HIGH matches are `needs-disambiguation`. Alternates
+   are verified with the same strategies as the best candidate.
 5. Below LOW, nothing runs.
 
 Configure it with `RuntimeOptions` (`requireLLMForSubHighDispatch`,
 `strict`, `intentPins`, `treatUnannotatedAsDestructive`, `thresholds`,
-`llmClient`) or, for `smallchat serve`, a `"policy"` block in
-`smallchat.json`.
+`llmClient`, `judge`) or, for `smallchat serve`, a `"policy"` block in
+`smallchat.json` (which never configures a judge).
+
+### Shortlist judge (optional)
+
+`RuntimeOptions.judge` takes a `ShortlistJudge` (`src/core/judge.ts`; the
+normative rules and vectors are `spec/judge/`): a tie-breaker that may only
+pick among near-ties the ranking already produced. Unset (the default),
+nothing below happens and nothing is sent anywhere.
+
+- **When it is asked:** never for an EXACT or NONE winner; for a HIGH
+  winner only when the runner-up is within the judge's `margin` (default
+  0.05); for a MEDIUM or LOW winner always. Tiers are the configured
+  thresholds.
+- **What it is offered:** candidates within the margin of the winner that
+  it could then run: the policy would allow them on its approval, and the
+  deterministic verification the approval still gets would pass (the
+  call's required parameters when they are known; keyword overlap wherever
+  the candidate's tier is verified). At most `maxCandidates` (default 8),
+  presented sorted by tool id, each with its description (one line, 240
+  characters, labelled untrusted). A winner the policy refuses, or whose
+  schema cannot be loaded, is not judged at all (the judge breaks ties, it
+  does not overrule a refusal); nor is a HIGH winner left with no near-tie
+  to choose from.
+- **What its answer does:** approved (an offered id at probability ≥
+  `acceptThreshold`, default 0.7) chooses that candidate, which still gets
+  the deterministic verification strategies (the approval stands in for
+  the LLM micro-check) and the policy — decision `judge-approved`;
+  declined (abstain, an id not offered, a low probability) is
+  `needs-disambiguation` with decision `judge-declined`; unavailable (an
+  outage, a timeout, an HTTP error after retries, an answer outside the
+  contract, an abort) reaches the outcome, tool and decision code it would
+  without a judge, but the call waits up to the judge's `timeoutMs`
+  (default 4000, enforced by the runtime whatever the judge does), its
+  proof records the attempt (so its `proofDigest` differs from a run with
+  no judge), and it is not cached.
+- **What is recorded:** a `judge` proof step and `proof.judge` (name,
+  model, verdict, tool id, probability, confidence, reason, margin,
+  maxCandidates, request id); `proofDigest` covers only the name, model,
+  verdict and tool id. Dispatch results carry `metadata.judge`. A
+  resolution the judge took part in is never cached, nor is one resolved
+  with a per-call `ResolveOptions.judge` on a runtime that has a judge.
+- **Replay and explain never call it.** A decision-log line carries the
+  verdict and replays with it; a golden-trace case may carry one
+  (`"judge": {"verdict": "approved", "toolId": "…"}`); anything without one
+  replays with no judge. A recorded verdict without a name or model is
+  recorded as `recorded (unknown)`, never as the runtime's judge.
+  `runtime.explain(intent)` resolves without the judge and says whether a
+  live dispatch would ask it (`judge.wouldAsk`);
+  `runtime.explain(resolution)` explains a recorded decision, verdict
+  included. `ResolveOptions.judge` is `false` or a recorded verdict.
+
+TypeSafe's Jev model is the experimental `@smallchat/core/jev`
+(`JevJudge`): when asked, it sends the intent (after `redactIntent`) and the
+offered tools' ids and descriptions to TypeSafe. Its API key is kept out of
+every log, proof and serialization, it refuses to run in a browser unless
+`dangerouslyAllowBrowser: true`, and it requires https.
 
 ### Determinism
 
@@ -129,9 +184,10 @@ this gives: with the same artifact (`contentHash`), the same embedder
 pins, semantic map, feedback, resolution cache and options — the same
 intent text yields the same outcome, candidate order and `proofDigest`.
 Other intents the process resolved before do not enter into it. Not
-covered: an LLM verifier's or decomposer's answers (inputs like any other),
-an opted-in rate limiter's window, and cross-platform float drift larger
-than half a quantum. SQLite and in-memory indexes both report cosine
+covered: an LLM verifier's or decomposer's answers and a shortlist judge's
+verdicts (inputs like any other; the property holds with no judge
+configured, or replaying recorded verdicts), an opted-in rate limiter's
+window, and cross-platform float drift larger than half a quantum. SQLite and in-memory indexes both report cosine
 distance.
 
 ### Learning and feedback
@@ -190,8 +246,9 @@ thresholds and guards in force, the embedder fingerprint, the artifact
 call is bound by its canonical call digest
 (`sha256(UTF8("smallchat.call.v1") || 0x00 || toolId || 0x00 || JCS(args))`,
 golden vectors in `spec/call-digest/vectors.json`). `proofDigest` covers the
-whole proof except its timings, so the same decision made from the same
-inputs has the same digest.
+whole proof except its timings and, when a shortlist judge was consulted,
+only the judge's name, model, verdict and tool id (`spec/judge/` D4), so
+the same decision made from the same inputs has the same digest.
 
 ## Replay, Explain and the Decision Log
 
@@ -230,10 +287,11 @@ Three tools make a decision checkable after the fact (`src/runtime/replay.ts`,
   `smallchat replay <artifact> decisions.jsonl` verifies the chain and
   re-resolves the logged intents: with the same artifact, embedder, policy
   and learned state, each outcome, tool id and tier is reproduced, and pure
-  `resolve` lines reproduce their `proofDigest` exactly. Decisions that
-  rested on inputs the log does not hold (an LLM verifier's answer, a
-  decomposition, the rate limiter's window) are reported as skipped. One
-  writer per file.
+  `resolve` lines reproduce their `proofDigest` exactly. A shortlist
+  judge's verdict is in its line (`judge`) and answers in the judge's place
+  on replay, so no judge is called. Decisions that rested on inputs the log
+  does not hold (an LLM verifier's answer, a decomposition, the rate
+  limiter's window) are reported as skipped. One writer per file.
 
 ## Selector Table: Tools Only
 
@@ -487,6 +545,6 @@ LLM. `npm test` fails if the runtime falls below the floors in
 
 ## Current Limitations
 
-- **No built-in LLM verifier**: below HIGH confidence, intent dispatch needs an `LLMClient` you supply; without one those matches return `needs-disambiguation`.
+- **No built-in LLM verifier**: below HIGH confidence, intent dispatch needs an `LLMClient` or a shortlist judge you supply (TypeSafe's is the experimental `@smallchat/core/jev`); without either those matches return `needs-disambiguation`.
 - **Default thresholds refuse most natural-language queries** with all-MiniLM-L6-v2 (see Benchmarks); per-toolkit calibration is not built yet.
 - **JSON output**: Compiled artifacts are JSON. SQLite binary format planned for Phase 4.

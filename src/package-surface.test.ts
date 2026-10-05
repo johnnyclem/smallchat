@@ -19,6 +19,7 @@ import * as importance from './importance/index.js';
 import * as truth from './truth/index.js';
 import * as memex from './memex/index.js';
 import * as dream from './dream/index.js';
+import * as jev from './jev/index.js';
 import * as shCompaction from '@shorthand/core/compaction';
 import * as shCrdt from '@shorthand/core/crdt';
 import * as shImportance from '@shorthand/core/importance';
@@ -105,6 +106,30 @@ describe('experimental memex and dream subpaths', () => {
   it('say they are experimental', () => {
     for (const name of ['memex', 'dream']) {
       expect(readFileSync(join(ROOT, 'src', name, 'index.ts'), 'utf-8'), name).toMatch(/@experimental/);
+    }
+  });
+});
+
+describe('the shortlist judge: a neutral interface in the core, the TypeSafe client on an experimental subpath', () => {
+  it('the core exports the judge interface and its rules, and no vendor client', () => {
+    for (const name of ['judgeTrigger', 'acceptJudgeAnswer', 'judgeSettings', 'DEFAULT_JUDGE_MARGIN']) {
+      expect((inference as Record<string, unknown>)[name], name).toBeDefined();
+    }
+    for (const name of ['JevJudge', 'jevTrigger', 'JEV_ABSTAIN', 'DEFAULT_JEV_MODEL']) {
+      expect((root as Record<string, unknown>)[name], name).toBeUndefined();
+      expect((inference as Record<string, unknown>)[name], name).toBeUndefined();
+    }
+  });
+
+  it('JevJudge is @smallchat/core/jev, marked @experimental', () => {
+    expect(pkg.exports['./jev']).toEqual({ types: './dist/jev/index.d.ts', import: './dist/jev/index.js' });
+    expect(typeof jev.JevJudge).toBe('function');
+    expect(readFileSync(join(ROOT, 'src', 'jev', 'index.ts'), 'utf-8')).toMatch(/@experimental/);
+  });
+
+  it('nothing in the core imports the client', () => {
+    for (const file of ['src/runtime/dispatch.ts', 'src/runtime/runtime.ts', 'src/core/judge.ts', 'src/index.ts', 'src/inference.ts']) {
+      expect(readFileSync(join(ROOT, file), 'utf-8'), file).not.toMatch(/from '\.\.?\/(?:\.\.\/)?jev\//);
     }
   });
 });

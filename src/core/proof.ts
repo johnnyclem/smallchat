@@ -9,14 +9,16 @@
  * digest binds them without revealing them).
  *
  * `proofDigest` is sha256hex(UTF8("smallchat.proof.v1") || 0x00 ||
- * UTF8(JCS(proof without "timings" and "proofDigest"))), so two runs that
- * made the same decision from the same inputs have the same digest even
- * though their wall-clock timings differ.
+ * UTF8(JCS(proof without "timings" and "proofDigest", and with "judge"
+ * reduced to its name, model, verdict and toolId))), so two runs that made
+ * the same decision from the same inputs have the same digest even though
+ * their wall-clock timings, or a judge's probabilities, differ.
  */
 
 import { DEFAULT_THRESHOLDS } from './confidence.js';
 import type { ConfidenceTier, TierThresholds } from './confidence.js';
 import type { EmbedderFingerprint } from './types.js';
+import type { JudgeRecord } from './judge.js';
 import { canonicalJson } from './jcs.js';
 import { domainDigest } from './sha256.js';
 
@@ -59,6 +61,8 @@ export type DecisionCode =
   | 'ranked'
   /** Sub-HIGH candidate approved by the LLM verifier */
   | 'llm-verified'
+  /** The shortlist judge chose this candidate among the near-ties it was offered (any tier or rank) */
+  | 'judge-approved'
   /** Sub-HIGH candidate passed schema/keyword verification (requireLLMForSubHighDispatch off) */
   | 'verified'
   /** LOW-tier or unmatched intent split into sub-intents, each dispatched separately */
@@ -67,6 +71,8 @@ export type DecisionCode =
   | 'needs-llm-verifier'
   /** Every candidate failed verification */
   | 'verification-failed'
+  /** The shortlist judge answered and chose none of the offered tools (abstained, an id not offered, a low probability) */
+  | 'judge-declined'
   /** Destructive tool below EXACT tier */
   | 'destructive-needs-exact'
   /** Tool pinned 'exact' and the intent is not one of its pinned phrases */
@@ -90,6 +96,7 @@ export type ProofStage =
   | 'vector_search'
   | 'overload'
   | 'protocol'
+  | 'judge'
   | 'verification'
   | 'policy'
   | 'decomposition'
@@ -161,9 +168,19 @@ export interface ResolutionProof {
   /** contentHash of the artifact the runtime was loaded from, when known */
   artifactHash: string | null;
   steps: ProofStep[];
+  /**
+   * The shortlist judge's part, when one was consulted (absent otherwise).
+   * proofDigest covers its name, model, verdict and toolId only; its
+   * probability, confidence, reason and settings are outside the digest.
+   */
+  judge?: JudgeRecord;
   /** Wall-clock milliseconds (performance.now); excluded from proofDigest */
   timings: { totalMs: number; stepsMs: number[] };
-  /** Digest of everything above except timings; see module doc */
+  /**
+   * Digest of everything above except timings and, when a judge was
+   * consulted, only its name, model, verdict and toolId (spec/judge D4);
+   * see module doc
+   */
   proofDigest: string;
 }
 
@@ -215,8 +232,11 @@ export function addProofStep(proof: ResolutionProof, step: ProofStep, elapsedMs 
 
 /** The digest of a proof's decision content (see module doc). */
 export function computeProofDigest(proof: ResolutionProof): string {
-  const { timings: _timings, proofDigest: _digest, ...body } = proof;
-  return domainDigest(PROOF_DIGEST_DOMAIN, canonicalJson(body));
+  const { timings: _timings, proofDigest: _digest, judge, ...body } = proof;
+  const digested = judge
+    ? { ...body, judge: { name: judge.name, model: judge.model, verdict: judge.verdict, toolId: judge.toolId } }
+    : body;
+  return domainDigest(PROOF_DIGEST_DOMAIN, canonicalJson(digested));
 }
 
 /** Recompute and store `proofDigest`. Call after the last change to a proof. */

@@ -146,7 +146,7 @@ export type { RuntimeOptions } from './runtime/runtime.js';
 export { DispatchBuilder, DispatchError } from './runtime/dispatch-builder.js';
 
 // 0.4.0: Confidence-Tiered Dispatch (Pillar 1)
-export { computeTier, requiresVerification, requiresDecomposition, requiresRefinement, DEFAULT_THRESHOLDS, quantizeScore, compareRanked, SCORE_QUANTUM } from './core/confidence.js';
+export { computeTier, requiresVerification, requiresDecomposition, requiresRefinement, DEFAULT_THRESHOLDS, quantizeScore, compareRanked, SCORE_QUANTUM, AMBIGUOUS_CONFIDENCE } from './core/confidence.js';
 export type { ConfidenceTier, TierThresholds } from './core/confidence.js';
 export { createProof, addProofStep, finalizeProof, computeProofDigest, PROOF_DIGEST_DOMAIN } from './core/proof.js';
 export type {
@@ -160,6 +160,40 @@ export type {
   CandidateSource,
   DecisionCode,
 } from './core/proof.js';
+
+// Shortlist judge — the vendor-neutral interface and its rules (spec/judge).
+// The TypeSafe client is the experimental @smallchat/core/jev subpath.
+export {
+  judgeTrigger,
+  judgeSettings,
+  judgeDescription,
+  acceptJudgeAnswer,
+  replayJudgeVerdict,
+  withinJudgeMargin,
+  isJudgeErrorCode,
+  isRecordedJudgeVerdict,
+  DEFAULT_JUDGE_MARGIN,
+  DEFAULT_JUDGE_ACCEPT,
+  DEFAULT_JUDGE_MAX_CANDIDATES,
+  DEFAULT_JUDGE_TIMEOUT_MS,
+  MAX_JUDGE_TIMEOUT_MS,
+  JUDGE_DESCRIPTION_CHARS,
+} from './core/judge.js';
+export type {
+  ShortlistJudge,
+  JudgeRequest,
+  JudgeCandidate,
+  JudgeAnswer,
+  JudgeErrorCode,
+  JudgeTrigger,
+  JudgeSettings,
+  JudgeVerdict,
+  JudgeVerdictKind,
+  JudgeDeclineReason,
+  JudgeReason,
+  JudgeRecord,
+  RecordedJudgeVerdict,
+} from './core/judge.js';
 
 // Replay, decision log and explain — exact by construction, and checkable
 export {
@@ -206,7 +240,7 @@ export type {
   DecisionLogReplay,
 } from './runtime/replay.js';
 export { explainResolution, formatExplanation } from './runtime/explain.js';
-export type { Explanation, ExplainedCandidate } from './runtime/explain.js';
+export type { Explanation, ExplainedCandidate, ExplainedJudge } from './runtime/explain.js';
 
 // Dispatch policy, guards, argument validation and the canonical call digest
 export { evaluateDispatchPolicy, isDestructive } from './runtime/policy.js';
@@ -228,8 +262,6 @@ export type { LLMClient, MicroCheckRequest, DecomposeRequest, DecomposeResponse,
 // 0.4.0: Pre-Flight Verification (Pillar 2)
 export { verify, computeKeywordOverlap } from './runtime/verification.js';
 export type { VerificationResult, VerificationOptions } from './runtime/verification.js';
-export { AMBIGUOUS_CONFIDENCE, JevJudge, jevTrigger, JEV_ABSTAIN } from './runtime/jev-judge.js';
-export type { JevCandidate, JevJudgeOptions, JevJudgeRequest, JevTrigger, JevVerdict } from './runtime/jev-judge.js';
 
 // 0.4.0: Intent Decomposition (Pillar 3)
 export { decompose, executeDecomposition } from './runtime/decomposition.js';

@@ -6,7 +6,8 @@
  *   EXACT  (>= 0.95) — dispatch immediately, cache aggressively
  *   HIGH   (>= 0.85) — dispatch
  *   MEDIUM (>= 0.75) — dispatch only after verification approves it (an LLM
- *                      verifier, unless requireLLMForSubHighDispatch is off)
+ *                      verifier or the shortlist judge, unless
+ *                      requireLLMForSubHighDispatch is off)
  *   LOW    (>= 0.60) — decomposition when dispatching, else as MEDIUM
  *   NONE   (< 0.60)  — never dispatched; refinement protocol (Pillar 4)
  * Destructive tools additionally need EXACT similarity or an exact tool id.
@@ -32,6 +33,14 @@ export const DEFAULT_THRESHOLDS: Readonly<TierThresholds> = Object.freeze({
   medium: 0.75,
   low: 0.60,
 });
+
+/**
+ * A dispatch result is marked `metadata.ambiguous` when more than one
+ * candidate remained and the chosen score is at or under this. A flag for
+ * callers only: it decides nothing (the shortlist judge has its own rule,
+ * core/judge.ts).
+ */
+export const AMBIGUOUS_CONFIDENCE = 0.9;
 
 /**
  * Scores are compared at this resolution. Similarities from different

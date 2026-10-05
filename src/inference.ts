@@ -5,7 +5,9 @@
 // what resolved. It is the part of the system whose value does NOT depend on
 // the price of tokens. "Deterministic" here means: the same artifact, embedder
 // and runtime state give the same outcome, candidate order and proof digest
-// for the same intent text (LLM verifier answers are inputs, not covered).
+// for the same intent text (LLM verifier answers and shortlist-judge verdicts
+// are inputs, not covered; with no judge, or replaying recorded verdicts,
+// nothing depends on the network).
 //
 // Token compaction, output compression (RTK), knowledge pre-compilation
 // (memex), CRDT memory, and importance scoring are *optimization satellites*.
@@ -86,7 +88,7 @@ export type { RuntimeOptions } from './runtime/runtime.js';
 export { DispatchBuilder, DispatchError } from './runtime/dispatch-builder.js';
 
 // --- Confidence-tiered resolution + the serializable resolution proof ---
-export { computeTier, requiresVerification, requiresDecomposition, requiresRefinement, DEFAULT_THRESHOLDS, quantizeScore, compareRanked, SCORE_QUANTUM } from './core/confidence.js';
+export { computeTier, requiresVerification, requiresDecomposition, requiresRefinement, DEFAULT_THRESHOLDS, quantizeScore, compareRanked, SCORE_QUANTUM, AMBIGUOUS_CONFIDENCE } from './core/confidence.js';
 export type { ConfidenceTier, TierThresholds } from './core/confidence.js';
 export { createProof, addProofStep, finalizeProof, computeProofDigest, PROOF_DIGEST_DOMAIN } from './core/proof.js';
 export type {
@@ -100,6 +102,40 @@ export type {
   CandidateSource,
   DecisionCode,
 } from './core/proof.js';
+
+// Shortlist judge — the vendor-neutral interface and its rules (spec/judge).
+// The TypeSafe client is the experimental @smallchat/core/jev subpath.
+export {
+  judgeTrigger,
+  judgeSettings,
+  judgeDescription,
+  acceptJudgeAnswer,
+  replayJudgeVerdict,
+  withinJudgeMargin,
+  isJudgeErrorCode,
+  isRecordedJudgeVerdict,
+  DEFAULT_JUDGE_MARGIN,
+  DEFAULT_JUDGE_ACCEPT,
+  DEFAULT_JUDGE_MAX_CANDIDATES,
+  DEFAULT_JUDGE_TIMEOUT_MS,
+  MAX_JUDGE_TIMEOUT_MS,
+  JUDGE_DESCRIPTION_CHARS,
+} from './core/judge.js';
+export type {
+  ShortlistJudge,
+  JudgeRequest,
+  JudgeCandidate,
+  JudgeAnswer,
+  JudgeErrorCode,
+  JudgeTrigger,
+  JudgeSettings,
+  JudgeVerdict,
+  JudgeVerdictKind,
+  JudgeDeclineReason,
+  JudgeReason,
+  JudgeRecord,
+  RecordedJudgeVerdict,
+} from './core/judge.js';
 
 // Replay, decision log and explain — exact by construction, and checkable
 export {
@@ -146,7 +182,7 @@ export type {
   DecisionLogReplay,
 } from './runtime/replay.js';
 export { explainResolution, formatExplanation } from './runtime/explain.js';
-export type { Explanation, ExplainedCandidate } from './runtime/explain.js';
+export type { Explanation, ExplainedCandidate, ExplainedJudge } from './runtime/explain.js';
 
 // Dispatch policy, guards, argument validation and the canonical call digest
 export { evaluateDispatchPolicy, isDestructive } from './runtime/policy.js';

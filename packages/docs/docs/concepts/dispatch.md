@@ -16,7 +16,9 @@ call. In 1.0 it has two halves that can be used separately:
 `runtime.dispatch(intent, args)` does both, and runs a tool only when the
 dispatch policy allows it. This page describes `@smallchat/core` 1.0
 (TypeScript); smallchat-swift 1.0 follows the same outcomes and runs the
-same conformance vectors (`spec/resolve/`).
+same conformance vectors (`spec/resolve/`). The optional shortlist judge
+(step 11, `spec/judge/`) is TypeScript-only for now; smallchat-swift
+decodes its decision codes and proof records.
 
 ## Resolution
 
@@ -51,10 +53,20 @@ resolve(intent)
   ├─ 8. Protocols             only when nothing matched by vector
   ├─ 9. Pin gate              a pinned tool is excluded for intents its pin refuses
   ├─ 10. Nothing left?        unresolved (refinement options; decomposition when dispatching)
-  ├─ 11. Verification         below HIGH (below EXACT in strict mode), every candidate gets
-  │                           the same checks; an LLM verifier's approval is required by default
-  └─ 12. Dispatch policy      the same rules on every path (see below)
+  ├─ 11. Shortlist judge      optional (RuntimeOptions.judge): a near-tie or a below-HIGH winner;
+  │                           it may pick among near-ties it could then run, never for EXACT
+  │                           or for a winner the policy refuses
+  ├─ 12. Verification         below HIGH (below EXACT in strict mode), every candidate gets
+  │                           the same checks; an LLM verifier's (or the judge's) approval is
+  │                           required by default
+  └─ 13. Dispatch policy      the same rules on every path (see below)
 ```
+
+The [shortlist judge](./judge.md) is off by default. When configured, an
+unreachable or failing judge leaves the decision what it would be without
+one (the call still waits up to the judge's timeout, the proof records the
+attempt and the resolution is not cached), its verdicts are recorded in the
+proof, and replay and explain never call it.
 
 Every step is recorded in `r.proof` (candidates with scores and tiers,
 exclusions, guards, thresholds, the embedder fingerprint, the artifact hash)
@@ -74,8 +86,8 @@ without the caller naming it:
 3. Destructive tools (MCP `destructiveHint: true`, or `readOnlyHint: false`
    without a `destructiveHint`) run only by exact id, a pinned phrase or
    EXACT similarity — never from the cache or a learned preference.
-4. Below HIGH, a tool runs only with an LLM verifier's approval
-   (`requireLLMForSubHighDispatch`, on by default).
+4. Below HIGH, a tool runs only with an LLM verifier's or the shortlist
+   judge's approval (`requireLLMForSubHighDispatch`, on by default).
 5. Below LOW, nothing runs.
 
 A path the policy refuses does not fall back to another way of running the
