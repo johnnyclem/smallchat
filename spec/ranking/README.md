@@ -35,8 +35,10 @@ options — resolving the same intent text yields the same outcome, chosen
 tool, candidate order and `proofDigest`. Other intents the process resolved
 before do not enter into it (runtime intents are never interned into the
 tool index). Not covered: answers from an LLM verifier or decomposer (an
-input like any other), an opted-in rate limiter's window, and float drift
-larger than half a quantum between platforms.
+input like any other), an opted-in shortlist judge's verdicts (also an
+input: the property holds with no judge configured, or when replaying
+recorded verdicts, `spec/judge/`), an opted-in rate limiter's window, and
+float drift larger than half a quantum between platforms.
 
 ## Golden vectors
 

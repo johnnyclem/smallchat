@@ -22,8 +22,8 @@
  *      embedding — never from a cache hit, a learned preference or a
  *      boosted score.
  *   4. Below HIGH (MEDIUM/LOW), a candidate runs only if an LLM verifier
- *      approved it for this intent, unless requireLLMForSubHighDispatch is
- *      turned off.
+ *      or the shortlist judge (core/judge.ts) approved it for this intent,
+ *      unless requireLLMForSubHighDispatch is turned off.
  *   5. Below LOW, nothing runs.
  */
 
@@ -66,7 +66,7 @@ export interface PolicyInput {
   score: number;
   /** Similarity from this intent's own embedding, or null when not vector-derived */
   similarity: number | null;
-  /** Whether an LLM verifier approved this tool for this intent */
+  /** Whether an LLM verifier, or the shortlist judge, approved this tool for this intent */
   llmApproved: boolean;
   /** Pins that apply to this tool (empty when none) */
   pins: PinState[];

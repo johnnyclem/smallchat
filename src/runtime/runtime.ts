@@ -3,14 +3,13 @@ import { ResolutionCache, computeSchemaFingerprint } from '../core/resolution-ca
 import { SelectorTable } from '../core/selector-table.js';
 import { ToolClass } from '../core/tool-class.js';
 import { OverloadTable } from '../core/overload-table.js';
-import { DispatchContext, toolkit_dispatch, smallchat_dispatchStream, smallchat_dispatchStreamById, dispatchById, resolveIntent } from './dispatch.js';
+import { DispatchContext, toolkit_dispatch, smallchat_dispatchStream, smallchat_dispatchStreamById, dispatchById, resolveForExplain, resolveIntent } from './dispatch.js';
 import type { DispatchConfig, DispatchByIdOptions, DispatchOptions, RegisteredTool, Resolution, ResolveOptions } from './dispatch.js';
-import type { JevJudgeOptions } from './jev-judge.js';
-import type { JevJudge } from './jev-judge.js';
 import type { SCMethodSignature } from '../core/sc-types.js';
 import { DispatchBuilder } from './dispatch-builder.js';
 import { SelectorNamespace } from '../core/selector-namespace.js';
 import type { LLMClient } from '../core/llm-client.js';
+import type { ShortlistJudge } from '../core/judge.js';
 import type { DispatchObserver, DispatchFeedback } from './observer.js';
 import type { SemanticMap, SemanticMapOptions, LearnedPreference } from './semantic-map.js';
 import type { TierThresholds } from '../core/confidence.js';
@@ -66,7 +65,7 @@ export class ToolRuntime {
 
     const dispatchConfig: DispatchConfig = {
       llmClient: options?.llmClient,
-      jev: options?.jev,
+      judge: options?.judge,
       strict: options?.strict,
       thresholds: options?.thresholds,
       observerOptions: options?.observerOptions,
@@ -292,14 +291,22 @@ export class ToolRuntime {
   }
 
   /**
-   * Resolve an intent (as resolve(), learning off) and explain the
-   * decision: every candidate with its tier, annotations and the dispatch
-   * policy's verdict on running it without the caller choosing, plus the
-   * proof. Nothing executes. See runtime/explain.ts.
+   * Explain a decision: every candidate with its tier, annotations and the
+   * dispatch policy's verdict on running it without the caller choosing,
+   * the shortlist judge (configured, and what it decided), plus the proof.
+   * Nothing executes. See runtime/explain.ts.
+   *
+   * Given an intent, it resolves it as resolve() does with learning off
+   * and without consulting the judge (explain never calls the network;
+   * pass `options.judge` to replay a recorded verdict), and says whether a
+   * live dispatch would ask the configured judge (`judge.wouldAsk`). Given
+   * a Resolution (from resolve()), it explains that decision as it was
+   * made, the judge's verdict included.
    */
-  async explain(intent: string, options?: Omit<ResolveOptions, 'learn'>): Promise<Explanation> {
-    const resolution = await resolveIntent(this.context, intent, { ...options, learn: false });
-    return explainResolution(this.context, resolution);
+  async explain(intent: string | Resolution, options?: Omit<ResolveOptions, 'learn'>): Promise<Explanation> {
+    if (typeof intent !== 'string') return explainResolution(this.context, intent);
+    const { resolution, wouldAsk } = await resolveForExplain(this.context, intent, options);
+    return explainResolution(this.context, resolution, wouldAsk);
   }
 
   /**
@@ -609,10 +616,17 @@ export interface RuntimeOptions {
   /** 0.4.0: Pluggable LLM client for verification, decomposition, refinement */
   llmClient?: LLMClient;
   /**
-   * Jev judge for below-HIGH or ambiguous shortlists. Unset leaves dispatch
-   * unchanged. See runtime/jev-judge.ts.
+   * Shortlist judge (core/judge.ts, spec/judge): an optional tie-breaker,
+   * asked for a MEDIUM or LOW winner, or a HIGH winner whose runner-up is
+   * within the margin; never for EXACT or NONE.
+   * An unreachable or failing judge leaves the decision what it would be
+   * without one (the call still waits up to the judge's timeoutMs, records
+   * the attempt in its proof and is not cached); replay and explain never
+   * call it. A judge sends the intent and up to `maxCandidates` tool
+   * descriptions wherever it runs: the TypeSafe one
+   * (`@smallchat/core/jev`, experimental) to api.typesafe.ai. Unset: none.
    */
-  jev?: JevJudge | JevJudgeOptions;
+  judge?: ShortlistJudge;
   /** 0.4.0: Enable --strict mode — verify all dispatches, treat ambiguity as error */
   strict?: boolean;
   /** 0.4.0: Custom confidence tier thresholds */

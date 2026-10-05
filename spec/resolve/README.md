@@ -40,3 +40,9 @@ The TypeScript suite runs them in `src/runtime/resolve-vectors.test.ts`.
 Not covered here: learned preferences, the cache, overloads, decomposition
 and rate limiting, which depend on runtime history rather than on one
 call's inputs.
+
+These vectors assume no shortlist judge (`RuntimeOptions.judge` unset):
+run them without one. With a judge, a near-tie or a below-HIGH winner may
+be decided by it, with the decision codes `judge-approved` and
+`judge-declined`; that is specified, with its own vectors, in
+`spec/judge/`.

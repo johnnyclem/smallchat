@@ -66,6 +66,10 @@
     "./dream": {
       "types": "./dist/dream/index.d.ts",
       "import": "./dist/dream/index.js"
+    },
+    "./jev": {
+      "types": "./dist/jev/index.d.ts",
+      "import": "./dist/jev/index.js"
     }
   },
   "bin": {

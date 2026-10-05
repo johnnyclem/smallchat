@@ -14,7 +14,9 @@
  * workspace (shorthand/, src/); its package.json has no file:, link: or
  * workspace: dependency; `import('@smallchat/core')` and every subpath
  * export load, and a Node16 TypeScript consumer resolves each subpath's
- * declarations; `smallchat --version` prints the package version. The
+ * declarations; the TypeSafe judge client is on the experimental
+ * `@smallchat/core/jev` subpath only (not the root) and answers through a
+ * stub fetch; `smallchat --version` prints the package version. The
  * packed @smallchat/react (run `npm run build:packages` first) typechecks
  * against React 19's types with skipLibCheck off. Each `smallchat init`
  * template builds with tsc against the installed package and makes one
@@ -72,6 +74,20 @@ try {
   const subpaths = Object.keys(pkg.exports).map(k => (k === '.' ? pkg.name : `${pkg.name}/${k.slice(2)}`));
   const probe = `for (const s of ${JSON.stringify(subpaths)}) { const m = await import(s); if (Object.keys(m).length === 0) throw new Error(s + ' exports nothing'); } const core = await import('${pkg.name}'); if (core.PACKAGE_VERSION !== '${pkg.version}') throw new Error('PACKAGE_VERSION ' + core.PACKAGE_VERSION);`;
   execFileSync(process.execPath, ['--input-type=module', '-e', probe], { cwd: app, stdio: 'inherit' });
+
+  // The judge interface is in the core; the TypeSafe client only on its experimental subpath.
+  const judgeProbe = [
+    `const core = await import('${pkg.name}');`,
+    `if ('JevJudge' in core) throw new Error('the root entry exports JevJudge');`,
+    `if (typeof core.judgeTrigger !== 'function') throw new Error('the root entry lacks judgeTrigger');`,
+    `const { JevJudge } = await import('${pkg.name}/jev');`,
+    `const body = JSON.stringify({ model: 'jev-1.13.0', answers: { tool: { type: 'choice', choice: 'a/b', confidence: 1, probabilities: { 'a/b': 1 } } } });`,
+    `const judge = new JevJudge({ apiKey: 'pack-smoke', fetch: async () => new Response(body, { status: 200 }) });`,
+    `const answer = await judge.judge({ intent: 'x', trigger: 'ambiguous', candidates: [{ toolId: 'a/b', description: 'b' }] });`,
+    `if (answer.status !== 'answered' || answer.choice !== 'a/b') throw new Error('@smallchat/core/jev answered ' + JSON.stringify(answer));`,
+    `if (JSON.stringify(judge).includes('pack-smoke')) throw new Error('JevJudge serializes its apiKey');`,
+  ].join(' ');
+  execFileSync(process.execPath, ['--input-type=module', '-e', judgeProbe], { cwd: app, stdio: 'inherit' });
 
   // Every subpath also resolves its declarations for a Node16 TypeScript consumer.
   writeFileSync(join(app, 'consumer.ts'), subpaths.map((s, i) => `import * as m${i} from '${s}';\nvoid m${i};`).join('\n') + '\n');

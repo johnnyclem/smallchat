@@ -23,9 +23,11 @@
  * loaded from the same artifact and reports whether each outcome, tool id
  * and tier is reproduced. Boundary: reproduction is expected for the same
  * artifact, embedder, policy and learned state (pins, semantic map,
- * feedback) on one platform. Decisions that rested on inputs the log does
- * not hold — an LLM verifier's answer, a decomposition, the rate limiter's
- * window — are reported as skipped, not as reproduced.
+ * feedback) on one platform. A shortlist judge's verdict is in the line
+ * (`judge`), so replay answers with it and never calls a judge; a line
+ * without one replays with no judge. Decisions that rested on inputs the
+ * log does not hold — an LLM verifier's answer, a decomposition, the rate
+ * limiter's window — are reported as skipped, not as reproduced.
  *
  * A runtime writes the line for a dispatch before the tool executes. If a
  * line cannot be written, the call throws DecisionLogError and nothing
@@ -38,6 +40,8 @@ import { dirname, resolve as resolvePath } from 'node:path';
 import type { EmbedderFingerprint } from '../core/types.js';
 import type { ConfidenceTier } from '../core/confidence.js';
 import type { DecisionCode, ResolutionOutcome, ResolutionProof } from '../core/proof.js';
+import type { JudgeRecord } from '../core/judge.js';
+import { isRecordedJudgeVerdict } from '../core/judge.js';
 import { canonicalJson } from '../core/jcs.js';
 import { domainDigest, sha256Hex } from '../core/sha256.js';
 import type { ToolRuntime } from './runtime.js';
@@ -83,6 +87,12 @@ export interface DecisionRecord {
   tier: ConfidenceTier;
   /** Tool chosen (or named, for a dispatch by id); null when none was */
   toolId: string | null;
+  /**
+   * The shortlist judge's part (the proof's `judge`), present only when one
+   * was consulted: name, model, verdict, toolId, probability, confidence,
+   * reason, and the margin and maxCandidates it was offered near-ties with.
+   */
+  judge?: JudgeRecord;
   execution: DecisionExecution;
   /** Canonical call digest of the call that ran (spec/call-digest), or null */
   callDigest: string | null;
@@ -187,6 +197,7 @@ export class DecisionLog {
       decision: proof.decision,
       tier: proof.tier,
       toolId: proof.chosen ?? input.toolId ?? null,
+      ...(proof.judge ? { judge: { ...proof.judge } } : {}),
       execution: input.execution,
       callDigest: input.execution === 'ran' ? proof.callDigest : null,
       proofDigest: proof.proofDigest,
@@ -300,6 +311,7 @@ function checkRecordShape(value: unknown, line: number | null): DecisionRecord {
   for (const key of ['intentDigest', 'principal', 'artifactHash', 'toolId', 'callDigest', 'prevHash'] as const) {
     if (r[key] !== null && typeof r[key] !== 'string') fail(`${key} is not a string or null`);
   }
+  if (r.judge !== undefined && !isRecordedJudgeVerdict(r.judge)) fail('judge is not a judge record');
   return r as unknown as DecisionRecord;
 }
 
@@ -401,10 +413,11 @@ export interface DecisionReplayReport {
 /**
  * Re-decide every logged intent against `runtime` (resolve only, learning
  * off — nothing executes and the runtime learns nothing) and compare the
- * outcome, tool id and tier with what was logged. Lines recorded against
- * another artifact or embedder, digest-only lines (no intent text), and
- * decisions that rested on inputs the log does not hold (LLM verifier,
- * decomposition, rate limiter) are skipped with the reason.
+ * outcome, tool id and tier with what was logged. A line's recorded judge
+ * verdict answers in the judge's place; no judge is ever called. Lines
+ * recorded against another artifact or embedder, digest-only lines (no
+ * intent text), and decisions that rested on inputs the log does not hold
+ * (LLM verifier, decomposition, rate limiter) are skipped with the reason.
  */
 export async function replayDecisionLog(
   runtime: ToolRuntime,
@@ -454,9 +467,14 @@ export async function replayDecisionLog(
     if (record.outcome === 'throttled') { skip('throttled by the rate limiter (depends on its window)'); continue; }
     if (record.decision === 'decomposed') { skip('decomposed by the LLM client (its answer is not recorded)'); continue; }
     if (record.decision === 'llm-verified' && !hasVerifier) { skip('approved by an LLM verifier (its answer is not recorded)'); continue; }
+    if ((record.decision === 'judge-approved' || record.decision === 'judge-declined') && !record.judge) {
+      skip('decided by a shortlist judge whose verdict the line does not record');
+      continue;
+    }
 
     const resolution = await runtime.resolve(record.intent, {
       learn: false,
+      judge: record.judge ?? false,
       ...(record.principal !== null ? { principal: record.principal } : {}),
     });
     const replayed = {

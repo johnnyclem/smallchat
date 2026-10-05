@@ -43,6 +43,8 @@ export interface VerificationOptions {
   skipSchemaCheck?: boolean;
   /** Minimum keyword overlap score to pass (0-1, default 0.15) */
   minOverlap?: number;
+  /** The tool's schema, when already loaded (schemaLoader is then not called) */
+  schema?: ToolSchema;
 }
 
 // ---------------------------------------------------------------------------
@@ -61,7 +63,7 @@ export async function verify(
   llmClient?: LLMClient,
   options?: VerificationOptions,
 ): Promise<VerificationResult> {
-  const schema = imp.schema ?? await imp.schemaLoader();
+  const schema = options?.schema ?? imp.schema ?? await imp.schemaLoader();
   const minOverlap = options?.minOverlap ?? 0.15;
 
   // Strategy 1: Schema validation — do the args fit?
@@ -121,7 +123,7 @@ export async function verify(
  * Check whether the provided args satisfy the tool's required parameters.
  * This is a structural check — not type validation (that's handled by constraints).
  */
-function validateArgsAgainstSchema(
+export function validateArgsAgainstSchema(
   args: Record<string, unknown>,
   schema: ToolSchema,
 ): boolean {
