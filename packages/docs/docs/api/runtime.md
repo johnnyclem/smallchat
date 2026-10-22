@@ -59,6 +59,7 @@ for you.
 | `requireLLMForSubHighDispatch` | `true` | Below HIGH, run a tool only when `llmClient.microCheck` (or the `judge`) approved it; otherwise the outcome is `needs-disambiguation` |
 | `llmClient` | none | Verifier, decomposer and refinement provider |
 | `judge` | none | A `ShortlistJudge` that may break near-ties (never asked for EXACT; unreachable or failing, it leaves the decision as without one, after up to its `timeoutMs`); see [Shortlist judge](../concepts/judge.md). TypeSafe's is `JevJudge` from the experimental `@smallchat/core/jev` |
+| `judgeContext` | none | A `JudgeContextProvider` whose truth entries and transcript lines are offered to the judge with the intent (`StenographerJudgeContext` in `@smallchat/core/jev` reads a running stenographer); null, slow or failing, the judge gets the intent alone. Ignored without a judge |
 | `strict` | `false` | Verify every match below EXACT and raise the search floor to MEDIUM |
 | `intentPins` | none | `IntentPinRegistry` or a list of pins (`exact` / `elevated`) |
 | `treatUnannotatedAsDestructive` | `false` | Tools without MCP annotations run only by id, a pinned phrase or EXACT similarity |

@@ -7,6 +7,7 @@ import { parseEmbedderKind } from '../../artifact/embedder.js';
 import { readArtifact } from '../../artifact/io.js';
 import type { Resolution } from '../../runtime/dispatch.js';
 import { projectRuntimeOptions } from './project-policy.js';
+import { addJudgeOptions, judgeRuntimeOptions } from './judge-option.js';
 
 /** Tiers at which `resolve --execute` runs the chosen tool without --force. */
 const EXECUTABLE_TIERS = new Set(['exact', 'high']);
@@ -35,8 +36,8 @@ export function executionGate(
   return { run: true, toolId, forced: true };
 }
 
-export const resolveCommand = new Command('resolve')
-  .description('Show which tool the runtime would pick for an intent, and why (resolve never executes unless --execute)')
+export const resolveCommand = addJudgeOptions(new Command('resolve')
+  .description('Show which tool the runtime would pick for an intent, and why (resolve never executes unless --execute)'))
   .argument('<file>', 'Path to the compiled toolkit file')
   .argument('<intent>', 'Natural language intent to resolve')
   .option('-e, --embedder <type>', 'Expected embedder (onnx or hash); refuses if the artifact was compiled with another')
@@ -72,6 +73,7 @@ export const resolveCommand = new Command('resolve')
       // Same dispatch policy as `serve`: the nearest smallchat.json "policy" block.
       const runtimeOptions = projectRuntimeOptions().options;
       if (options.decisionLog) runtimeOptions.decisionLog = resolve(options.decisionLog);
+      Object.assign(runtimeOptions, judgeRuntimeOptions(options, line => { if (!options.json) console.error(line.trim()); }));
       loaded = await loadRuntime(filePath, {
         runtimeOptions,
         upstream: { requestTimeoutMs: parseInt(options.timeout, 10) },

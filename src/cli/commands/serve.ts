@@ -5,6 +5,7 @@ import { AuditLog } from '../../mcp/audit-log.js';
 import { DEFAULT_MAX_BODY_BYTES, DEFAULT_TOKEN_FILE, ensureTokenFile } from '../../mcp/http-guard.js';
 import { runtimeOptionsFromPolicy } from '../../runtime/runtime.js';
 import { findSmallChatManifest } from './compile.js';
+import { addJudgeOptions, judgeRuntimeOptions } from './judge-option.js';
 
 /**
  * `smallchat serve` — serve a compiled artifact as one MCP server that
@@ -17,8 +18,8 @@ import { findSmallChatManifest } from './compile.js';
  *     provider under its upstream tool names, verbatim.
  *   - smallchat_resolve proposes a tool for an intent and never runs it.
  */
-export const serveCommand = new Command('serve')
-  .description('Serve a compiled toolkit as an MCP server (stdio by default, Streamable HTTP with --http)')
+export const serveCommand = addJudgeOptions(new Command('serve')
+  .description('Serve a compiled toolkit as an MCP server (stdio by default, Streamable HTTP with --http)'))
   .requiredOption('-s, --source <path>', 'Compiled artifact (.json or .db) or a directory of manifests')
   .option('--provider <id>', 'Serve only this provider, with its upstream tool names verbatim')
   .option('--no-resolve-tool', 'Do not offer the smallchat_resolve tool')
@@ -64,6 +65,12 @@ export const serveCommand = new Command('serve')
     if (options.decisionLog) {
       runtimeOptions = { ...runtimeOptions, decisionLog: resolve(options.decisionLog) };
       log(`  Decision log: ${runtimeOptions.decisionLog}`);
+    }
+    try {
+      runtimeOptions = { ...runtimeOptions, ...judgeRuntimeOptions(options, log) };
+    } catch (e) {
+      log(`Judge: ${(e as Error).message}`);
+      process.exit(2);
     }
 
     const config: MCPServerConfig = {
