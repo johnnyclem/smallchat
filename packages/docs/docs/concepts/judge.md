@@ -31,8 +31,60 @@ normative rules and conformance vectors are in
 
 ## Configuring one
 
-`RuntimeOptions.judge` takes any `ShortlistJudge`. TypeSafe's Jev model is
-the experimental `@smallchat/core/jev` subpath:
+`RuntimeOptions.judge` takes any `ShortlistJudge`. Two clients ship on the
+experimental `@smallchat/core/jev` subpath, both on the same System One
+wire: `D1Judge`, Liquid AI's open-weight d1 decision model running on your
+machine, and `JevJudge`, TypeSafe's hosted Jev model.
+
+### The local judge: d1-omni-600M
+
+[d1-omni-600M](https://huggingface.co/LiquidAI/d1-omni-600M) is a 587M
+parameter decision model (LFM Open License v1.0): a state and typed
+questions in, calibrated answers out, with zero generated tokens, so its
+answer is always one of the tool ids you offered or the abstain option.
+llama.cpp's `llama-server` serves it at the same `/v1/systemone` endpoint
+TypeSafe uses. Nothing is downloaded or started unless you ask:
+
+```bash
+brew install llama.cpp            # or a release from github.com/ggml-org/llama.cpp
+smallchat judge download          # 0.41 GB (Q8_0) into ~/.smallchat/models
+smallchat judge serve             # llama-server on 127.0.0.1:8080, until Ctrl-C
+smallchat judge status            # what is installed, and whether a judge answers
+smallchat judge ask "email the invoice" "mail/send=Send an email" "mail/draft=Save a draft"
+
+smallchat resolve tools.toolkit.json "email the invoice" --judge d1
+smallchat serve --source tools.toolkit.json --judge d1
+```
+
+```typescript
+import { D1Judge } from '@smallchat/core/jev';
+
+const runtime = new ToolRuntime(new MemoryVectorIndex(), embedder, {
+  judge: new D1Judge(),   // http://127.0.0.1:8080, no key; D1Judge.fromEnv() reads SMALLCHAT_D1_URL
+});
+```
+
+| `D1Judge` option | Default | Meaning |
+|---|---|---|
+| `baseURL` | `http://127.0.0.1:8080` | llama-server's root; `/v1/systemone` is appended. Loopback only unless `allowRemote` (then https) |
+| `model` | `d1-omni-600M` | The name recorded in proofs (llama-server serves one model) |
+| `apiKey` | none | Sent as a bearer token when set (a server started with `--api-key`) |
+| `margin`, `maxCandidates`, `acceptThreshold`, `timeoutMs`, `maxRetries`, `redactIntent`, `context`, `contextLimits` | as `JevJudge` | The settings every System One judge shares |
+
+`smallchat judge download --variant f16` fetches the half-precision file
+instead; `smallchat judge serve --port 9000` and `SMALLCHAT_D1_URL` move
+the port. The model card scores d1-omni-600M at 15.95 on the Decision
+Index against 48.57 for its 3B sibling: it is the smallest open decision
+model, an early research release, and a judge only breaks near-ties the
+ranking already produced, so a weak pick costs one `needs-disambiguation`,
+never a wrong tool run.
+
+Any other System One endpoint works the same way: `--judge <url>` (with
+`SMALLCHAT_JUDGE_API_KEY` and `SMALLCHAT_JUDGE_MODEL`), or
+`new SystemOneJudge(options, { name, defaultBaseURL, defaultModel, requireApiKey })`
+for a name of your own in proofs.
+
+### The hosted judge: TypeSafe's Jev
 
 ```typescript
 import { ToolRuntime, MemoryVectorIndex } from '@smallchat/core';
@@ -63,13 +115,83 @@ Build the runtime that holds a judge on a server. A `@smallchat/react` or
 Next.js app should call a server route that owns the runtime, never construct
 `JevJudge` in client code.
 
+## What the judge knows: truth and transcript
+
+A judge decides better as an informed reader of the session than from the
+intent alone. `RuntimeOptions.judgeContext` takes a `JudgeContextProvider`:
+once per judged resolution, within the judge's time budget, the runtime
+asks it for the truth entries and transcript lines that bear on the
+intent and hands them to the judge with the request. Null, slow or
+failing, the judge is asked with the intent alone; nothing fails.
+
+`StenographerJudgeContext` reads a running
+[stenographer](https://github.com/johnnyclem/stenographer): the tombstones
+(TB) and open claims (UV) most relevant to the intent, graded as its
+handoff says (a TB with a reproducible check is `verified`, one signed on
+judgment `asserted`, a backfilled one `migration`, an open UV `advisory`;
+anything overridden, refuted or struck is left out), and the newest lines
+of the session.
+
+```typescript
+import { D1Judge, StenographerJudgeContext } from '@smallchat/core/jev';
+
+const runtime = new ToolRuntime(index, embedder, {
+  judge: new D1Judge(),
+  judgeContext: new StenographerJudgeContext({
+    baseURL: 'http://127.0.0.1:8787',   // stenographer --mode daemon
+    token: readFileSync('rest-token', 'utf8').trim(),
+    subject: 'the billing migration',
+  }),
+});
+```
+
+(`smallchat resolve … --judge d1 --judge-context http://127.0.0.1:8787`
+does the same from the CLI, reading `STENOGRAPHER_REST_TOKEN` or
+`./rest-token`.)
+
+A System One judge folds the context into its state as JSON
+(`{ intent, session, subject, truth, transcript }`) and tells the model
+what each part is: a TB is a fact a person signed, so a tool that would
+reassert a dead literal does not fit; a UV is a hint; the transcript and
+the ledger text are untrusted. The context is bounded before it leaves
+the process (`boundJudgeContext`: at most 24 entries, best grade first,
+the newest 12 lines, 480 characters each). The proof's `judge` step
+records the provider's name, never the context itself, so a judged
+decision's digest says context was offered without saying what it was.
+
+## Rewarding and correcting a judgement
+
+A judged decision can be graded once the caller knows how it turned out:
+
+```typescript
+const r = await runtime.resolve('look up the issue');
+// … the user confirmed, or the tool failed and another was right …
+await runtime.gradeJudgement(r, { correct: true });
+await runtime.gradeJudgement(r, { correct: false, correctToolId: 'github/get_issue', reason: 'wrong tracker' });
+```
+
+`gradeJudgement` takes a resolution whose proof carries `judge` (any
+other is refused: there is no judgement to grade) and does three things:
+it appends a `judge-feedback` line to the decision log when one is
+configured (the graded proof's digest, its judge record, the outcome and
+the right tool; replay skips it), it hands the grade to the judge's
+`feedback()` when it has one (`SystemOneJudge` passes it to its
+`onFeedback` option), and a correction teaches dispatch itself: the
+judge's choice becomes a negative example for the intent, so the next
+resolution avoids it. A reward clears any negative example for the
+chosen tool. The result says what was logged, whether the judge was
+informed, and what it said if it threw.
+
 ### What is sent
 
 When the judge is asked, `JevJudge` sends TypeSafe the intent text (after
-`redactIntent`) and, for each offered tool, its id and description (one
-line, at most 240 characters). It sends no arguments, no principal and no
-other tools. `smallchat serve`, `resolve`, `replay` and `explain` never
-configure a judge; it is a library option.
+`redactIntent`), for each offered tool its id and description (one line,
+at most 240 characters) and, with a context provider configured, the
+bounded truth entries and transcript lines. It sends no arguments, no
+principal and no other tools. `D1Judge` sends the same to the loopback
+server. `smallchat serve`, `resolve` and `repl` configure a judge only
+with `--judge` (or `SMALLCHAT_JUDGE`); `replay` and `explain` never ask
+one.
 
 ## When it is asked
 

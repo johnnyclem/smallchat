@@ -9,7 +9,7 @@ import type { SCMethodSignature } from '../core/sc-types.js';
 import { DispatchBuilder } from './dispatch-builder.js';
 import { SelectorNamespace } from '../core/selector-namespace.js';
 import type { LLMClient } from '../core/llm-client.js';
-import type { ShortlistJudge } from '../core/judge.js';
+import type { JudgeContextProvider, JudgeFeedback, ShortlistJudge } from '../core/judge.js';
 import type { DispatchObserver, DispatchFeedback } from './observer.js';
 import type { SemanticMap, SemanticMapOptions, LearnedPreference } from './semantic-map.js';
 import type { TierThresholds } from '../core/confidence.js';
@@ -66,6 +66,7 @@ export class ToolRuntime {
     const dispatchConfig: DispatchConfig = {
       llmClient: options?.llmClient,
       judge: options?.judge,
+      judgeContext: options?.judgeContext,
       strict: options?.strict,
       thresholds: options?.thresholds,
       observerOptions: options?.observerOptions,
@@ -163,6 +164,74 @@ export class ToolRuntime {
    */
   feedback(input: DispatchFeedback): void {
     this.context.feedback(input);
+  }
+
+  /**
+   * Grade a decision the shortlist judge took part in (one whose proof
+   * carries `judge`): a correct guess is rewarded, a wrong one corrected.
+   * The grade is appended to the decision log as a `judge-feedback` line
+   * (when one is configured), handed to the judge's `feedback()` when it
+   * has one, and a correction also teaches dispatch (`feedback()`: the
+   * judge's choice becomes a negative example for the intent, the right
+   * tool clears its own). A resolution without a judge record is refused:
+   * there is no judgement to grade. The result says what happened,
+   * including a judge that threw.
+   */
+  async gradeJudgement(
+    resolution: Pick<Resolution, 'intent' | 'chosen' | 'proof'>,
+    grade: { correct: true; reason?: string; principal?: string } | { correct: false; correctToolId?: string; reason?: string; principal?: string },
+  ): Promise<{ feedback: JudgeFeedback; logged: boolean; judgeInformed: boolean; judgeError: string | null }> {
+    const judge = resolution?.proof?.judge;
+    if (!judge) throw new TypeError('gradeJudgement: the resolution has no judge record (its proof.judge is absent), so there is no judgement to grade');
+    if (grade.correct !== true && grade.correct !== false) throw new TypeError('gradeJudgement: grade.correct must be true or false');
+    const chosen = resolution.chosen ?? judge.toolId ?? null;
+    const correctToolId = grade.correct ? chosen : (grade.correctToolId ?? null);
+    if (!grade.correct && correctToolId !== null && correctToolId === chosen) {
+      throw new TypeError('gradeJudgement: a correction names a tool other than the one chosen (or none)');
+    }
+    const feedback: JudgeFeedback = {
+      outcome: grade.correct ? 'rewarded' : 'corrected',
+      intent: resolution.intent,
+      proofDigest: resolution.proof.proofDigest,
+      judge: { ...judge },
+      chosenToolId: chosen,
+      correctToolId,
+      ...(grade.reason !== undefined ? { reason: grade.reason } : {}),
+      ...(grade.principal !== undefined ? { principal: grade.principal } : {}),
+    };
+    // Teach dispatch: a corrected choice is a negative example for the intent.
+    if (!grade.correct && chosen !== null) {
+      this.context.feedback({
+        intent: resolution.intent,
+        toolId: chosen,
+        correct: false,
+        ...(correctToolId !== null ? { expectedToolId: correctToolId } : {}),
+        ...(grade.principal !== undefined ? { principal: grade.principal } : {}),
+      });
+    } else if (grade.correct && chosen !== null) {
+      this.context.feedback({ intent: resolution.intent, toolId: chosen, correct: true, ...(grade.principal !== undefined ? { principal: grade.principal } : {}) });
+    }
+    let logged = false;
+    if (this.context.decisionLog) {
+      this.context.logDecision('judge-feedback', resolution.proof, 'none', grade.principal, chosen ?? undefined, {
+        outcome: feedback.outcome,
+        correctToolId,
+        ...(grade.reason !== undefined ? { reason: grade.reason } : {}),
+      });
+      logged = true;
+    }
+    let judgeInformed = false;
+    let judgeError: string | null = null;
+    const target = this.context.judge;
+    if (target && target.name === judge.name && typeof target.feedback === 'function') {
+      try {
+        await target.feedback(feedback);
+        judgeInformed = true;
+      } catch (err) {
+        judgeError = err instanceof Error ? err.message : String(err);
+      }
+    }
+    return { feedback, logged, judgeInformed, judgeError };
   }
 
   /**
@@ -627,6 +696,17 @@ export interface RuntimeOptions {
    * (`@smallchat/core/jev`, experimental) to api.typesafe.ai. Unset: none.
    */
   judge?: ShortlistJudge;
+  /**
+   * Where the judge's context comes from: the truth entries (tombstones a
+   * person signed, open claims) and transcript lines offered with the
+   * intent, so the judge decides as an informed reader of the session
+   * (`StenographerJudgeContext` in `@smallchat/core/jev` reads a running
+   * stenographer). Asked once per judged resolution within the judge's
+   * time budget; null, slow or failing, the judge gets the intent alone.
+   * Never recorded in a proof beyond the provider's name. Ignored without
+   * a judge.
+   */
+  judgeContext?: JudgeContextProvider;
   /** 0.4.0: Enable --strict mode — verify all dispatches, treat ambiguity as error */
   strict?: boolean;
   /** 0.4.0: Custom confidence tier thresholds */

@@ -20,7 +20,7 @@ import type { ArgumentCoercion } from '../core/argument-validator.js';
 import type { LLMClient, ToolSummary } from '../core/llm-client.js';
 import { NULL_LLM_CLIENT } from '../core/llm-client.js';
 import { acceptJudgeAnswer, compareToolIds, judgeDescription, judgeSettings, judgeTrigger, replayJudgeVerdict, withinJudgeMargin } from '../core/judge.js';
-import type { JudgeAnswer, JudgeRequest, JudgeSettings, JudgeTrigger, JudgeVerdict, RecordedJudgeVerdict, ShortlistJudge } from '../core/judge.js';
+import type { JudgeAnswer, JudgeContext, JudgeContextProvider, JudgeRequest, JudgeSettings, JudgeTrigger, JudgeVerdict, RecordedJudgeVerdict, ShortlistJudge } from '../core/judge.js';
 import { validateArgsAgainstSchema, verify } from './verification.js';
 import { decompose, executeDecomposition } from './decomposition.js';
 import type { DecompositionResult } from './decomposition.js';
@@ -31,7 +31,7 @@ import { SemanticMap } from './semantic-map.js';
 import type { SemanticMapOptions, LearnedPreference } from './semantic-map.js';
 import { evaluateDispatchPolicy, isDestructive } from './policy.js';
 import type { DispatchPolicyOptions, PinState, PolicyCode, PolicyVerdict } from './policy.js';
-import type { DecisionExecution, DecisionKind, DecisionLog } from './decision-log.js';
+import type { DecisionExecution, DecisionFeedback, DecisionKind, DecisionLog } from './decision-log.js';
 
 /**
  * UnrecognizedIntent — doesNotRecognizeSelector: equivalent.
@@ -93,6 +93,14 @@ export interface DispatchConfig {
    * runs. Unset: no judge.
    */
   judge?: ShortlistJudge;
+  /**
+   * Where the judge's context comes from (core/judge.ts
+   * JudgeContextProvider): the truth entries and transcript lines offered
+   * with the intent. Asked once per judged resolution, within the judge's
+   * time budget; null, slow or failing, the judge is asked with the intent
+   * alone. Unset: no context. Ignored without a judge.
+   */
+  judgeContext?: JudgeContextProvider;
   /** Strict mode: verify every dispatch below EXACT, and raise the search floor to MEDIUM */
   strict?: boolean;
   /** Custom tier thresholds */
@@ -203,6 +211,8 @@ export class DispatchContext {
   readonly judge: ShortlistJudge | null;
   /** Its validated margin, maxCandidates and acceptThreshold (null without a judge) */
   readonly judgeSettings: JudgeSettings | null;
+  /** Where the judge's context comes from (null without a provider, or without a judge) */
+  readonly judgeContext: JudgeContextProvider | null;
   readonly strict: boolean;
   readonly thresholds: TierThresholds;
   readonly requireLLMForSubHighDispatch: boolean;
@@ -249,6 +259,7 @@ export class DispatchContext {
     this.llmClient = dispatchConfig?.llmClient ?? NULL_LLM_CLIENT;
     this.judge = checkJudge(dispatchConfig?.judge);
     this.judgeSettings = this.judge ? judgeSettings(this.judge) : null;
+    this.judgeContext = this.judge ? checkJudgeContext(dispatchConfig?.judgeContext) : null;
     this.strict = dispatchConfig?.strict ?? false;
     this.thresholds = dispatchConfig?.thresholds ?? { ...DEFAULT_THRESHOLDS };
     this.requireLLMForSubHighDispatch = dispatchConfig?.requireLLMForSubHighDispatch ?? true;
@@ -563,9 +574,24 @@ export class DispatchContext {
    * DecisionLogError when the line cannot be written — callers record
    * before executing, so nothing runs unrecorded.
    */
-  logDecision(kind: DecisionKind, proof: ResolutionProof, execution: DecisionExecution, principal?: string, toolId?: string): void {
-    this.decisionLog?.record({ kind, proof, execution, ...(principal !== undefined ? { principal } : {}), ...(toolId !== undefined ? { toolId } : {}) });
+  logDecision(kind: DecisionKind, proof: ResolutionProof, execution: DecisionExecution, principal?: string, toolId?: string, feedback?: DecisionFeedback): void {
+    this.decisionLog?.record({
+      kind,
+      proof,
+      execution,
+      ...(principal !== undefined ? { principal } : {}),
+      ...(toolId !== undefined ? { toolId } : {}),
+      ...(feedback !== undefined ? { feedback } : {}),
+    });
   }
+}
+
+/** A configured context provider, checked for the shape dispatch relies on (or null). */
+function checkJudgeContext(provider: JudgeContextProvider | undefined): JudgeContextProvider | null {
+  if (provider === undefined || provider === null) return null;
+  if (typeof provider.context !== 'function') throw new TypeError('RuntimeOptions.judgeContext must have a context(input) method');
+  if (typeof provider.name !== 'string' || provider.name.trim() === '') throw new TypeError('RuntimeOptions.judgeContext must have a non-empty name');
+  return provider;
 }
 
 /** A configured shortlist judge, checked for the shape dispatch relies on (or null). */
@@ -1164,13 +1190,15 @@ async function resolveInternal(
       // A recorded verdict is recorded under its own name and model, never the runtime judge's.
       const name = recorded ? recorded.name ?? 'recorded' : liveJudge!.name;
       const configuredModel = recorded ? recorded.model ?? 'unknown' : liveJudge!.model;
+      // What context the live judge was offered (recorded in the step, never in the digest)
+      const asked: { context: string | null } = { context: null };
       const judged: JudgeVerdict = recorded
         ? replayJudgeVerdict(recorded, ids, configuredModel)
         : acceptJudgeAnswer(await askJudge(liveJudge!, {
           intent,
           trigger,
           candidates: offered.map(o => ({ toolId: o.candidate.toolId, description: judgeDescription(o.schema.description || o.candidate.selector.canonical) })),
-        }, run.signal, settings.timeoutMs), ids, settings.acceptThreshold, configuredModel);
+        }, run.signal, settings.timeoutMs, context.judgeContext, run.principal, asked), ids, settings.acceptThreshold, configuredModel);
       proof.judge = {
         name,
         model: judged.model,
@@ -1190,6 +1218,7 @@ async function resolveInternal(
         toolId: judged.toolId,
         trigger,
         offered: ids,
+        ...(asked.context !== null ? { context: asked.context } : {}),
       });
       if (judged.verdict === 'declined') {
         return disambiguate('judge-declined', ranked, `The ${name} judge chose none of the ${ids.length} offered tool(s) for "${intent}" (${judged.reason ?? 'no reason recorded'})`);
@@ -1359,9 +1388,12 @@ function recordedJudgeSettings(recorded: RecordedJudgeVerdict, configured: Judge
  */
 async function askJudge(
   judge: ShortlistJudge,
-  request: Omit<JudgeRequest, 'signal'>,
+  request: Omit<JudgeRequest, 'signal' | 'context'>,
   caller: AbortSignal | undefined,
   timeoutMs: number,
+  provider: JudgeContextProvider | null = null,
+  principal?: string,
+  asked: { context: string | null } = { context: null },
 ): Promise<JudgeAnswer> {
   if (caller?.aborted) return { status: 'unavailable', error: 'ABORTED' };
   const controller = new AbortController();
@@ -1375,8 +1407,25 @@ async function askJudge(
   const timer = setTimeout(() => stop('TIMEOUT'), timeoutMs);
   caller?.addEventListener('abort', onAbort, { once: true });
   try {
-    // Inside an async function: a judge that throws synchronously rejects instead.
-    const answered = (async () => judge.judge({ ...request, signal: controller.signal }))()
+    // Inside an async function: a provider or judge that throws synchronously rejects instead.
+    const answered = (async (): Promise<JudgeAnswer> => {
+      // The context first, within the same budget: null, a throw or a timeout
+      // means the judge is asked with the intent alone.
+      let context: JudgeContext | undefined;
+      if (provider) {
+        try {
+          const given = await provider.context({ intent: request.intent, ...(principal !== undefined ? { principal } : {}), signal: controller.signal });
+          if (given !== null && typeof given === 'object') {
+            context = given;
+            asked.context = provider.name;
+          }
+        } catch {
+          context = undefined;
+        }
+      }
+      if (controller.signal.aborted) return { status: 'unavailable', error: caller?.aborted ? 'ABORTED' : 'TIMEOUT' };
+      return judge.judge({ ...request, ...(context !== undefined ? { context } : {}), signal: controller.signal });
+    })()
       .catch((): JudgeAnswer => ({ status: 'unavailable', error: caller?.aborted ? 'ABORTED' : 'NETWORK' }));
     return await Promise.race([answered, stopped]);
   } finally {

@@ -63,12 +63,82 @@ export interface JudgeCandidate {
   description: string;
 }
 
+/**
+ * One truth-ledger entry offered to a judge as context (stenographer's
+ * TB/UV v2, graded as its handoff says): a tombstone is a fact a person
+ * signed, an unverified assertion is a flag. Text fields are ledger text:
+ * untrusted, folded to one line and capped before they are sent.
+ */
+export interface JudgeTruthEntry {
+  id: string;
+  type: 'TB' | 'UV';
+  /** The entry's current status (`active`, `contested`, `open`, …) */
+  status: string;
+  /** The claim (TB) or assertion (UV) */
+  text: string;
+  /** Dead literals a TB declares, with what replaced them */
+  literals?: Array<{ subject?: string; dead: string; current?: string }>;
+  /** verified > asserted > migration for a TB; advisory for an open UV */
+  grade?: 'verified' | 'asserted' | 'migration' | 'advisory';
+}
+
+/** One transcript line offered to a judge as context. */
+export interface JudgeTranscriptLine {
+  role: 'user' | 'assistant' | 'tool' | 'system';
+  text: string;
+  /** The message id in the session log, when known */
+  id?: string;
+}
+
+/**
+ * What a judge may be told besides the intent: the session the intent
+ * came from, the truth entries that bear on it and the transcript so far.
+ * A judge that takes context folds it into its state; one that does not
+ * ignores it. The runtime never records context in a proof (only that it
+ * was offered), so the digest of a judged decision does not depend on it.
+ */
+export interface JudgeContext {
+  sessionId?: string;
+  /** A short label for the work product the session is about */
+  subject?: string;
+  truth?: JudgeTruthEntry[];
+  /** Oldest first */
+  transcript?: JudgeTranscriptLine[];
+}
+
+/** Bounds applied to a JudgeContext before it is sent (boundJudgeContext). */
+export interface JudgeContextLimits {
+  /** Most truth entries kept (default DEFAULT_JUDGE_CONTEXT_LIMITS.maxTruth) */
+  maxTruth?: number;
+  /** Most transcript lines kept, newest kept (default 12) */
+  maxTranscript?: number;
+  /** Longest text of one entry or line, in UTF-16 code units (default 480) */
+  maxTextChars?: number;
+}
+
+/** Defaults of boundJudgeContext. */
+export const DEFAULT_JUDGE_CONTEXT_LIMITS: Required<JudgeContextLimits> = { maxTruth: 24, maxTranscript: 12, maxTextChars: 480 };
+
+/**
+ * Where a judge's context comes from (RuntimeOptions.judgeContext): asked
+ * once per judged resolution, before the judge, within the judge's time
+ * budget. Null, a throw or a timeout means the judge is asked with no
+ * context, never that the resolution fails.
+ */
+export interface JudgeContextProvider {
+  /** Short stable name, recorded in the judge step's detail */
+  readonly name: string;
+  context(input: { intent: string; principal?: string; signal?: AbortSignal }): Promise<JudgeContext | null>;
+}
+
 /** What the runtime asks a judge. */
 export interface JudgeRequest {
   intent: string;
   trigger: JudgeTrigger;
   /** The offered tools, sorted by tool id (never in rank order) */
   candidates: JudgeCandidate[];
+  /** Truth entries and transcript the judge may consider (RuntimeOptions.judgeContext); absent without a provider */
+  context?: JudgeContext;
   /**
    * Fires when the caller aborts or `timeoutMs` passes. The runtime has
    * then already decided without the judge ('ABORTED' or 'TIMEOUT'), so
@@ -129,6 +199,37 @@ export interface ShortlistJudge {
   /** Milliseconds the runtime waits for an answer, in (0, MAX_JUDGE_TIMEOUT_MS]. Default DEFAULT_JUDGE_TIMEOUT_MS. */
   readonly timeoutMs?: number;
   judge(request: JudgeRequest): Promise<JudgeAnswer>;
+  /**
+   * Told how a judged decision turned out (ToolRuntime.gradeJudgement): a
+   * correct guess is rewarded, a wrong one corrected with the right tool
+   * when known. Optional; a judge that learns nothing leaves it out. Must
+   * not throw (a throw is swallowed and reported in the grade's result).
+   */
+  feedback?(grade: JudgeFeedback): Promise<void>;
+}
+
+/** How a judged decision turned out, as a caller grades it. */
+export type JudgeGradeOutcome = 'rewarded' | 'corrected';
+
+/**
+ * What a graded judgement tells the judge and the decision log
+ * (ToolRuntime.gradeJudgement): which decision, what the judge said, and
+ * whether it was right. `correctToolId` names the tool that should have
+ * been chosen when the caller knows; `reason` is the caller's note.
+ */
+export interface JudgeFeedback {
+  outcome: JudgeGradeOutcome;
+  intent: string;
+  /** proofDigest of the graded resolution */
+  proofDigest: string;
+  /** The judge's part in it (the proof's record) */
+  judge: JudgeRecord;
+  /** The tool the resolution chose, if any */
+  chosenToolId: string | null;
+  /** The tool that was right, when the caller said (always the chosen one when rewarded) */
+  correctToolId: string | null;
+  reason?: string;
+  principal?: string;
 }
 
 /** A judge's settings, validated (judgeSettings). */
@@ -250,6 +351,67 @@ export function judgeDescription(text: string): string {
   const folded = text.replace(CONTROL_CHARS, ' ');
   const split = SURROGATE_PAIR.test(folded.slice(JUDGE_DESCRIPTION_CHARS - 1, JUDGE_DESCRIPTION_CHARS + 1));
   return folded.slice(0, split ? JUDGE_DESCRIPTION_CHARS - 1 : JUDGE_DESCRIPTION_CHARS);
+}
+
+/** Ledger or transcript text as offered to a judge: one line, cut to `maxChars` (never splitting a surrogate pair). */
+function contextText(text: unknown, maxChars: number): string {
+  const folded = (typeof text === 'string' ? text : '').replace(CONTROL_CHARS, ' ').trim();
+  if (folded.length <= maxChars) return folded;
+  const split = SURROGATE_PAIR.test(folded.slice(maxChars - 1, maxChars + 1));
+  return folded.slice(0, split ? maxChars - 1 : maxChars);
+}
+
+const TRUTH_GRADE_ORDER: Record<string, number> = { verified: 0, asserted: 1, migration: 2, advisory: 3 };
+const TRANSCRIPT_ROLES = new Set(['user', 'assistant', 'tool', 'system']);
+
+/**
+ * A JudgeContext as a judge may send it: every text folded to one line and
+ * cut, truth entries kept best grade first (verified, asserted, migration,
+ * then advisory; ties in the order given) up to `maxTruth`, the newest
+ * `maxTranscript` transcript lines kept, and anything outside the shape
+ * dropped. Null when nothing is left.
+ */
+export function boundJudgeContext(context: JudgeContext | null | undefined, limits: JudgeContextLimits = {}): JudgeContext | null {
+  if (context === null || context === undefined || typeof context !== 'object') return null;
+  const { maxTruth, maxTranscript, maxTextChars } = { ...DEFAULT_JUDGE_CONTEXT_LIMITS, ...limits };
+  const out: JudgeContext = {};
+  if (typeof context.sessionId === 'string' && context.sessionId !== '') out.sessionId = contextText(context.sessionId, 128);
+  if (typeof context.subject === 'string' && context.subject !== '') out.subject = contextText(context.subject, maxTextChars);
+  const truth = (Array.isArray(context.truth) ? context.truth : [])
+    .filter(e => e && typeof e === 'object' && typeof e.id === 'string' && (e.type === 'TB' || e.type === 'UV') && typeof e.text === 'string')
+    .map((e, order) => ({ e, order }))
+    .sort((a, b) => (TRUTH_GRADE_ORDER[a.e.grade ?? ''] ?? 4) - (TRUTH_GRADE_ORDER[b.e.grade ?? ''] ?? 4) || a.order - b.order)
+    .slice(0, Math.max(0, maxTruth))
+    .map(({ e }): JudgeTruthEntry => ({
+      id: contextText(e.id, 128),
+      type: e.type,
+      status: contextText(e.status, 32),
+      text: contextText(e.text, maxTextChars),
+      ...(Array.isArray(e.literals) && e.literals.length > 0
+        ? {
+          literals: e.literals
+            .filter(l => l && typeof l === 'object' && typeof l.dead === 'string')
+            .slice(0, 16)
+            .map(l => ({
+              ...(typeof l.subject === 'string' ? { subject: contextText(l.subject, 128) } : {}),
+              dead: contextText(l.dead, 128),
+              ...(typeof l.current === 'string' ? { current: contextText(l.current, 128) } : {}),
+            })),
+        }
+        : {}),
+      ...(e.grade !== undefined && e.grade in TRUTH_GRADE_ORDER ? { grade: e.grade } : {}),
+    }));
+  if (truth.length > 0) out.truth = truth;
+  const transcript = (Array.isArray(context.transcript) ? context.transcript : [])
+    .filter(l => l && typeof l === 'object' && TRANSCRIPT_ROLES.has(l.role) && typeof l.text === 'string')
+    .slice(-Math.max(0, maxTranscript))
+    .map((l): JudgeTranscriptLine => ({
+      role: l.role,
+      text: contextText(l.text, maxTextChars),
+      ...(typeof l.id === 'string' ? { id: contextText(l.id, 128) } : {}),
+    }));
+  if (transcript.length > 0) out.transcript = transcript;
+  return Object.keys(out).length === 0 ? null : out;
 }
 
 /** Tool ids in UTF-16 code unit order (the order candidates are presented in). */

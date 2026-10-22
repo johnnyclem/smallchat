@@ -52,8 +52,21 @@ export const DECISION_LOG_SCHEMA = 'smallchat.decision.v1';
 /** Domain-separation prefix of the intent digest. */
 export const INTENT_DIGEST_DOMAIN = 'smallchat.intent.v1';
 
-/** What kind of call a line records. */
-export type DecisionKind = 'resolve' | 'dispatch' | 'dispatch-by-id';
+/**
+ * What kind of call a line records. A `judge-feedback` line records how a
+ * caller graded a judged decision (ToolRuntime.gradeJudgement): it carries
+ * that decision's proof digest, judge record and tool, and a `feedback`
+ * field; replay skips it.
+ */
+export type DecisionKind = 'resolve' | 'dispatch' | 'dispatch-by-id' | 'judge-feedback';
+
+/** How a judged decision was graded (a `judge-feedback` line). */
+export interface DecisionFeedback {
+  outcome: 'rewarded' | 'corrected';
+  /** The tool that was right, when the caller said; the chosen one when rewarded */
+  correctToolId: string | null;
+  reason?: string;
+}
 
 /**
  * What happened after the decision:
@@ -93,6 +106,8 @@ export interface DecisionRecord {
    * reason, and the margin and maxCandidates it was offered near-ties with.
    */
   judge?: JudgeRecord;
+  /** A `judge-feedback` line: the grade */
+  feedback?: DecisionFeedback;
   execution: DecisionExecution;
   /** Canonical call digest of the call that ran (spec/call-digest), or null */
   callDigest: string | null;
@@ -110,6 +125,8 @@ export interface DecisionInput {
   principal?: string;
   /** Tool id named by the caller (dispatch by id), when the proof chose none */
   toolId?: string;
+  /** A `judge-feedback` line's grade */
+  feedback?: DecisionFeedback;
 }
 
 export interface DecisionLogOptions {
@@ -198,6 +215,7 @@ export class DecisionLog {
       tier: proof.tier,
       toolId: proof.chosen ?? input.toolId ?? null,
       ...(proof.judge ? { judge: { ...proof.judge } } : {}),
+      ...(input.feedback ? { feedback: { outcome: input.feedback.outcome, correctToolId: input.feedback.correctToolId, ...(input.feedback.reason !== undefined ? { reason: input.feedback.reason } : {}) } } : {}),
       execution: input.execution,
       callDigest: input.execution === 'ran' ? proof.callDigest : null,
       proofDigest: proof.proofDigest,
@@ -292,7 +310,7 @@ function readLastLine(fd: number): { text: string; terminated: boolean } | null 
 // Reading and verifying
 // ---------------------------------------------------------------------------
 
-const KINDS: readonly DecisionKind[] = ['resolve', 'dispatch', 'dispatch-by-id'];
+const KINDS: readonly DecisionKind[] = ['resolve', 'dispatch', 'dispatch-by-id', 'judge-feedback'];
 const EXECUTIONS: readonly DecisionExecution[] = ['none', 'ran', 'invalid-arguments', 'aborted', 'decomposed'];
 
 function checkRecordShape(value: unknown, line: number | null): DecisionRecord {
@@ -312,6 +330,15 @@ function checkRecordShape(value: unknown, line: number | null): DecisionRecord {
     if (r[key] !== null && typeof r[key] !== 'string') fail(`${key} is not a string or null`);
   }
   if (r.judge !== undefined && !isRecordedJudgeVerdict(r.judge)) fail('judge is not a judge record');
+  if (r.kind === 'judge-feedback') {
+    const f = (r.feedback !== null && typeof r.feedback === 'object' ? r.feedback : {}) as Record<string, unknown>;
+    if (f.outcome !== 'rewarded' && f.outcome !== 'corrected') fail('a judge-feedback line needs a feedback grade');
+    if (f.correctToolId !== null && typeof f.correctToolId !== 'string') fail('feedback.correctToolId is not a string or null');
+    if (f.reason !== undefined && typeof f.reason !== 'string') fail('feedback.reason is not a string');
+    if (r.judge === undefined) fail('a judge-feedback line names the judge it grades');
+  } else if (r.feedback !== undefined) {
+    fail(`only a judge-feedback line carries feedback, not a ${String(r.kind)} line`);
+  }
   return r as unknown as DecisionRecord;
 }
 
@@ -447,6 +474,10 @@ export async function replayDecisionLog(
       continue;
     }
 
+    if (record.kind === 'judge-feedback') {
+      skip(`a grade of the judged decision ${short(record.proofDigest)} (${record.feedback?.outcome ?? 'graded'}); nothing to replay`);
+      continue;
+    }
     if (record.kind === 'dispatch-by-id') {
       const known = record.toolId !== null && runtime.getTool(record.toolId) !== undefined;
       const outcome: ResolutionOutcome = known ? 'resolved' : 'unresolved';

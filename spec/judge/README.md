@@ -153,10 +153,17 @@ is not asked after it.
   on a runtime that has a judge: neither may answer a later live call in
   the judge's place.
 
-## The TypeSafe wire (`@smallchat/core/jev`)
+## The System One wire (`@smallchat/core/jev`)
 
-Only the TypeSafe client follows this section; other judges answer
-`judge()` however they reach their model.
+Only the System One clients (TypeSafe's Jev, and the local d1 model that
+llama-server serves at the same endpoint) follow this section; other
+judges answer `judge()` however they reach their model. A request that
+carries context (`JudgeRequest.context`, offered by a context provider)
+sends `state` as a JSON object `{ intent, session?, subject?, truth?,
+transcript? }` instead of the intent string, with the instructions
+extended to say what each part is; the vectors below carry no context, so
+their `state` is the intent string. A judge's context is never recorded in
+a proof: only the provider's name, in the `judge` step's detail.
 
 - The request is `POST {baseURL}/v1/systemone` with `{ model, state,
   questions: { tool: { type: "choice", instructions, criteria } } }`,

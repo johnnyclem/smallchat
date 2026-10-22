@@ -17,6 +17,7 @@ import { appCommand } from './commands/app.js';
 import { rtkCommand } from './commands/rtk.js';
 import { replayCommand } from './commands/replay.js';
 import { explainCommand } from './commands/explain.js';
+import { judgeCommand } from './commands/judge.js';
 import { packageVersion } from './package-info.js';
 
 const program = new Command();
@@ -45,6 +46,7 @@ program.addCommand(dreamCommand);
 program.addCommand(memexCommand);
 program.addCommand(setupCommand);
 program.addCommand(rtkCommand);
+program.addCommand(judgeCommand);
 
 // Add a getting-started guide to the help output
 program.addHelpText('after', `
@@ -73,6 +75,10 @@ Getting Started
   7. Reduce LLM token usage with RTK compression:
      $ smallchat rtk setup
      $ smallchat serve --source tools.toolkit.json --rtk
+
+  8. Break near-ties with a local open-weight decision model (optional):
+     $ smallchat judge download && smallchat judge serve
+     $ smallchat resolve tools.toolkit.json "search for files" --judge d1
 
   Run "smallchat <command> --help" for detailed usage of any command.
   Run "smallchat doctor" to check your system health.

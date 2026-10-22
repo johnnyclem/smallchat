@@ -116,8 +116,9 @@ sub-intent of a decomposition:
 
 Configure it with `RuntimeOptions` (`requireLLMForSubHighDispatch`,
 `strict`, `intentPins`, `treatUnannotatedAsDestructive`, `thresholds`,
-`llmClient`, `judge`) or, for `smallchat serve`, a `"policy"` block in
-`smallchat.json` (which never configures a judge).
+`llmClient`, `judge`, `judgeContext`) or, for `smallchat serve`, a
+`"policy"` block in `smallchat.json` (which never configures a judge;
+`--judge` does).
 
 ### Shortlist judge (optional)
 
@@ -168,11 +169,29 @@ nothing below happens and nothing is sent anywhere.
   `runtime.explain(resolution)` explains a recorded decision, verdict
   included. `ResolveOptions.judge` is `false` or a recorded verdict.
 
-TypeSafe's Jev model is the experimental `@smallchat/core/jev`
-(`JevJudge`): when asked, it sends the intent (after `redactIntent`) and the
-offered tools' ids and descriptions to TypeSafe. Its API key is kept out of
-every log, proof and serialization, it refuses to run in a browser unless
-`dangerouslyAllowBrowser: true`, and it requires https.
+- **Context and grading.** `RuntimeOptions.judgeContext` (a
+  `JudgeContextProvider`) is asked once per judged resolution, within the
+  judge's budget, for the truth entries and transcript lines that bear on
+  the intent; they ride with the request, bounded (`boundJudgeContext`),
+  and the `judge` step records the provider's name only. Null, slow or
+  failing leaves the judge with the intent alone.
+  `runtime.gradeJudgement(resolution, { correct, correctToolId?, reason? })`
+  grades a judged decision: a `judge-feedback` decision-log line, the
+  judge's `feedback()`, and (on a correction) a negative example for the
+  judge's choice.
+
+Two clients ship on the experimental `@smallchat/core/jev`, both on the
+System One wire: `D1Judge`, Liquid AI's open-weight d1-omni-600M served
+locally by llama-server (`smallchat judge download`, `smallchat judge
+serve`, `smallchat judge status`; no key, loopback only unless
+`allowRemote`), and `JevJudge`, TypeSafe's hosted Jev. When asked, each
+sends the intent (after `redactIntent`), the offered tools' ids and
+descriptions and any context to its base URL. A key is kept out of every
+log, proof and serialization, the clients refuse to run in a browser
+unless `dangerouslyAllowBrowser: true`, and a non-loopback URL must be
+https. `StenographerJudgeContext` (same subpath) is the context provider
+that reads a running stenographer's REST API. `smallchat resolve`, `serve`
+and `repl` take `--judge d1|jev|<url>` and `--judge-context <url>`.
 
 ### Determinism
 
