@@ -128,11 +128,11 @@
     "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^22.0.0",
     "typescript": "^5.7.0",
-    "vitest": "^3.2.7"
+    "vitest": "^5.0.5"
   },
   "dependencies": {
     "@modelcontextprotocol/ext-apps": "^1.7.1",
-    "@modelcontextprotocol/sdk": "^1.31.0",
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "@shorthand/core": "^1.0.0",
     "ajv": "^8.20.0",
     "better-sqlite3": "^13.0.3",
